@@ -1,0 +1,34 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+feagi.log
+
+# Temporary files
+*.tmp
+*--temp.*
+/tmp/
+
+# Configuration overrides (keep the template)
+# feagi_configuration.toml should come from parent directory
+
+# Test artifacts
+*.profdata
+*.profraw
+
+# Documentation build
+/book/
+

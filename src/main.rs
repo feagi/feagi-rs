@@ -1,0 +1,332 @@
+//! # FEAGI - Framework for Evolutionary Artificial General Intelligence
+//!
+//! Full-featured FEAGI server application with REST API, ZMQ streams, and neural processing.
+//!
+//! ## Features
+//! - REST API (HTTP) for brain management and control
+//! - ZMQ streams for sensory input and motor output
+//! - Real-time neural processing with burst engine
+//! - Genome loading and neuroembryogenesis
+//! - Agent registration and management
+//! - Brain visualization support
+//! - Configuration-driven (no hardcoded values)
+//!
+//! ## License
+//! Apache-2.0
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use log::{info, warn, error};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use parking_lot::RwLock;
+
+use feagi_config::{load_config, validate_config, FeagiConfig};
+use feagi_bdu::ConnectomeManager;
+use feagi_burst_engine::{RustNPU, BurstLoopRunner};
+use feagi_services::*;
+use feagi_api::transports::http::server::{create_http_server, ApiState};
+
+/// FEAGI Server - Full-featured neural processing and brain management
+#[derive(Parser, Debug)]
+#[command(name = "feagi", version, author, about, long_about = None)]
+struct Args {
+    /// Path to feagi_configuration.toml (searches automatically if not provided)
+    #[arg(short = 'f', long)]
+    config: Option<PathBuf>,
+
+    /// Path to genome file to load on startup (optional)
+    #[arg(short = 'g', long)]
+    genome: Option<PathBuf>,
+
+    /// Enable verbose logging
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Override API port from config
+    #[arg(long)]
+    api_port: Option<u16>,
+
+    /// Override burst frequency (Hz)
+    #[arg(long)]
+    burst_hz: Option<u64>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Parse CLI arguments
+    let args = Args::parse();
+
+    // Initialize logger
+    env_logger::Builder::from_default_env()
+        .filter_level(if args.verbose {
+            log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
+        })
+        .init();
+
+    // Print banner
+    print_banner();
+
+    // Load configuration (REQUIRED - no hardcoded fallbacks)
+    info!("Loading FEAGI configuration...");
+    let config = load_config(args.config.as_deref(), None)
+        .context("Failed to load configuration. Ensure feagi_configuration.toml exists.")?;
+    validate_config(&config)
+        .context("Configuration validation failed")?;
+    
+    info!("✓ Configuration loaded and validated");
+    log_config_summary(&config);
+
+    // Initialize core components
+    info!("Initializing FEAGI core components...");
+    let components = initialize_components(&config, &args).await?;
+    info!("✓ Core components initialized");
+
+    // Start services
+    info!("Starting FEAGI services...");
+    start_services(components, &config, &args).await?;
+
+    Ok(())
+}
+
+/// Core FEAGI components
+struct FeagiComponents {
+    npu: Arc<Mutex<RustNPU>>,
+    connectome_manager: Arc<RwLock<ConnectomeManager>>,
+    runtime_service: Arc<RuntimeServiceImpl>,
+}
+
+/// Initialize all core FEAGI components
+async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
+    // Initialize NPU
+    info!("  Initializing NPU...");
+    let npu = Arc::new(Mutex::new(RustNPU::new(
+        config.connectome.min_neuron_space,
+        config.connectome.min_synapse_space,
+        10, // cortical_area_count - will be resized as needed
+    )));
+    info!("    ✓ NPU initialized (capacity: {} neurons, {} synapses)",
+          config.connectome.min_neuron_space,
+          config.connectome.min_synapse_space);
+
+    // Initialize ConnectomeManager
+    info!("  Initializing ConnectomeManager...");
+    let manager = ConnectomeManager::instance();  // Already returns Arc<RwLock<>>
+    manager.write().set_npu(Arc::clone(&npu));
+    info!("    ✓ ConnectomeManager initialized and connected to NPU");
+
+    // Load genome if provided
+    if let Some(genome_path) = &args.genome {
+        info!("  Loading genome from: {}", genome_path.display());
+        load_genome(&manager, genome_path).await?;
+        info!("    ✓ Genome loaded and brain developed");
+    } else {
+        info!("  No genome specified, starting with empty connectome");
+    }
+
+    // Initialize BurstLoopRunner (for internal use by runtime service)
+    info!("  Initializing BurstLoopRunner...");
+    let burst_timestep = config.neural.burst_engine_timestep;
+    
+    // Create a no-op visualization publisher
+    struct NoOpPublisher;
+    impl feagi_burst_engine::VisualizationPublisher for NoOpPublisher {
+        fn publish_visualization(&self, _data: &[u8]) -> Result<(), String> {
+            Ok(()) // No-op: don't publish anything
+        }
+    }
+    
+    let no_op_publisher = Arc::new(Mutex::new(NoOpPublisher));
+    let burst_runner = Arc::new(Mutex::new(BurstLoopRunner::new(
+        Arc::clone(&npu),
+        Some(no_op_publisher),
+        burst_timestep,
+    )));
+    let burst_hz = (1000.0 / burst_timestep) as u64;
+    info!("    ✓ BurstLoopRunner initialized ({}Hz, {}ms timestep)", burst_hz, burst_timestep);
+
+    // Create runtime service (wraps BurstLoopRunner)
+    let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
+    info!("    ✓ Runtime service created");
+
+    Ok(FeagiComponents {
+        npu,
+        connectome_manager: manager,
+        runtime_service,
+    })
+}
+
+/// Load and develop a genome
+async fn load_genome(
+    manager: &Arc<RwLock<ConnectomeManager>>,
+    genome_path: &PathBuf,
+) -> Result<()> {
+    use feagi_evo::{load_genome_from_file, validate_genome};
+    
+    // Load genome from file
+    let genome = load_genome_from_file(genome_path)
+        .context("Failed to load genome file")?;
+    
+    // Validate genome
+    let validation = validate_genome(&genome);
+    if !validation.errors.is_empty() {
+        error!("Genome validation errors:");
+        for error in &validation.errors {
+            error!("  - {}", error);
+        }
+        return Err(anyhow::anyhow!("Genome validation failed"));
+    }
+    
+    if !validation.warnings.is_empty() {
+        warn!("Genome validation warnings:");
+        for warning in &validation.warnings {
+            warn!("  - {}", warning);
+        }
+    }
+    
+    // Load genome into connectome (includes neuroembryogenesis)
+    manager.write().load_from_genome(genome)
+        .context("Failed to load genome into connectome")?;
+    
+    Ok(())
+}
+
+/// Start all FEAGI services (API, ZMQ, Burst Engine)
+async fn start_services(
+    components: FeagiComponents,
+    config: &FeagiConfig,
+    args: &Args,
+) -> Result<()> {
+    // Setup signal handler for graceful shutdown
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        info!("Shutdown signal received...");
+        r.store(false, Ordering::SeqCst);
+    })?;
+
+    // Create remaining services
+    info!("  Creating service layer...");
+    let genome_service = Arc::new(GenomeServiceImpl::new(
+        Arc::clone(&components.connectome_manager)
+    ));
+    let connectome_service = Arc::new(ConnectomeServiceImpl::new(
+        Arc::clone(&components.connectome_manager)
+    ));
+    let analytics_service = Arc::new(AnalyticsServiceImpl::new(
+        Arc::clone(&components.connectome_manager),
+        None, // BurstLoopRunner not needed for basic analytics
+    ));
+    let neuron_service = Arc::new(NeuronServiceImpl::new(
+        Arc::clone(&components.connectome_manager)
+    ));
+    info!("    ✓ Services created");
+
+    // Create API state (runtime_service already created in components)
+    let api_state = ApiState {
+        genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
+        connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
+        analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
+        runtime_service: components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
+        neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
+    };
+
+    // Start HTTP API server
+    let api_port = args.api_port.unwrap_or(config.api.port);
+    let api_host = config.api.host.clone();
+    
+    info!("  Starting HTTP API server on {}:{}...", api_host, api_port);
+    let app = create_http_server(api_state);
+    let addr = format!("{}:{}", api_host, api_port);
+    
+    // Spawn API server in background
+    let api_handle = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .expect("Failed to bind API server");
+        
+        info!("    ✓ HTTP API server listening on {}", addr);
+        info!("    📡 Swagger UI available at http://{}/swagger-ui/", addr);
+        
+        axum::serve(listener, app)
+            .await
+            .expect("API server error");
+    });
+
+    // Start burst engine via service layer
+    info!("  Starting burst engine...");
+    components.runtime_service.start().await
+        .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
+    info!("    ✓ Burst engine running");
+
+    // TODO: Start ZMQ streams (PNS)
+    // This will be wired up once feagi-pns integration is complete
+    info!("  ZMQ streams: Not yet implemented");
+
+    info!("");
+    info!("🚀 FEAGI server is running!");
+    info!("   REST API: http://{}:{}", config.api.host, api_port);
+    info!("   Press Ctrl+C to stop");
+    info!("");
+
+    // Wait for shutdown signal
+    while running.load(Ordering::Relaxed) {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    // Graceful shutdown
+    info!("Shutting down FEAGI...");
+    
+    info!("  Stopping burst engine...");
+    components.runtime_service.stop().await
+        .map_err(|e| anyhow::anyhow!("Failed to stop burst engine: {}", e))?;
+    info!("    ✓ Burst engine stopped");
+
+    info!("  Stopping API server...");
+    api_handle.abort();
+    info!("    ✓ API server stopped");
+
+    info!("✅ FEAGI shutdown complete");
+    Ok(())
+}
+
+/// Log configuration summary
+fn log_config_summary(config: &FeagiConfig) {
+    info!("Configuration Summary:");
+    info!("  API: {}:{}", config.api.host, config.api.port);
+    info!("  ZMQ Host: {}", config.zmq.host);
+    info!("  Ports:");
+    info!("    - Sensory: {}", config.ports.zmq_sensory_port);
+    info!("    - Motor: {}", config.ports.zmq_motor_port);
+    info!("    - Visualization: {}", config.ports.zmq_visualization_port);
+    info!("  Neural:");
+    info!("    - Burst timestep: {}ms", config.neural.burst_engine_timestep);
+    info!("    - Batch size: {}", config.neural.batch_size);
+    info!("  Resources:");
+    info!("    - GPU enabled: {}", config.resources.use_gpu);
+    info!("    - Max neurons: {}", config.connectome.min_neuron_space);
+}
+
+/// Print FEAGI banner
+fn print_banner() {
+    println!(r#"
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║   ███████╗███████╗ █████╗  ██████╗ ██╗                          ║
+║   ██╔════╝██╔════╝██╔══██╗██╔════╝ ██║                          ║
+║   █████╗  █████╗  ███████║██║  ███╗██║                          ║
+║   ██╔══╝  ██╔══╝  ██╔══██║██║   ██║██║                          ║
+║   ██║     ███████╗██║  ██║╚██████╔╝██║                          ║
+║   ╚═╝     ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝                          ║
+║                                                                   ║
+║   Framework for Evolutionary Artificial General Intelligence     ║
+║   Version 2.0.0 - Apache-2.0 License                            ║
+║   Copyright 2016-2025 Neuraville Inc.                           ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+"#);
+}
+

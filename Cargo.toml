@@ -1,0 +1,63 @@
+[package]
+name = "feagi"
+version = "2.0.0"
+edition = "2021"
+authors = ["Neuraville Inc. <feagi@neuraville.com>"]
+license = "Apache-2.0"
+description = "FEAGI - Framework for Evolutionary Artificial General Intelligence (Full Server Application)"
+repository = "https://github.com/Neuraville/FEAGI-2.0"
+readme = "README.md"
+keywords = ["neuroscience", "ai", "neural-network", "brain", "agi"]
+categories = ["science", "simulation"]
+
+[[bin]]
+name = "feagi"
+path = "src/main.rs"
+
+[dependencies]
+# FEAGI Core Components (from feagi-core workspace)
+feagi-types = { path = "../feagi-core/crates/feagi-types" }
+feagi-config = { path = "../feagi-core/crates/feagi-config" }
+feagi-burst-engine = { path = "../feagi-core/crates/feagi-burst-engine" }
+feagi-bdu = { path = "../feagi-core/crates/feagi-bdu" }
+feagi-evo = { path = "../feagi-core/crates/feagi-evo" }
+feagi-services = { path = "../feagi-core/crates/feagi-services" }
+feagi-api = { path = "../feagi-core/crates/feagi-api" }
+feagi-pns = { path = "../feagi-core/crates/feagi-pns" }
+feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
+feagi-plasticity = { path = "../feagi-core/crates/feagi-plasticity" }
+feagi-connectome-serialization = { path = "../feagi-core/crates/feagi-connectome-serialization" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+axum = "0.7"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Logging
+env_logger = "0.11"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Signal handling
+ctrlc = "3.0"
+
+# Concurrency
+parking_lot = "0.12"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
