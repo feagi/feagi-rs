@@ -16,7 +16,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use log::{info, warn, error};
+use tracing::{info, warn, error};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,6 +27,7 @@ use feagi_bdu::ConnectomeManager;
 use feagi_burst_engine::{RustNPU, BurstLoopRunner};
 use feagi_services::*;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
+use feagi_observability::parse_debug_flags;
 
 /// FEAGI Server - Full-featured neural processing and brain management
 #[derive(Parser, Debug)]
@@ -51,6 +52,19 @@ struct Args {
     /// Override burst frequency (Hz)
     #[arg(long)]
     burst_hz: Option<u64>,
+    
+    /// Enable debug logging for specific crates
+    /// Example: --debug feagi-api --debug feagi-burst-engine
+    /// Or use: --debug-feagi-api --debug-feagi-burst-engine
+    /// Use --debug-all to enable debug for all crates
+    #[arg(long, action = clap::ArgAction::Append)]
+    debug: Vec<String>,
+    
+    /// Enable debug logging for all crates
+    #[arg(long)]
+    debug_all: bool,
+    
+    // Note: --debug-{crate-name} flags are parsed automatically via parse_debug_flags()
 }
 
 #[tokio::main]
@@ -58,14 +72,40 @@ async fn main() -> Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
 
-    // Initialize logger
-    env_logger::Builder::from_default_env()
-        .filter_level(if args.verbose {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        })
+    // Initialize observability with per-crate debug flags
+    // This automatically parses --debug-{crate-name} flags from command line
+    // and also checks FEAGI_DEBUG environment variable
+    let mut debug_flags = parse_debug_flags();
+    
+    // Apply --debug-all flag
+    if args.debug_all {
+        for crate_name in feagi_observability::KNOWN_CRATES {
+            debug_flags.enabled_crates.insert(crate_name.to_string(), true);
+        }
+    }
+    
+    // Apply --debug {crate-name} values
+    for crate_name in &args.debug {
+        debug_flags.enabled_crates.insert(crate_name.clone(), true);
+    }
+    
+    // Initialize tracing with crate-specific debug levels
+    let filter = if args.verbose {
+        // Verbose mode: enable debug for all crates
+        "debug".to_string()
+    } else {
+        debug_flags.to_filter_string()
+    };
+    
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(&filter))
         .init();
+    
+    // Log enabled debug crates if any
+    if debug_flags.any_enabled() {
+        let enabled_crates: Vec<String> = debug_flags.enabled_crates().into_iter().cloned().collect();
+        info!("Debug logging enabled for: {}", enabled_crates.join(", "));
+    }
 
     // Print banner
     print_banner();
