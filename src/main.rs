@@ -241,22 +241,25 @@ async fn start_services(
     config: &FeagiConfig,
     args: &Args,
 ) -> Result<()> {
-    // Setup signal handler for graceful shutdown
-    // Use a flag to prevent multiple signal handlers from firing
-    let shutdown_requested = Arc::new(AtomicBool::new(false));
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    let shutdown_flag = shutdown_requested.clone();
-    ctrlc::set_handler(move || {
-        // Prevent duplicate shutdown signals
-        if shutdown_flag.swap(true, Ordering::SeqCst) {
-            warn!("Shutdown signal received again (already shutting down)...");
-            return;
+    // Setup signal handler for graceful shutdown using tokio's built-in signal handling
+    // This is the recommended way and handles all synchronization correctly
+    // Create a shutdown flag
+    let shutdown_flag = Arc::new(AtomicBool::new(true));  // Start as true (running)
+    
+    // Spawn a task to watch for Ctrl+C signal using tokio's async signal handling
+    let shutdown_flag_for_task = shutdown_flag.clone();
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                eprintln!("[SHUTDOWN-TASK] Ctrl+C received - setting shutdown flag");
+                shutdown_flag_for_task.store(false, Ordering::SeqCst);
+                eprintln!("[SHUTDOWN-TASK] Shutdown flag set to false");
+            }
+            Err(e) => {
+                eprintln!("[SHUTDOWN-TASK] Error receiving Ctrl+C signal: {}", e);
+            }
         }
-        info!("Shutdown signal received...");
-        r.store(false, Ordering::SeqCst); // Use SeqCst for visibility
-        info!("Shutdown flag set to false");
-    })?;
+    });
 
     // Create remaining services
     info!("  Creating service layer...");
@@ -296,7 +299,7 @@ async fn start_services(
     info!("  API routes registered, binding to {}...", addr);
     
     // Spawn API server in background with graceful shutdown support
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let (shutdown_tx_api, shutdown_rx_api) = tokio::sync::oneshot::channel::<()>();
     let api_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
@@ -305,10 +308,10 @@ async fn start_services(
         info!("    ✓ HTTP API server listening on {}", addr);
         info!("    📡 Swagger UI available at http://{}/swagger-ui/", addr);
         
-        // Use graceful shutdown - when shutdown_rx is triggered, server will stop accepting new connections
+        // Use graceful shutdown - when shutdown_rx_api is triggered, server will stop accepting new connections
         axum::serve(listener, app)
             .with_graceful_shutdown(async {
-                shutdown_rx.await.ok();
+                shutdown_rx_api.await.ok();
             })
             .await
             .expect("API server error");
@@ -330,12 +333,26 @@ async fn start_services(
     info!("   Press Ctrl+C to stop");
     info!("");
 
-    // Wait for shutdown signal
+    // Wait for shutdown signal using tokio's signal handling (recommended approach)
     info!("Waiting for shutdown signal...");
-    while running.load(Ordering::Relaxed) {
+    
+    // Wait loop - check flag with SeqCst ordering
+    let mut check_count = 0u64;
+    loop {
+        check_count += 1;
+        let flag_value = shutdown_flag.load(Ordering::SeqCst);
+        
+        if check_count % 10 == 0 || !flag_value {
+            info!("Wait loop check #{}: shutdown flag = {}", check_count, flag_value);
+        }
+        
+        if !flag_value {
+            info!("✓ Shutdown flag detected! Exiting wait loop (checked {} times total)", check_count);
+            break;
+        }
+        
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
-    info!("Shutdown flag detected, exiting wait loop");
 
     // Graceful shutdown
     info!("Shutting down FEAGI...");
@@ -352,7 +369,7 @@ async fn start_services(
 
     info!("  Stopping API server...");
     // Trigger graceful shutdown for axum server
-    let _ = shutdown_tx.send(());
+    let _ = shutdown_tx_api.send(());
     
     // Wait for server to finish, with a timeout
     match tokio::time::timeout(
