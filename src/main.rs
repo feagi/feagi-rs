@@ -26,8 +26,11 @@ use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_bdu::ConnectomeManager;
 use feagi_burst_engine::{RustNPU, BurstLoopRunner};
 use feagi_services::*;
+use feagi_services::traits::agent_service::AgentService;
+use feagi_services::impls::AgentServiceImpl;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_observability::{parse_debug_flags, init_logging_default};
+use feagi_pns::PNS;
 
 /// FEAGI Server - Full-featured neural processing and brain management
 #[derive(Parser, Debug)]
@@ -135,9 +138,12 @@ async fn main() -> Result<()> {
 
 /// Core FEAGI components
 struct FeagiComponents {
+    #[allow(dead_code)]  // In development - will be exposed via additional services
     npu: Arc<Mutex<RustNPU>>,
     connectome_manager: Arc<RwLock<ConnectomeManager>>,
     runtime_service: Arc<RuntimeServiceImpl>,
+    burst_runner: Arc<RwLock<BurstLoopRunner>>,
+    pns: Arc<PNS>,
 }
 
 /// Initialize all core FEAGI components
@@ -181,7 +187,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     }
     
     let no_op_publisher = Arc::new(Mutex::new(NoOpPublisher));
-    let burst_runner = Arc::new(Mutex::new(BurstLoopRunner::new(
+    let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
         Arc::clone(&npu),
         Some(no_op_publisher),
         burst_timestep,
@@ -192,11 +198,19 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     // Create runtime service (wraps BurstLoopRunner)
     let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
     info!("    ✓ Runtime service created");
+    
+    // Initialize PNS (Peripheral Nervous System - handles agent I/O)
+    info!("  Creating PNS (Agent Management)...");
+    let pns = Arc::new(PNS::new()
+        .context("Failed to create PNS")?);
+    info!("    ✓ PNS created");
 
     Ok(FeagiComponents {
         npu,
         connectome_manager: manager,
         runtime_service,
+        burst_runner,
+        pns,
     })
 }
 
@@ -271,16 +285,23 @@ async fn start_services(
     ));
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),
-        None, // BurstLoopRunner not needed for basic analytics
+        Some(Arc::clone(&components.burst_runner)),
     ));
     let neuron_service = Arc::new(NeuronServiceImpl::new(
         Arc::clone(&components.connectome_manager)
+    ));
+    
+    // Get agent registry from PNS for agent service
+    let agent_registry = components.pns.get_agent_registry();
+    let agent_service = Arc::new(AgentServiceImpl::new(
+        Arc::clone(&components.connectome_manager),
+        agent_registry,
     ));
     info!("    ✓ Services created");
 
     // Create API state (runtime_service already created in components)
     let api_state = ApiState {
-        agent_service: None, // TODO: Add agent service implementation
+        agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
         genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
         connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
