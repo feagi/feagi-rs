@@ -227,6 +227,7 @@ async fn start_services(
 
     // Create API state (runtime_service already created in components)
     let api_state = ApiState {
+        agent_service: None, // TODO: Add agent service implementation
         genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
         connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
@@ -241,6 +242,8 @@ async fn start_services(
     info!("  Starting HTTP API server on {}:{}...", api_host, api_port);
     let app = create_http_server(api_state);
     let addr = format!("{}:{}", api_host, api_port);
+    
+    info!("  API routes registered, binding to {}...", addr);
     
     // Spawn API server in background
     let api_handle = tokio::spawn(async move {
