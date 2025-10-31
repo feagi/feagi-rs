@@ -27,7 +27,7 @@ use feagi_bdu::ConnectomeManager;
 use feagi_burst_engine::{RustNPU, BurstLoopRunner};
 use feagi_services::*;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
-use feagi_observability::parse_debug_flags;
+use feagi_observability::{parse_debug_flags, init_logging_default};
 
 /// FEAGI Server - Full-featured neural processing and brain management
 #[derive(Parser, Debug)]
@@ -89,23 +89,24 @@ async fn main() -> Result<()> {
         debug_flags.enabled_crates.insert(crate_name.clone(), true);
     }
     
-    // Initialize tracing with crate-specific debug levels
-    let filter = if args.verbose {
-        // Verbose mode: enable debug for all crates
-        "debug".to_string()
-    } else {
-        debug_flags.to_filter_string()
-    };
+    // Apply verbose mode (enable debug for all crates)
+    if args.verbose {
+        for crate_name in feagi_observability::KNOWN_CRATES {
+            debug_flags.enabled_crates.insert(crate_name.to_string(), true);
+        }
+    }
     
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(&filter))
-        .init();
+    // Initialize logging with file output
+    let _log_guard = init_logging_default(&debug_flags)
+        .context("Failed to initialize logging")?;
     
     // Log enabled debug crates if any
     if debug_flags.any_enabled() {
         let enabled_crates: Vec<String> = debug_flags.enabled_crates().into_iter().cloned().collect();
         info!("Debug logging enabled for: {}", enabled_crates.join(", "));
     }
+    
+    info!("Logs are being saved to: {}", _log_guard.log_dir().display());
 
     // Print banner
     print_banner();
