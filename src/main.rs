@@ -337,17 +337,12 @@ async fn start_services(
     info!("Waiting for shutdown signal...");
     
     // Wait loop - check flag with SeqCst ordering
-    let mut check_count = 0u64;
+    // Note: We don't log periodically here to avoid noise - only log when shutdown actually happens
     loop {
-        check_count += 1;
         let flag_value = shutdown_flag.load(Ordering::SeqCst);
         
-        if check_count % 10 == 0 || !flag_value {
-            info!("Wait loop check #{}: shutdown flag = {}", check_count, flag_value);
-        }
-        
         if !flag_value {
-            info!("✓ Shutdown flag detected! Exiting wait loop (checked {} times total)", check_count);
+            info!("✓ Shutdown signal detected! Initiating graceful shutdown...");
             break;
         }
         
