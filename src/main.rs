@@ -242,11 +242,20 @@ async fn start_services(
     args: &Args,
 ) -> Result<()> {
     // Setup signal handler for graceful shutdown
+    // Use a flag to prevent multiple signal handlers from firing
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
+    let shutdown_flag = shutdown_requested.clone();
     ctrlc::set_handler(move || {
+        // Prevent duplicate shutdown signals
+        if shutdown_flag.swap(true, Ordering::SeqCst) {
+            warn!("Shutdown signal received again (already shutting down)...");
+            return;
+        }
         info!("Shutdown signal received...");
-        r.store(false, Ordering::SeqCst);
+        r.store(false, Ordering::SeqCst); // Use SeqCst for visibility
+        info!("Shutdown flag set to false");
     })?;
 
     // Create remaining services
@@ -286,7 +295,8 @@ async fn start_services(
     
     info!("  API routes registered, binding to {}...", addr);
     
-    // Spawn API server in background
+    // Spawn API server in background with graceful shutdown support
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let api_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
@@ -295,7 +305,11 @@ async fn start_services(
         info!("    ✓ HTTP API server listening on {}", addr);
         info!("    📡 Swagger UI available at http://{}/swagger-ui/", addr);
         
+        // Use graceful shutdown - when shutdown_rx is triggered, server will stop accepting new connections
         axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                shutdown_rx.await.ok();
+            })
             .await
             .expect("API server error");
     });
@@ -317,24 +331,49 @@ async fn start_services(
     info!("");
 
     // Wait for shutdown signal
+    info!("Waiting for shutdown signal...");
     while running.load(Ordering::Relaxed) {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
+    info!("Shutdown flag detected, exiting wait loop");
 
     // Graceful shutdown
     info!("Shutting down FEAGI...");
     
     info!("  Stopping burst engine...");
-    components.runtime_service.stop().await
-        .map_err(|e| anyhow::anyhow!("Failed to stop burst engine: {}", e))?;
-    info!("    ✓ Burst engine stopped");
+    let stop_result = components.runtime_service.stop().await;
+    match stop_result {
+        Ok(_) => info!("    ✓ Burst engine stopped"),
+        Err(e) => {
+            error!("    ✗ Failed to stop burst engine: {}", e);
+            return Err(anyhow::anyhow!("Failed to stop burst engine: {}", e));
+        }
+    }
 
     info!("  Stopping API server...");
-    api_handle.abort();
-    info!("    ✓ API server stopped");
+    // Trigger graceful shutdown for axum server
+    let _ = shutdown_tx.send(());
+    
+    // Wait for server to finish, with a timeout
+    match tokio::time::timeout(
+        tokio::time::Duration::from_secs(5),
+        api_handle
+    ).await {
+        Ok(Ok(_)) => {
+            info!("    ✓ API server stopped cleanly");
+        }
+        Ok(Err(e)) => {
+            warn!("    ⚠️ API server error during shutdown: {}", e);
+        }
+        Err(_) => {
+            warn!("    ⚠️ API server shutdown timed out after 5 seconds, proceeding anyway");
+        }
+    }
 
     info!("✅ FEAGI shutdown complete");
-    Ok(())
+    info!("Exiting process...");
+    // Force exit to ensure process terminates (kills all threads immediately)
+    std::process::exit(0);
 }
 
 /// Log configuration summary
