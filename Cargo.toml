@@ -18,7 +18,8 @@ path = "src/main.rs"
 # FEAGI Core Components (from feagi-core workspace)
 feagi-types = { path = "../feagi-core/crates/feagi-types" }
 feagi-config = { path = "../feagi-core/crates/feagi-config" }
-feagi-burst-engine = { path = "../feagi-core/crates/feagi-burst-engine" }
+# GPU acceleration enabled by default (disable with --no-default-features)
+feagi-burst-engine = { path = "../feagi-core/crates/feagi-burst-engine", features = ["gpu"] }
 feagi-bdu = { path = "../feagi-core/crates/feagi-bdu" }
 feagi-evo = { path = "../feagi-core/crates/feagi-evo" }
 feagi-services = { path = "../feagi-core/crates/feagi-services" }
@@ -103,3 +104,7 @@ path = "tests/profile_cpu.rs"
 [[test]]
 name = "profile_storage"
 path = "tests/profile_storage.rs"
+
+[features]
+default = ["gpu"]
+gpu = ["feagi-burst-engine/gpu"]

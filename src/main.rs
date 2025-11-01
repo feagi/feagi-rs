@@ -25,6 +25,7 @@ use parking_lot::RwLock;
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_bdu::ConnectomeManager;
 use feagi_burst_engine::{RustNPU, BurstLoopRunner};
+use feagi_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::impls::AgentServiceImpl;
@@ -148,12 +149,22 @@ struct FeagiComponents {
 
 /// Initialize all core FEAGI components
 async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
-    // Initialize NPU
+    // Initialize NPU with GPU configuration
     info!("  Initializing NPU...");
+    
+    // Create GPU config from TOML settings
+    let gpu_config = GpuConfig {
+        use_gpu: config.resources.use_gpu,
+        hybrid_enabled: config.neural.hybrid.enabled,
+        gpu_threshold: config.neural.hybrid.gpu_threshold,
+        gpu_memory_fraction: config.resources.gpu_memory_fraction,
+    };
+    
     let npu = Arc::new(Mutex::new(RustNPU::new(
         config.connectome.min_neuron_space,
         config.connectome.min_synapse_space,
-        10, // cortical_area_count - will be resized as needed
+        10, // fire_ledger_window
+        Some(&gpu_config),
     )));
     info!("    ✓ NPU initialized (capacity: {} neurons, {} synapses)",
           config.connectome.min_neuron_space,
