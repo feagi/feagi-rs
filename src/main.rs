@@ -174,36 +174,44 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         info!("  No genome specified, starting with empty connectome");
     }
 
-    // Initialize BurstLoopRunner (for internal use by runtime service)
-    info!("  Initializing BurstLoopRunner...");
-    let burst_timestep = config.neural.burst_engine_timestep;
-    
-    // Create a no-op visualization publisher
-    struct NoOpPublisher;
-    impl feagi_burst_engine::VisualizationPublisher for NoOpPublisher {
-        fn publish_visualization(&self, _data: &[u8]) -> Result<(), String> {
-            Ok(()) // No-op: don't publish anything
-        }
-    }
-    
-    let no_op_publisher = Arc::new(Mutex::new(NoOpPublisher));
-    let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
-        Arc::clone(&npu),
-        Some(no_op_publisher),
-        burst_timestep,
-    )));
-    let burst_hz = (1000.0 / burst_timestep) as u64;
-    info!("    ✓ BurstLoopRunner initialized ({}Hz, {}ms timestep)", burst_hz, burst_timestep);
-
-    // Create runtime service (wraps BurstLoopRunner)
-    let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
-    info!("    ✓ Runtime service created");
-    
     // Initialize PNS (Peripheral Nervous System - handles agent I/O)
+    // MUST be created BEFORE BurstLoopRunner to provide visualization publisher
     info!("  Creating PNS (Agent Management)...");
     let pns = Arc::new(PNS::new()
         .context("Failed to create PNS")?);
     info!("    ✓ PNS created");
+    
+    // Initialize BurstLoopRunner with PNS-backed visualization publisher
+    info!("  Initializing BurstLoopRunner...");
+    let burst_timestep = config.neural.burst_engine_timestep;
+    
+    // Create PNS-backed visualization publisher
+    struct PnsVisualizationPublisher {
+        pns: Arc<PNS>,
+    }
+    
+    impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
+        fn publish_visualization(&self, data: &[u8]) -> Result<(), String> {
+            self.pns.publish_visualization(data)
+                .map_err(|e| format!("PNS publish failed: {}", e))
+        }
+    }
+    
+    let viz_publisher = Arc::new(Mutex::new(PnsVisualizationPublisher {
+        pns: Arc::clone(&pns),
+    }));
+    
+    let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
+        Arc::clone(&npu),
+        Some(viz_publisher),
+        burst_timestep,
+    )));
+    let burst_hz = (1000.0 / burst_timestep) as u64;
+    info!("    ✓ BurstLoopRunner initialized ({}Hz, {}ms timestep, PNS-backed visualization)", burst_hz, burst_timestep);
+
+    // Create runtime service (wraps BurstLoopRunner)
+    let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
+    info!("    ✓ Runtime service created");
 
     Ok(FeagiComponents {
         npu,
@@ -314,7 +322,13 @@ async fn start_services(
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
     };
 
-    // Start HTTP API server
+    // Start PNS control streams FIRST (fail fast if ports in use)
+    info!("  Starting PNS control streams (agent registration)...");
+    components.pns.start_control_streams()
+        .context("Failed to start PNS control streams")?;
+    info!("    ✓ PNS control streams started (agent registration ready)");
+
+    // Start HTTP API server (after PNS to avoid orphaned tasks on failure)
     let api_port = args.api_port.unwrap_or(config.api.port);
     let api_host = config.api.host.clone();
     
@@ -349,9 +363,14 @@ async fn start_services(
         .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
     info!("    ✓ Burst engine running");
 
-    // TODO: Start ZMQ streams (PNS)
-    // This will be wired up once feagi-pns integration is complete
-    info!("  ZMQ streams: Not yet implemented");
+    // Start PNS data streams AFTER burst engine is running
+    info!("  Starting PNS data streams (sensory/motor/visualization)...");
+    components.pns.start_data_streams()
+        .context("Failed to start PNS data streams")?;
+    info!("    ✓ PNS data streams started");
+    info!("      - Sensory input: ZMQ PULL on port {}", config.ports.zmq_sensory_port);
+    info!("      - Motor output: ZMQ PUB on port {}", config.ports.zmq_motor_port);
+    info!("      - Visualization: ZMQ PUB on port {} (FCL activity stream)", config.ports.zmq_visualization_port);
 
     info!("");
     info!("🚀 FEAGI server is running!");
