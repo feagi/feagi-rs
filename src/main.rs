@@ -300,6 +300,10 @@ async fn start_services(
     info!("    ✓ Services created");
 
     // Create API state (runtime_service already created in components)
+    // Create snapshot service
+    let snapshot_dir = std::path::PathBuf::from("./snapshots");
+    let snapshot_service = Arc::new(feagi_services::SnapshotServiceImpl::new(snapshot_dir));
+    
     let api_state = ApiState {
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
         genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
@@ -307,6 +311,7 @@ async fn start_services(
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
         runtime_service: components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
         neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
+        snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
     };
 
     // Start HTTP API server
