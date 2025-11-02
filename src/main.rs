@@ -377,7 +377,12 @@ async fn start_services(
         .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
     info!("    ✓ Burst engine running");
 
-    // Start PNS data streams AFTER burst engine is running
+    // Connect NPU to sensory stream BEFORE starting data streams
+    info!("  Connecting NPU to PNS sensory stream...");
+    components.pns.connect_npu_to_sensory_stream(Arc::clone(&components.npu));
+    info!("    ✓ NPU connected to sensory stream");
+
+    // Start PNS data streams AFTER burst engine is running AND NPU is connected
     info!("  Starting PNS data streams (sensory/motor/visualization)...");
     components.pns.start_data_streams()
         .context("Failed to start PNS data streams")?;
