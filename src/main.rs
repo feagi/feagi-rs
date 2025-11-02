@@ -212,13 +212,16 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         pns: Arc::clone(&pns),
     }));
     
+    // Calculate burst frequency from timestep (milliseconds → Hz)
+    // timestep is in milliseconds, so frequency = 1000 / timestep_ms
+    let burst_hz = 1000.0 / burst_timestep;
+    
     let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
         Arc::clone(&npu),
         Some(viz_publisher),
-        burst_timestep,
+        burst_hz,  // ← FIX: Pass frequency in Hz, not timestep!
     )));
-    let burst_hz = (1000.0 / burst_timestep) as u64;
-    info!("    ✓ BurstLoopRunner initialized ({}Hz, {}ms timestep, PNS-backed visualization)", burst_hz, burst_timestep);
+    info!("    ✓ BurstLoopRunner initialized ({:.0}Hz, {}ms timestep, PNS-backed visualization)", burst_hz, burst_timestep);
 
     // Create runtime service (wraps BurstLoopRunner)
     let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
