@@ -188,11 +188,22 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     // Initialize PNS (Peripheral Nervous System - handles agent I/O)
     // MUST be created BEFORE BurstLoopRunner to provide visualization publisher
     info!("  Creating PNS (Agent Management)...");
-    let pns = Arc::new(PNS::new()
+    
+    // Build PNS config from FEAGI config (NO HARDCODED DEFAULTS!)
+    use feagi_pns::{PNSConfig, TransportMode};
+    
+    let mut pns_config = PNSConfig::default();
+    // Override with actual config values
+    pns_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
+    pns_config.zmq_motor_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_motor_port);
+    pns_config.zmq_viz_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_visualization_port);
+    pns_config.zmq_sensory_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_sensory_port);
+    
+    let pns = Arc::new(PNS::with_config(pns_config)
         .context("Failed to create PNS")?);
     info!("    ✓ PNS created");
     
-    // Initialize BurstLoopRunner with PNS-backed visualization publisher
+    // Initialize BurstLoopRunner with PNS-backed publishers
     info!("  Initializing BurstLoopRunner...");
     let burst_timestep = config.neural.burst_engine_timestep;
     
@@ -204,11 +215,27 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
         fn publish_visualization(&self, data: &[u8]) -> Result<(), String> {
             self.pns.publish_visualization(data)
-                .map_err(|e| format!("PNS publish failed: {}", e))
+                .map_err(|e| format!("PNS viz publish failed: {}", e))
+        }
+    }
+    
+    // Create PNS-backed motor publisher
+    struct PnsMotorPublisher {
+        pns: Arc<PNS>,
+    }
+    
+    impl feagi_burst_engine::MotorPublisher for PnsMotorPublisher {
+        fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
+            self.pns.publish_motor(agent_id, data)
+                .map_err(|e| format!("PNS motor publish failed: {}", e))
         }
     }
     
     let viz_publisher = Arc::new(Mutex::new(PnsVisualizationPublisher {
+        pns: Arc::clone(&pns),
+    }));
+    
+    let motor_publisher = Arc::new(Mutex::new(PnsMotorPublisher {
         pns: Arc::clone(&pns),
     }));
     
@@ -219,13 +246,28 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
         Arc::clone(&npu),
         Some(viz_publisher),
-        burst_hz,  // ← FIX: Pass frequency in Hz, not timestep!
+        Some(motor_publisher),
+        burst_hz,
     )));
-    info!("    ✓ BurstLoopRunner initialized ({:.0}Hz, {}ms timestep, PNS-backed visualization)", burst_hz, burst_timestep);
+    info!("    ✓ BurstLoopRunner initialized ({:.0}Hz, {}ms timestep, PNS-backed viz+motor)", burst_hz, burst_timestep);
 
     // Create runtime service (wraps BurstLoopRunner)
     let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
     info!("    ✓ Runtime service created");
+
+    // Wire up bidirectional connections between PNS and BurstLoopRunner
+    info!("  Wiring PNS ↔ BurstLoopRunner connections...");
+    
+    // PNS needs sensory manager from BurstLoopRunner (for sensory injection)
+    let sensory_mgr = burst_runner.read().sensory_manager.clone();
+    pns.set_sensory_agent_manager(sensory_mgr);
+    
+    // PNS needs burst_runner reference (for motor subscription tracking)
+    pns.set_burst_runner(Arc::clone(&burst_runner));
+    
+    info!("    ✓ PNS ↔ BurstLoopRunner connections established");
+    info!("      - Sensory: PNS → BurstLoopRunner (injection)");
+    info!("      - Motor: BurstLoopRunner → PNS (publishing)");
 
     Ok(FeagiComponents {
         npu,
