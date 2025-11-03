@@ -207,8 +207,8 @@ async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<Fea
     }
     
     impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
-        fn publish_visualization(&self, data: &[u8]) -> Result<(), String> {
-            self.pns.publish_visualization(data)
+        fn publish_raw_fire_queue(&self, fire_data: feagi_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
+            self.pns.publish_raw_fire_queue(fire_data)
                 .map_err(|e| format!("PNS viz publish failed: {}", e))
         }
     }
