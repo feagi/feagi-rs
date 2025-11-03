@@ -400,8 +400,13 @@ async fn start_services(
 
     // Create remaining services
     info!("  Creating service layer...");
-    let genome_service = Arc::new(GenomeServiceImpl::new(
-        Arc::clone(&components.connectome_manager)
+    
+    // Get parameter queue from burst runner for async parameter updates
+    let parameter_queue = components.burst_runner.read().parameter_queue.clone();
+    
+    let genome_service = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
+        Arc::clone(&components.connectome_manager),
+        parameter_queue,
     ));
     let connectome_service = Arc::new(ConnectomeServiceImpl::new(
         Arc::clone(&components.connectome_manager)
