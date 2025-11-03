@@ -190,7 +190,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     info!("  Creating PNS (Agent Management)...");
     
     // Build PNS config from FEAGI config (NO HARDCODED DEFAULTS!)
-    use feagi_pns::{PNSConfig, TransportMode};
+    use feagi_pns::PNSConfig;
     
     let mut pns_config = PNSConfig::default();
     // Override with actual config values
