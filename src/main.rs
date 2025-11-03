@@ -148,7 +148,7 @@ struct FeagiComponents {
 }
 
 /// Initialize all core FEAGI components
-async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
+async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<FeagiComponents> {
     // Initialize NPU with GPU configuration
     info!("  Initializing NPU...");
     
@@ -176,14 +176,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     manager.write().set_npu(Arc::clone(&npu));
     info!("    ✓ ConnectomeManager initialized and connected to NPU");
 
-    // Load genome if provided
-    if let Some(genome_path) = &args.genome {
-        info!("  Loading genome from: {}", genome_path.display());
-        load_genome(&manager, genome_path).await?;
-        info!("    ✓ Genome loaded and brain developed");
-    } else {
-        info!("  No genome specified, starting with empty connectome");
-    }
+    // NOTE: Genome loading is deferred until after PNS is created and wired
+    // This allows dynamic stream gating to work properly
 
     // Initialize PNS (Peripheral Nervous System - handles agent I/O)
     // MUST be created BEFORE BurstLoopRunner to provide visualization publisher
@@ -239,9 +233,9 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         pns: Arc::clone(&pns),
     }));
     
-    // Calculate burst frequency from timestep (milliseconds → Hz)
-    // timestep is in milliseconds, so frequency = 1000 / timestep_ms
-    let burst_hz = 1000.0 / burst_timestep;
+    // Calculate burst frequency from timestep (seconds → Hz)
+    // timestep is in seconds, so frequency = 1 / timestep_seconds
+    let burst_hz = 1.0 / burst_timestep;
     
     let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
         Arc::clone(&npu),
@@ -249,7 +243,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         Some(motor_publisher),
         burst_hz,
     )));
-    info!("    ✓ BurstLoopRunner initialized ({:.0}Hz, {}ms timestep, PNS-backed viz+motor)", burst_hz, burst_timestep);
+    info!("    ✓ BurstLoopRunner initialized ({:.0}Hz, {}s timestep, PNS-backed viz+motor)", burst_hz, burst_timestep);
 
     // Create runtime service (wraps BurstLoopRunner)
     let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
@@ -265,9 +259,13 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     // PNS needs burst_runner reference (for motor subscription tracking)
     pns.set_burst_runner(Arc::clone(&burst_runner));
     
+    // Wire NPU to PNS for dynamic stream gating
+    pns.set_npu_for_gating(Arc::clone(&npu));
+    
     info!("    ✓ PNS ↔ BurstLoopRunner connections established");
     info!("      - Sensory: PNS → BurstLoopRunner (injection)");
     info!("      - Motor: BurstLoopRunner → PNS (publishing)");
+    info!("      - Dynamic gating: NPU genome state → PNS stream control");
 
     Ok(FeagiComponents {
         npu,
@@ -307,10 +305,71 @@ async fn load_genome(
     }
     
     // Load genome into connectome (includes neuroembryogenesis)
-    manager.write().load_from_genome(genome)
-        .context("Failed to load genome into connectome")?;
+    // CRITICAL: Don't hold write lock during entire operation - neuroembryogenesis
+    // manages its own fine-grained locks. This prevents blocking analytics reads.
+    let result = {
+        // Acquire write lock only for prepare/resize operations
+        let mut mgr = manager.write();
+        mgr.prepare_for_new_genome()
+            .context("Failed to prepare for new genome")?;
+        
+        // Resize if needed (requires write lock)
+        mgr.resize_for_genome(&genome)
+            .context("Failed to resize for genome")?;
+        
+        // Release write lock before long-running neuroembryogenesis
+        drop(mgr);
+        
+        // Now develop genome (will acquire its own fine-grained locks)
+        use feagi_bdu::neuroembryogenesis::Neuroembryogenesis;
+        let mut neuro = Neuroembryogenesis::new(manager.clone());
+        neuro.develop_from_genome(&genome)
+            .context("Failed to develop brain from genome")?;
+        
+        neuro.get_progress()
+    };
+    
+    info!("    [GENOME-LOAD] Neuroembryogenesis complete: {} neurons, {} synapses", 
+          result.neurons_created, result.synapses_created);
     
     Ok(())
+}
+
+/// Load genome and notify PNS for dynamic gating
+/// Returns the genome's simulation_timestep (in seconds) if available
+async fn load_genome_with_pns(
+    manager: &Arc<RwLock<ConnectomeManager>>,
+    pns: &Arc<PNS>,
+    genome_path: &PathBuf,
+) -> Result<Option<f64>> {
+    info!("    [GENOME-LOAD] Step 1: Loading genome file...");
+    
+    // Load genome file to extract simulation_timestep
+    use feagi_evo::{load_genome_from_file};
+    let genome = load_genome_from_file(genome_path)
+        .context("Failed to load genome file")?;
+    
+    let simulation_timestep = genome.physiology.simulation_timestep;
+    info!("    [GENOME-LOAD] Genome specifies simulation_timestep: {}s ({:.0}Hz)", 
+          simulation_timestep, 1.0 / simulation_timestep);
+    
+    // Load genome into connectome
+    match load_genome(manager, genome_path).await {
+        Ok(_) => {
+            info!("    [GENOME-LOAD] Step 2: Genome loaded successfully");
+        }
+        Err(e) => {
+            error!("    [GENOME-LOAD] ✗ Failed at Step 2 (load_genome): {}", e);
+            return Err(e);
+        }
+    }
+    
+    info!("    [GENOME-LOAD] Step 3: Notifying PNS (triggers dynamic stream evaluation)...");
+    // Notify PNS that genome is loaded (triggers stream evaluation)
+    pns.on_genome_loaded();
+    info!("    [GENOME-LOAD] Step 4: PNS notified, dynamic evaluation complete");
+    
+    Ok(Some(simulation_timestep))
 }
 
 /// Start all FEAGI services (API, ZMQ, Burst Engine)
@@ -378,13 +437,13 @@ async fn start_services(
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
     };
 
-    // Start PNS control streams FIRST (fail fast if ports in use)
+    // Start PNS control streams FIRST (this wires the dynamic gating callbacks)
     info!("  Starting PNS control streams (agent registration)...");
     components.pns.start_control_streams()
         .context("Failed to start PNS control streams")?;
     info!("    ✓ PNS control streams started (agent registration ready)");
 
-    // Start HTTP API server (after PNS to avoid orphaned tasks on failure)
+    // Start HTTP API server (before genome load in case it hangs)
     let api_port = args.api_port.unwrap_or(config.api.port);
     let api_host = config.api.host.clone();
     
@@ -419,19 +478,49 @@ async fn start_services(
         .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
     info!("    ✓ Burst engine running");
 
-    // Connect NPU to sensory stream BEFORE starting data streams
+    // Connect NPU to sensory stream for data injection
     info!("  Connecting NPU to PNS sensory stream...");
     components.pns.connect_npu_to_sensory_stream(Arc::clone(&components.npu));
     info!("    ✓ NPU connected to sensory stream");
+    
+    // Load genome AFTER burst engine is running (so neuroembryogenesis can complete)
+    if let Some(genome_path) = &args.genome {
+        info!("  Loading genome from: {}", genome_path.display());
+        match load_genome_with_pns(&components.connectome_manager, &components.pns, genome_path).await {
+            Ok(Some(genome_timestep)) => {
+                info!("    ✓ Genome loaded and brain developed");
+                info!("    ✓ Dynamic stream evaluation triggered");
+                
+                // Update burst frequency to match genome's simulation_timestep
+                let new_freq = 1.0 / genome_timestep;
+                info!("    ✓ Updating burst frequency from genome: {}Hz ({}s timestep)", 
+                      new_freq, genome_timestep);
+                components.burst_runner.write().set_frequency(new_freq);
+                info!("    ✓ Burst frequency updated successfully");
+            }
+            Ok(None) => {
+                info!("    ✓ Genome loaded (using config burst frequency)");
+                info!("    ✓ Dynamic stream evaluation triggered");
+            }
+            Err(e) => {
+                error!("    ✗ Failed to load genome: {}", e);
+                error!("    ✗ FEAGI will continue without genome (no data streams will start)");
+                error!("    ✗ You can load a genome later via the REST API");
+                // Don't fail startup - allow FEAGI to run without genome
+            }
+        }
+    } else {
+        info!("  No genome specified, starting with empty connectome");
+        info!("    ⚠️  Data streams will not start until genome is loaded");
+    }
 
-    // Start PNS data streams AFTER burst engine is running AND NPU is connected
-    info!("  Starting PNS data streams (sensory/motor/visualization)...");
-    components.pns.start_data_streams()
-        .context("Failed to start PNS data streams")?;
-    info!("    ✓ PNS data streams started");
-    info!("      - Sensory input: ZMQ PULL on port {}", config.ports.zmq_sensory_port);
-    info!("      - Motor output: ZMQ PUB on port {}", config.ports.zmq_motor_port);
-    info!("      - Visualization: ZMQ PUB on port {} (FCL activity stream)", config.ports.zmq_visualization_port);
+    // Data streams start DYNAMICALLY based on:
+    // 1. Genome loaded (NPU has neurons)
+    // 2. At least one agent with matching capability registered
+    info!("  ⏸️  Data streams will start automatically when conditions are met:");
+    info!("      - Sensory: genome loaded + sensory agent registered");
+    info!("      - Motor: genome loaded + motor agent registered");
+    info!("      - Visualization: genome loaded + viz agent registered");
 
     info!("");
     info!("🚀 FEAGI server is running!");
@@ -465,6 +554,14 @@ async fn start_services(
         Err(e) => {
             error!("    ✗ Failed to stop burst engine: {}", e);
             return Err(anyhow::anyhow!("Failed to stop burst engine: {}", e));
+        }
+    }
+    
+    info!("  Stopping PNS (agent I/O)...");
+    match components.pns.stop() {
+        Ok(_) => info!("    ✓ PNS stopped"),
+        Err(e) => {
+            error!("    ✗ Failed to stop PNS: {}", e);
         }
     }
 
