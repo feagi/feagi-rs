@@ -140,8 +140,8 @@ async fn main() -> Result<()> {
 /// Core FEAGI components
 struct FeagiComponents {
     #[allow(dead_code)]  // In development - will be exposed via additional services
-    npu: Arc<Mutex<RustNPU>>,
-    connectome_manager: Arc<RwLock<ConnectomeManager>>,
+    npu: Arc<Mutex<RustNPU<f32>>>,
+    connectome_manager: Arc<RwLock<ConnectomeManager<f32>>>,
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
     pns: Arc<PNS>,
@@ -172,7 +172,7 @@ async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<Fea
 
     // Initialize ConnectomeManager
     info!("  Initializing ConnectomeManager...");
-    let manager = ConnectomeManager::instance();  // Already returns Arc<RwLock<>>
+    let manager = ConnectomeManager::<f32>::instance();  // Already returns Arc<RwLock<>>
     manager.write().set_npu(Arc::clone(&npu));
     info!("    ✓ ConnectomeManager initialized and connected to NPU");
 
@@ -278,7 +278,7 @@ async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<Fea
 
 /// Load and develop a genome
 async fn load_genome(
-    manager: &Arc<RwLock<ConnectomeManager>>,
+    manager: &Arc<RwLock<ConnectomeManager<f32>>>,
     genome_path: &PathBuf,
 ) -> Result<()> {
     use feagi_evo::{load_genome_from_file, validate_genome};
@@ -338,7 +338,7 @@ async fn load_genome(
 /// Load genome and notify PNS for dynamic gating
 /// Returns the genome's simulation_timestep (in seconds) if available
 async fn load_genome_with_pns(
-    manager: &Arc<RwLock<ConnectomeManager>>,
+    manager: &Arc<RwLock<ConnectomeManager<f32>>>,
     pns: &Arc<PNS>,
     genome_path: &PathBuf,
 ) -> Result<Option<f64>> {
