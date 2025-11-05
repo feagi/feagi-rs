@@ -1,0 +1,312 @@
+//! Internal FEAGI component initialization
+//! 
+//! This module contains the logic for initializing FEAGI's core components.
+//! It is internal to the library and should not be used directly by embedders.
+
+use std::sync::{Arc, Mutex};
+use parking_lot::RwLock;
+use anyhow::{Context, Result};
+use tracing::{info, warn};
+
+use feagi_config::FeagiConfig;
+use feagi_bdu::ConnectomeManager;
+use feagi_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU};
+use feagi_burst_engine::backend::GpuConfig;
+use feagi_services::*;
+use feagi_services::traits::agent_service::AgentService;
+use feagi_services::impls::AgentServiceImpl;
+use feagi_api::transports::http::server::{create_http_server, ApiState};
+use feagi_pns::PNS;
+
+/// Core FEAGI components
+/// 
+/// All components are wrapped in Arc/Mutex for thread-safe access.
+pub struct FeagiComponents {
+    pub npu: Arc<Mutex<DynamicNPU>>,
+    pub connectome_manager: Arc<RwLock<ConnectomeManager>>,
+    pub runtime_service: Arc<RuntimeServiceImpl>,
+    pub burst_runner: Arc<RwLock<BurstLoopRunner>>,
+    pub pns: Arc<PNS>,
+}
+
+/// Initialize all core FEAGI components
+/// 
+/// This function is adapted from main.rs initialization logic.
+pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> {
+    info!("  Initializing NPU...");
+    
+    // Create GPU config
+    let gpu_config = GpuConfig {
+        use_gpu: config.resources.use_gpu,
+        hybrid_enabled: config.neural.hybrid.enabled,
+        gpu_threshold: config.neural.hybrid.gpu_threshold,
+        gpu_memory_fraction: config.resources.gpu_memory_fraction,
+    };
+    
+    // Default to INT8 quantization for embedded mode (memory efficient)
+    let npu = Arc::new(Mutex::new(DynamicNPU::INT8(RustNPU::new(
+        config.connectome.min_neuron_space,
+        config.connectome.min_synapse_space,
+        10, // fire_ledger_window
+        Some(&gpu_config),
+    ))));
+    
+    info!("    ✓ NPU initialized with INT8 quantization");
+
+    // Initialize ConnectomeManager
+    info!("  Initializing ConnectomeManager...");
+    let manager = ConnectomeManager::instance();
+    manager.write().set_npu(Arc::clone(&npu));
+    info!("    ✓ ConnectomeManager initialized");
+
+    // Initialize PNS
+    info!("  Creating PNS (Agent Management)...");
+    
+    use feagi_pns::PNSConfig;
+    
+    let mut pns_config = PNSConfig::default();
+    pns_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
+    pns_config.zmq_motor_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_motor_port);
+    pns_config.zmq_viz_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_visualization_port);
+    pns_config.zmq_sensory_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_sensory_port);
+    
+    // Load WebSocket configuration
+    pns_config.websocket.enabled = config.websocket.enabled;
+    pns_config.websocket.host = config.websocket.host.clone();
+    pns_config.websocket.sensory_port = config.websocket.sensory_port;
+    pns_config.websocket.motor_port = config.websocket.motor_port;
+    pns_config.websocket.visualization_port = config.websocket.visualization_port;
+    pns_config.websocket.registration_port = config.websocket.registration_port;
+    pns_config.websocket.rest_api_port = config.websocket.rest_api_port;
+    pns_config.websocket.connection_timeout_ms = config.websocket.connection_timeout_ms;
+    pns_config.websocket.ping_interval_ms = config.websocket.ping_interval_ms;
+    pns_config.websocket.ping_timeout_ms = config.websocket.ping_timeout_ms;
+    pns_config.websocket.close_timeout_ms = config.websocket.close_timeout_ms;
+    pns_config.websocket.max_message_size = config.websocket.max_message_size;
+    pns_config.websocket.max_connections = config.websocket.max_connections;
+    
+    let pns = Arc::new(PNS::with_config(pns_config)
+        .context("Failed to create PNS")?);
+    
+    // Wire dynamic gating callbacks
+    PNS::wire_dynamic_gating_callbacks(&pns);
+    
+    info!("    ✓ PNS created");
+    
+    // Initialize BurstLoopRunner
+    info!("  Initializing BurstLoopRunner...");
+    let burst_timestep = config.neural.burst_engine_timestep;
+    
+    // Create PNS-backed visualization publisher
+    struct PnsVisualizationPublisher {
+        pns: Arc<PNS>,
+    }
+    
+    impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
+        fn publish_raw_fire_queue(&self, fire_data: feagi_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
+            self.pns.publish_raw_fire_queue(fire_data)
+                .map_err(|e| format!("PNS viz publish failed: {}", e))
+        }
+    }
+    
+    // Create PNS-backed motor publisher
+    struct PnsMotorPublisher {
+        pns: Arc<PNS>,
+    }
+    
+    impl feagi_burst_engine::MotorPublisher for PnsMotorPublisher {
+        fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
+            self.pns.publish_motor(agent_id, data)
+                .map_err(|e| format!("PNS motor publish failed: {}", e))
+        }
+    }
+    
+    let viz_publisher = Arc::new(Mutex::new(PnsVisualizationPublisher {
+        pns: Arc::clone(&pns),
+    }));
+    
+    let motor_publisher = Arc::new(Mutex::new(PnsMotorPublisher {
+        pns: Arc::clone(&pns),
+    }));
+    
+    let burst_hz = 1.0 / burst_timestep;
+    
+    let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
+        Arc::clone(&npu),
+        Some(viz_publisher),
+        Some(motor_publisher),
+        burst_hz,
+    )));
+    info!("    ✓ BurstLoopRunner initialized ({:.0}Hz)", burst_hz);
+
+    // Create runtime service
+    let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
+    info!("    ✓ Runtime service created");
+
+    // Wire up bidirectional connections
+    info!("  Wiring PNS ↔ BurstLoopRunner connections...");
+    
+    let sensory_mgr = burst_runner.read().sensory_manager.clone();
+    pns.set_sensory_agent_manager(sensory_mgr);
+    pns.set_burst_runner(Arc::clone(&burst_runner));
+    pns.set_npu_for_gating(Arc::clone(&npu));
+    
+    info!("    ✓ PNS ↔ BurstLoopRunner connections established");
+
+    Ok(FeagiComponents {
+        npu,
+        connectome_manager: manager,
+        runtime_service,
+        burst_runner,
+        pns,
+    })
+}
+
+/// Start HTTP API server
+/// 
+/// Spawns Axum server on Tokio runtime (non-blocking).
+pub async fn start_http_server(
+    components: &FeagiComponents,
+    config: &FeagiConfig,
+) -> Result<()> {
+    info!("  Creating service layer...");
+    
+    // Get parameter queue from burst runner
+    let parameter_queue = components.burst_runner.read().parameter_queue.clone();
+    
+    let genome_service = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
+        Arc::clone(&components.connectome_manager),
+        parameter_queue,
+    ));
+    let connectome_service = Arc::new(ConnectomeServiceImpl::new(
+        Arc::clone(&components.connectome_manager)
+    ));
+    let analytics_service = Arc::new(AnalyticsServiceImpl::new(
+        Arc::clone(&components.connectome_manager),
+        Some(Arc::clone(&components.burst_runner)),
+    ));
+    let neuron_service = Arc::new(NeuronServiceImpl::new(
+        Arc::clone(&components.connectome_manager)
+    ));
+    
+    let agent_registry = components.pns.get_agent_registry();
+    let registration_handler = components.pns.get_registration_handler();
+    
+    let mut agent_service_impl = AgentServiceImpl::new(
+        Arc::clone(&components.connectome_manager),
+        agent_registry,
+    );
+    
+    agent_service_impl.set_registration_handler(registration_handler);
+    let agent_service = Arc::new(agent_service_impl);
+    info!("    ✓ Services created");
+
+    // Create snapshot service
+    let snapshot_dir = std::path::PathBuf::from("./snapshots");
+    let snapshot_service = Arc::new(feagi_services::SnapshotServiceImpl::new(snapshot_dir));
+    
+    let api_state = ApiState {
+        agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
+        genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
+        connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
+        analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
+        runtime_service: components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
+        neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
+        snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
+    };
+
+    // Start HTTP API server
+    let api_port = config.api.port;
+    let api_host = config.api.host.clone();
+    
+    info!("  Starting HTTP API server on {}:{}...", api_host, api_port);
+    let app = create_http_server(api_state);
+    let addr = format!("{}:{}", api_host, api_port);
+    
+    // Spawn server in background
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .expect("Failed to bind API server");
+        
+        info!("    ✓ HTTP API server listening on {}", addr);
+        info!("    📡 Swagger UI available at http://{}/swagger-ui/", addr);
+        
+        axum::serve(listener, app)
+            .await
+            .expect("HTTP server error");
+    });
+    
+    Ok(())
+}
+
+/// Load genome and notify PNS for dynamic gating
+pub async fn load_genome_with_pns(
+    manager: &Arc<RwLock<ConnectomeManager>>,
+    pns: &Arc<PNS>,
+    genome_path: &std::path::Path,
+) -> Result<()> {
+    use feagi_evo::{load_genome_from_file, validate_genome};
+    
+    info!("    [GENOME-LOAD] Step 1: Loading genome file...");
+    
+    // Load genome from file
+    let genome = load_genome_from_file(genome_path)
+        .context("Failed to load genome file")?;
+    
+    // Validate genome
+    let validation = validate_genome(&genome);
+    if !validation.errors.is_empty() {
+        warn!("Genome validation errors:");
+        for error in &validation.errors {
+            warn!("  - {}", error);
+        }
+        return Err(anyhow::anyhow!("Genome validation failed"));
+    }
+    
+    if !validation.warnings.is_empty() {
+        warn!("Genome validation warnings:");
+        for warning in &validation.warnings {
+            warn!("  - {}", warning);
+        }
+    }
+    
+    let simulation_timestep = genome.physiology.simulation_timestep;
+    info!("    [GENOME-LOAD] Genome specifies simulation_timestep: {}s ({:.0}Hz)", 
+          simulation_timestep, 1.0 / simulation_timestep);
+    
+    info!("    [GENOME-LOAD] Step 2: Performing neuroembryogenesis...");
+    
+    // Load genome into connectome (includes neuroembryogenesis)
+    let result = {
+        // Acquire write lock only for prepare/resize operations
+        let mut mgr = manager.write();
+        mgr.prepare_for_new_genome()
+            .context("Failed to prepare for new genome")?;
+        
+        // Resize if needed
+        mgr.resize_for_genome(&genome)
+            .context("Failed to resize for genome")?;
+        
+        // Release write lock before long-running neuroembryogenesis
+        drop(mgr);
+        
+        // Now develop genome (will acquire its own fine-grained locks)
+        use feagi_bdu::neuroembryogenesis::Neuroembryogenesis;
+        let mut neuro = Neuroembryogenesis::new(manager.clone());
+        neuro.develop_from_genome(&genome)
+            .context("Failed to develop brain from genome")?;
+        
+        neuro.get_progress()
+    };
+    
+    info!("    [GENOME-LOAD] Neuroembryogenesis complete: {} neurons, {} synapses", 
+          result.neurons_created, result.synapses_created);
+    
+    info!("    [GENOME-LOAD] Step 3: Notifying PNS (triggers dynamic stream evaluation)...");
+    pns.on_genome_loaded();
+    info!("    [GENOME-LOAD] Step 4: PNS notified, dynamic evaluation complete");
+    
+    Ok(())
+}
+

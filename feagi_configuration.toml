@@ -116,6 +116,27 @@ socket_send_timeout = 5000     # Socket send timeout
 client_heartbeat_timeout = 30000  # Client heartbeat timeout
 inactive_client_timeout = 60000   # Consider clients inactive after this
 
+[websocket]
+# WebSocket transport settings (NEW in FEAGI 2.0)
+# Can coexist with ZMQ - agents choose which transport to use
+host = "0.0.0.0"           # Default for cross-platform compatibility, override with FEAGI_WS_HOST
+enabled = true             # Enable/disable WebSocket transport
+
+# WebSocket ports (all configurable, NO hardcoding)
+registration_port = 9053    # Agent registration/heartbeat (bidirectional control)
+sensory_port = 9051         # Sensory data input from agents
+motor_port = 9052           # Motor data output to agents
+visualization_port = 9050   # Neural activity visualization output
+rest_api_port = 9054        # REST API over WebSocket (optional)
+
+# Timeout configurations (all in milliseconds)
+connection_timeout = 5000   # WebSocket connection timeout
+ping_interval = 60000       # WebSocket ping interval (keep-alive)
+ping_timeout = 60000        # WebSocket ping timeout
+close_timeout = 10000       # WebSocket close timeout
+max_message_size = 10485760 # Maximum message size (10MB)
+max_connections = 100       # Maximum concurrent WebSocket connections
+
 # Stream-specific enable/disable configuration
 [zmq.streams]
 # Enable/disable individual ZMQ streams
@@ -138,6 +159,25 @@ enabled = true                    # Enable motor stream
 
 [zmq.streams.rest]
 enabled = true                    # Enable REST API stream (primary API interface)
+
+# WebSocket stream-specific configuration
+[websocket.streams]
+# Enable/disable individual WebSocket streams
+
+[websocket.streams.visualization]
+enabled = true                    # Enable visualization stream over WebSocket
+subscriber_check_interval = 1.0   # Seconds between subscriber checks
+
+[websocket.streams.sensory]
+enabled = true                    # Enable sensory stream over WebSocket
+receive_buffer_size = 100         # Number of messages to buffer
+
+[websocket.streams.motor]
+enabled = true                    # Enable motor stream over WebSocket
+broadcast_buffer_size = 100       # Number of messages to buffer for broadcast
+
+[websocket.streams.rest]
+enabled = true                    # Enable REST API stream over WebSocket
 
 [timeouts]
 # System-wide timeout configurations (all in seconds unless specified)
@@ -263,17 +303,25 @@ enabled = true
 update_interval = 50  # milliseconds between updates
 
 [compression]
-# Data compression settings for ZMQ streams
+# Data compression settings for all transport streams (ZMQ, WebSocket)
 # LZ4 compression significantly reduces bandwidth usage for visualization and motor data
 enabled = true              # Enable/disable LZ4 compression (default: true)
 min_size_threshold = 100    # Minimum payload size to attempt compression (bytes)
 enable_stats = true         # Collect compression performance statistics
 algorithm = "lz4"           # Compression algorithm (currently only LZ4 supported)
 
-# Performance tuning
+# Performance tuning (applies to both ZMQ and WebSocket)
 compress_visualization = true  # Enable compression for visualization streams (high bandwidth)
 compress_motor = true         # Enable compression for motor output streams
 compress_sensory = false      # Disable compression for sensory input (typically small/real-time)
+
+[transports]
+# Transport availability configuration
+# Determines which transports are advertised to agents during registration
+# Agents can choose which transport to use based on their requirements
+available = ["zmq", "websocket"]  # List of available transports
+default = "zmq"                    # Default transport recommended to agents
+allow_mixed = true                 # Allow agents to use different transports simultaneously
 
 # Cloud deployment example:
 # This file can be mounted as a ConfigMap in Kubernetes:

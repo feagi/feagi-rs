@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_bdu::ConnectomeManager;
-use feagi_burst_engine::{RustNPU, BurstLoopRunner};
+use feagi_burst_engine::BurstLoopRunner;
 use feagi_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
@@ -140,17 +140,34 @@ async fn main() -> Result<()> {
 /// Core FEAGI components
 struct FeagiComponents {
     #[allow(dead_code)]  // In development - will be exposed via additional services
-    npu: Arc<Mutex<RustNPU<f32>>>,
-    connectome_manager: Arc<RwLock<ConnectomeManager<f32>>>,
+    npu: Arc<Mutex<feagi_burst_engine::DynamicNPU>>,
+    connectome_manager: Arc<RwLock<ConnectomeManager>>,
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
     pns: Arc<PNS>,
 }
 
 /// Initialize all core FEAGI components
-async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<FeagiComponents> {
-    // Initialize NPU with GPU configuration
-    info!("  Initializing NPU...");
+async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
+    // Peek at genome to determine quantization precision (if genome provided)
+    let precision = if let Some(genome_path) = &args.genome {
+        match feagi_evo::peek_quantization_precision(genome_path) {
+            Ok(p) => {
+                info!("  Genome specifies quantization precision: {}", p);
+                p
+            },
+            Err(e) => {
+                warn!("  Failed to peek genome precision ({}), defaulting to int8", e);
+                "int8".to_string()
+            }
+        }
+    } else {
+        info!("  No genome provided at startup, defaulting to int8 quantization");
+        "int8".to_string()
+    };
+    
+    // Initialize NPU with appropriate precision
+    info!("  Initializing NPU with {} quantization...", precision.to_uppercase());
     
     // Create GPU config from TOML settings
     let gpu_config = GpuConfig {
@@ -160,19 +177,45 @@ async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<Fea
         gpu_memory_fraction: config.resources.gpu_memory_fraction,
     };
     
-    let npu = Arc::new(Mutex::new(RustNPU::new(
-        config.connectome.min_neuron_space,
-        config.connectome.min_synapse_space,
-        10, // fire_ledger_window
-        Some(&gpu_config),
-    )));
-    info!("    ✓ NPU initialized (capacity: {} neurons, {} synapses)",
+    // Create NPU based on quantization precision
+    let npu = Arc::new(Mutex::new(match precision.as_str() {
+        "fp32" | "f32" => {
+            info!("    Creating FP32 NPU (32-bit floating point, highest precision)");
+            feagi_burst_engine::DynamicNPU::F32(feagi_burst_engine::RustNPU::new(
+                config.connectome.min_neuron_space,
+                config.connectome.min_synapse_space,
+                10, // fire_ledger_window
+                Some(&gpu_config),
+            ))
+        },
+        "int8" => {
+            info!("    Creating INT8 NPU (8-bit integer, 42% memory reduction)");
+            feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+                config.connectome.min_neuron_space,
+                config.connectome.min_synapse_space,
+                10, // fire_ledger_window
+                Some(&gpu_config),
+            ))
+        },
+        _ => {
+            warn!("    Unknown precision '{}', defaulting to INT8", precision);
+            feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+                config.connectome.min_neuron_space,
+                config.connectome.min_synapse_space,
+                10, // fire_ledger_window
+                Some(&gpu_config),
+            ))
+        }
+    }));
+    
+    info!("    ✓ NPU initialized with {} precision (capacity: {} neurons, {} synapses)",
+          npu.lock().unwrap().precision_name(),
           config.connectome.min_neuron_space,
           config.connectome.min_synapse_space);
 
     // Initialize ConnectomeManager
     info!("  Initializing ConnectomeManager...");
-    let manager = ConnectomeManager::<f32>::instance();  // Already returns Arc<RwLock<>>
+    let manager = ConnectomeManager::instance();  // Already returns Arc<RwLock<>>
     manager.write().set_npu(Arc::clone(&npu));
     info!("    ✓ ConnectomeManager initialized and connected to NPU");
 
@@ -193,8 +236,34 @@ async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<Fea
     pns_config.zmq_viz_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_visualization_port);
     pns_config.zmq_sensory_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_sensory_port);
     
+    // Load WebSocket configuration from TOML
+    pns_config.websocket.enabled = config.websocket.enabled;
+    pns_config.websocket.host = config.websocket.host.clone();
+    pns_config.websocket.sensory_port = config.websocket.sensory_port;
+    pns_config.websocket.motor_port = config.websocket.motor_port;
+    pns_config.websocket.visualization_port = config.websocket.visualization_port;
+    pns_config.websocket.registration_port = config.websocket.registration_port;
+    pns_config.websocket.rest_api_port = config.websocket.rest_api_port;
+    pns_config.websocket.connection_timeout_ms = config.websocket.connection_timeout_ms;
+    pns_config.websocket.ping_interval_ms = config.websocket.ping_interval_ms;
+    pns_config.websocket.ping_timeout_ms = config.websocket.ping_timeout_ms;
+    pns_config.websocket.close_timeout_ms = config.websocket.close_timeout_ms;
+    pns_config.websocket.max_message_size = config.websocket.max_message_size;
+    pns_config.websocket.max_connections = config.websocket.max_connections;
+    info!("    ✓ WebSocket config loaded: enabled={}, ports={}/{}/{}/{}", 
+        pns_config.websocket.enabled,
+        pns_config.websocket.sensory_port,
+        pns_config.websocket.motor_port,
+        pns_config.websocket.visualization_port,
+        pns_config.websocket.registration_port
+    );
+    
     let pns = Arc::new(PNS::with_config(pns_config)
         .context("Failed to create PNS")?);
+    
+    // Wire dynamic gating callbacks (must be done after Arc wrapping)
+    PNS::wire_dynamic_gating_callbacks(&pns);
+    
     info!("    ✓ PNS created");
     
     // Initialize BurstLoopRunner with PNS-backed publishers
@@ -278,7 +347,7 @@ async fn initialize_components(config: &FeagiConfig, _args: &Args) -> Result<Fea
 
 /// Load and develop a genome
 async fn load_genome(
-    manager: &Arc<RwLock<ConnectomeManager<f32>>>,
+    manager: &Arc<RwLock<ConnectomeManager>>,
     genome_path: &PathBuf,
 ) -> Result<()> {
     use feagi_evo::{load_genome_from_file, validate_genome};
@@ -338,7 +407,7 @@ async fn load_genome(
 /// Load genome and notify PNS for dynamic gating
 /// Returns the genome's simulation_timestep (in seconds) if available
 async fn load_genome_with_pns(
-    manager: &Arc<RwLock<ConnectomeManager<f32>>>,
+    manager: &Arc<RwLock<ConnectomeManager>>,
     pns: &Arc<PNS>,
     genome_path: &PathBuf,
 ) -> Result<Option<f64>> {
@@ -421,11 +490,18 @@ async fn start_services(
     
     // Get agent registry from PNS for agent service
     let agent_registry = components.pns.get_agent_registry();
-    let agent_service = Arc::new(AgentServiceImpl::new(
+    let registration_handler = components.pns.get_registration_handler();
+    
+    let mut agent_service_impl = AgentServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         agent_registry,
-    ));
-    info!("    ✓ Services created");
+    );
+    
+    // Wire registration handler for full transport negotiation
+    agent_service_impl.set_registration_handler(registration_handler);
+    
+    let agent_service = Arc::new(agent_service_impl);
+    info!("    ✓ Services created (agent service with transport negotiation)");
 
     // Create API state (runtime_service already created in components)
     // Create snapshot service

@@ -10,9 +10,15 @@ readme = "README.md"
 keywords = ["neuroscience", "ai", "neural-network", "brain", "agi"]
 categories = ["science", "simulation"]
 
+# FEAGI can be used as both a library (for embedding) and a binary (standalone server)
+[lib]
+name = "feagi"
+path = "src/lib.rs"
+
 [[bin]]
 name = "feagi"
 path = "src/main.rs"
+required-features = ["cli"]
 
 [dependencies]
 # FEAGI Core Components (from feagi-core workspace)
@@ -24,7 +30,7 @@ feagi-bdu = { path = "../feagi-core/crates/feagi-bdu" }
 feagi-evo = { path = "../feagi-core/crates/feagi-evo" }
 feagi-services = { path = "../feagi-core/crates/feagi-services" }
 feagi-api = { path = "../feagi-core/crates/feagi-api" }
-feagi-pns = { path = "../feagi-core/crates/feagi-pns" }
+feagi-pns = { path = "../feagi-core/crates/feagi-pns", features = ["websocket-transport"] }
 feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
 feagi-plasticity = { path = "../feagi-core/crates/feagi-plasticity" }
 feagi-connectome-serialization = { path = "../feagi-core/crates/feagi-connectome-serialization" }
@@ -33,8 +39,8 @@ feagi-connectome-serialization = { path = "../feagi-core/crates/feagi-connectome
 tokio = { version = "1.40", features = ["full"] }
 axum = "0.7"
 
-# CLI
-clap = { version = "4.5", features = ["derive"] }
+# CLI (optional - only for standalone binary)
+clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
 feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
@@ -106,5 +112,8 @@ name = "profile_storage"
 path = "tests/profile_storage.rs"
 
 [features]
-default = ["gpu"]
+default = ["gpu", "cli"]
 gpu = ["feagi-burst-engine/gpu"]
+cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
+embedded = []                    # For library usage (no CLI)
+no-network = ["embedded"]        # Embedded + disable network servers (future use)
