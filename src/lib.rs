@@ -35,9 +35,8 @@
 
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
-use parking_lot::RwLock;
 use anyhow::{Context, Result};
-use tracing::{info, warn, error};
+use tracing::{info, error};
 
 // Re-export public types
 pub use feagi_config::{FeagiConfig, load_config};
@@ -135,7 +134,7 @@ impl FeagiInstance {
         
         let config = self.config.clone();
         let components_arc = self.components.clone();
-        let viz_callback = self.viz_callback.clone();
+        let _viz_callback = self.viz_callback.clone();
         
         self.runtime.block_on(async move {
             let components = components::initialize_components(&config).await
@@ -192,7 +191,7 @@ impl FeagiInstance {
         let components = components.as_ref()
             .ok_or_else(|| anyhow::anyhow!("FEAGI not initialized. Call initialize() first."))?;
         
-        components.burst_runner.write().start();
+        let _ = components.burst_runner.write().start();
         info!("▶️ Burst engine started");
         
         Ok(())
