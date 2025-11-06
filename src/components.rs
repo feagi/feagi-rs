@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use parking_lot::RwLock;
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 
 use feagi_config::FeagiConfig;
 use feagi_bdu::ConnectomeManager;
@@ -223,19 +223,35 @@ pub async fn start_http_server(
     let app = create_http_server(api_state);
     let addr = format!("{}:{}", api_host, api_port);
     
-    // Spawn server in background
+    info!("  Spawning HTTP server task...");
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .expect("Failed to bind API server");
+        info!("  📡 HTTP server task started - binding to {}...", addr);
         
-        info!("    ✓ HTTP API server listening on {}", addr);
-        info!("    📡 Swagger UI available at http://{}/swagger-ui/", addr);
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => {
+                info!("  ✅ HTTP listener bound successfully to {}", addr);
+                l
+            },
+            Err(e) => {
+                error!("  ❌ Failed to bind HTTP listener to {}: {}", addr, e);
+                panic!("Failed to bind API server: {}", e);
+            }
+        };
         
-        axum::serve(listener, app)
-            .await
-            .expect("HTTP server error");
+        info!("  📡 Swagger UI available at http://{}/swagger-ui/", addr);
+        info!("  🌐 HTTP server accepting connections on {}...", addr);
+        
+        match axum::serve(listener, app).await {
+            Ok(_) => info!("  ✅ HTTP server serve() completed gracefully"),
+            Err(e) => error!("  ❌ HTTP server serve() error: {}", e),
+        }
+        
+        error!("  ⚠️ HTTP server task ending (should never happen!)");
     });
+    
+    // CRITICAL: Give the spawned server task time to bind
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    info!("  ✅ HTTP server task spawned successfully");
     
     Ok(())
 }

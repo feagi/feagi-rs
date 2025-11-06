@@ -290,8 +290,10 @@ enable_health_check = true     # monitor process health
 
 [logging]
 # Logging configuration
-global_log_level = "WARNING"
-print_debug_logs = false
+# global_log_level: Base log level (TRACE, DEBUG, INFO, WARNING, ERROR)
+# print_debug_logs: Override to enable debug logging for all FEAGI crates
+global_log_level = "DEBUG"  # Changed from WARNING to DEBUG for embedded testing
+print_debug_logs = true     # Changed from false to true - enables verbose API logging
 print_burst_info = true
 log_file = "feagi.log"
 max_log_size = "10MB"

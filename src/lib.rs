@@ -72,9 +72,10 @@ pub type VisualizationCallback = Box<dyn Fn(&RawFireQueueSnapshot) + Send + Sync
 pub struct FeagiInstance {
     components: Arc<Mutex<Option<FeagiComponents>>>,
     config: FeagiConfig,
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<tokio::runtime::Runtime>,
     viz_callback: Arc<Mutex<Option<VisualizationCallback>>>,
     http_server_url: String,
+    _runtime_keeper: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FeagiInstance {
@@ -92,6 +93,9 @@ impl FeagiInstance {
     /// 
     /// Returns error if Tokio runtime cannot be created
     pub fn new(config: FeagiConfig) -> Result<Self> {
+        // NOTE: Logging should be initialized by the host application (GDExtension)
+        // before calling FeagiInstance::new() to ensure logs are captured
+        
         // Create dedicated tokio runtime for FEAGI
         // This ensures FEAGI doesn't interfere with host application's threading
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -106,13 +110,84 @@ impl FeagiInstance {
         info!("🦀 FEAGI Instance created (embedded mode)");
         info!("   HTTP API will be available at: {}", http_server_url);
         
+        let runtime_arc = Arc::new(runtime);
+        
         Ok(Self {
             components: Arc::new(Mutex::new(None)),
             config,
-            runtime,
+            runtime: runtime_arc,
             viz_callback: Arc::new(Mutex::new(None)),
             http_server_url,
+            _runtime_keeper: None,
         })
+    }
+    
+    /// Initialize logging for embedded mode using TOML configuration
+    /// 
+    /// Respects `feagi_configuration.toml` settings:
+    /// - `logging.global_log_level` (WARNING, INFO, DEBUG, TRACE)
+    /// - `logging.print_debug_logs` (true/false)
+    /// 
+    /// No file logging in embedded mode (stdout only, captured by host application)
+    /// 
+    /// NOTE: Currently unused - logging is initialized by GDExtension before FeagiInstance::new()
+    #[allow(dead_code)]
+    fn init_embedded_logging(logging_config: &feagi_config::LoggingConfig) {
+        use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+        
+        // Determine log level from config
+        let base_level = if logging_config.print_debug_logs {
+            "debug".to_string()
+        } else {
+            logging_config.global_log_level.to_lowercase()
+        };
+        
+        // Build filter with per-crate levels
+        // For embedded mode, we enable enhanced logging for API/HTTP to debug issues
+        let filter_str = if base_level == "debug" || base_level == "trace" {
+            // Debug/trace mode: verbose logging for all FEAGI crates
+            format!(
+                "{}=info,\
+                 feagi={},\
+                 feagi_api=trace,\
+                 feagi_services=debug,\
+                 feagi_pns=debug,\
+                 feagi_burst_engine=debug,\
+                 feagi_bdu=debug,\
+                 feagi_evo=debug,\
+                 axum=debug,\
+                 tower_http=debug,\
+                 hyper=debug",
+                base_level, base_level
+            )
+        } else {
+            // Production mode: respect global level, but still show API errors
+            format!(
+                "{}=info,\
+                 feagi={},\
+                 feagi_api={},\
+                 feagi_services={},\
+                 feagi_pns={},\
+                 axum=warn,\
+                 tower_http=warn",
+                base_level, base_level, base_level, base_level, base_level
+            )
+        };
+        
+        let filter = EnvFilter::new(filter_str);
+        
+        // Initialize with stdout output (no file logging in embedded mode)
+        // Host application (Godot) captures stdout and redirects to its console
+        let _ = tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_line_number(false)) // Reduce noise in embedded mode
+            .try_init();
+        
+        info!("📝 Embedded logging initialized: level={}, debug_logs={}", 
+              logging_config.global_log_level, logging_config.print_debug_logs);
     }
     
     /// Initialize FEAGI components
@@ -131,31 +206,91 @@ impl FeagiInstance {
     /// Returns error if any component fails to initialize
     pub fn initialize(&mut self) -> Result<()> {
         info!("🚀 Initializing FEAGI components...");
+        println!("🚀 Initializing FEAGI components..."); // Duplicate to stdout
+        info!("📋 Step 1/3: Preparing runtime keeper thread...");
+        println!("📋 Step 1/3: Preparing runtime keeper thread..."); // Duplicate to stdout
         
         let config = self.config.clone();
         let components_arc = self.components.clone();
-        let _viz_callback = self.viz_callback.clone();
+        let runtime_arc = self.runtime.clone();
         
-        self.runtime.block_on(async move {
-            let components = components::initialize_components(&config).await
-                .context("Failed to initialize FEAGI components")?;
-            
-            // TODO: Wire visualization callback when PNS supports it
-            // For now, PNS will use existing ZMQ/WebSocket publishing
-            
-            // Start HTTP API server
-            components::start_http_server(&components, &config).await
-                .context("Failed to start HTTP API server")?;
-            
-            // Start PNS control streams (agent registration)
-            components.pns.start_control_streams()
-                .context("Failed to start PNS control streams")?;
-            
-            *components_arc.lock().unwrap() = Some(components);
-            
-            info!("✅ FEAGI initialization complete");
-            Ok(())
-        })
+        // CRITICAL: Enter runtime on dedicated thread that NEVER returns
+        let keeper_thread = std::thread::Builder::new()
+            .name("feagi-runtime-keeper".to_string())
+            .spawn(move || {
+                info!("🧵 Keeper thread spawned (thread ID: {:?})", std::thread::current().id());
+                info!("🔄 Entering runtime.block_on()...");
+                
+                // Wrap block_on in a panic handler to catch any issues
+                let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    runtime_arc.block_on(async move {
+                        info!("✅ Inside async initialization block");
+                        info!("📦 Step 1/3: Initializing core components...");
+                        
+                        let components = match components::initialize_components(&config).await {
+                            Ok(c) => {
+                                info!("✅ Core components initialized successfully");
+                                c
+                            },
+                            Err(e) => {
+                                error!("❌ Component initialization failed: {}", e);
+                                return;
+                            }
+                        };
+                        
+                        info!("📦 Step 2/3: Starting HTTP API server...");
+                        if let Err(e) = components::start_http_server(&components, &config).await {
+                            error!("❌ HTTP server startup failed: {}", e);
+                            return;
+                        }
+                        info!("✅ HTTP server started successfully");
+                        
+                        info!("📦 Step 3/3: Starting control streams (ZMQ/WebSocket)...");
+                        if let Err(e) = components.pns.start_control_streams() {
+                            error!("❌ PNS control streams failed: {}", e);
+                            return;
+                        }
+                        info!("✅ Control streams started successfully");
+                        
+                        info!("💾 Storing components in shared state...");
+                        *components_arc.lock().unwrap() = Some(components);
+                        
+                        info!("✅ FEAGI initialization complete - entering keepalive loop");
+                        
+                        // Keep runtime alive forever
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                        }
+                    });
+                }));
+                
+                if let Err(panic_info) = panic_result {
+                    error!("⚠️ PANIC in keeper thread: {:?}", panic_info);
+                }
+                
+                error!("⚠️ Keeper thread block_on() returned (should never happen!)");
+            })
+            .context("Failed to spawn runtime keeper thread")?;
+        
+        info!("✅ Keeper thread spawned successfully");
+        self._runtime_keeper = Some(keeper_thread);
+        
+        info!("⏳ Waiting for components to be populated (max 5 seconds)...");
+        
+        // Wait for init to complete
+        for i in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if self.components.lock().unwrap().is_some() {
+                info!("✅ Components populated after {}ms", i * 100);
+                return Ok(());
+            }
+            if i % 10 == 0 {
+                info!("⏳ Still waiting for initialization... ({}ms elapsed)", i * 100);
+            }
+        }
+        
+        error!("❌ TIMEOUT: Components not populated after 5 seconds");
+        Err(anyhow::anyhow!("Initialization timeout - keeper thread may have panicked"))
     }
     
     /// Register a visualization callback
