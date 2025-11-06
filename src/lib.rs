@@ -204,93 +204,32 @@ impl FeagiInstance {
     /// # Errors
     /// 
     /// Returns error if any component fails to initialize
+    /// Initialize FEAGI components
+    /// 
+    /// **IMPORTANT:** This method is currently **not supported** for in-process embedding
+    /// (e.g., GDExtension, Unity plugins, etc.) due to threading model incompatibilities.
+    /// 
+    /// For embedded use cases, run FEAGI as a subprocess and connect via:
+    /// - HTTP API (port 8000) for control commands
+    /// - WebSocket (port 9050) for real-time data streams
+    /// - Shared Memory (SHM) for high-performance visualization
+    /// 
+    /// See `docs/EMBEDDING_GUIDE.md` for details.
+    /// 
+    /// # Errors
+    /// 
+    /// Currently returns an error indicating in-process embedding is not supported.
     pub fn initialize(&mut self) -> Result<()> {
-        info!("🚀 Initializing FEAGI components...");
-        println!("🚀 Initializing FEAGI components..."); // Duplicate to stdout
-        info!("📋 Step 1/3: Preparing runtime keeper thread...");
-        println!("📋 Step 1/3: Preparing runtime keeper thread..."); // Duplicate to stdout
+        error!("❌ In-process FEAGI initialization is not supported");
+        error!("   Reason: GDExtension/FFI threading model incompatibility");
+        error!("   Solution: Run FEAGI as a subprocess and connect via HTTP/WebSocket/SHM");
+        error!("   See: docs/EMBEDDING_GUIDE.md");
         
-        let config = self.config.clone();
-        let components_arc = self.components.clone();
-        let runtime_arc = self.runtime.clone();
-        
-        // CRITICAL: Enter runtime on dedicated thread that NEVER returns
-        let keeper_thread = std::thread::Builder::new()
-            .name("feagi-runtime-keeper".to_string())
-            .spawn(move || {
-                info!("🧵 Keeper thread spawned (thread ID: {:?})", std::thread::current().id());
-                info!("🔄 Entering runtime.block_on()...");
-                
-                // Wrap block_on in a panic handler to catch any issues
-                let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    runtime_arc.block_on(async move {
-                        info!("✅ Inside async initialization block");
-                        info!("📦 Step 1/3: Initializing core components...");
-                        
-                        let components = match components::initialize_components(&config).await {
-                            Ok(c) => {
-                                info!("✅ Core components initialized successfully");
-                                c
-                            },
-                            Err(e) => {
-                                error!("❌ Component initialization failed: {}", e);
-                                return;
-                            }
-                        };
-                        
-                        info!("📦 Step 2/3: Starting HTTP API server...");
-                        if let Err(e) = components::start_http_server(&components, &config).await {
-                            error!("❌ HTTP server startup failed: {}", e);
-                            return;
-                        }
-                        info!("✅ HTTP server started successfully");
-                        
-                        info!("📦 Step 3/3: Starting control streams (ZMQ/WebSocket)...");
-                        if let Err(e) = components.pns.start_control_streams() {
-                            error!("❌ PNS control streams failed: {}", e);
-                            return;
-                        }
-                        info!("✅ Control streams started successfully");
-                        
-                        info!("💾 Storing components in shared state...");
-                        *components_arc.lock().unwrap() = Some(components);
-                        
-                        info!("✅ FEAGI initialization complete - entering keepalive loop");
-                        
-                        // Keep runtime alive forever
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-                        }
-                    });
-                }));
-                
-                if let Err(panic_info) = panic_result {
-                    error!("⚠️ PANIC in keeper thread: {:?}", panic_info);
-                }
-                
-                error!("⚠️ Keeper thread block_on() returned (should never happen!)");
-            })
-            .context("Failed to spawn runtime keeper thread")?;
-        
-        info!("✅ Keeper thread spawned successfully");
-        self._runtime_keeper = Some(keeper_thread);
-        
-        info!("⏳ Waiting for components to be populated (max 5 seconds)...");
-        
-        // Wait for init to complete
-        for i in 0..50 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if self.components.lock().unwrap().is_some() {
-                info!("✅ Components populated after {}ms", i * 100);
-                return Ok(());
-            }
-            if i % 10 == 0 {
-                info!("⏳ Still waiting for initialization... ({}ms elapsed)", i * 100);
-            }
-        }
-        
-        error!("❌ TIMEOUT: Components not populated after 5 seconds");
-        Err(anyhow::anyhow!("Initialization timeout - keeper thread may have panicked"))
+        Err(anyhow::anyhow!(
+            "In-process FEAGI initialization is not supported. \
+             Run FEAGI as a subprocess and connect via HTTP (port 8000), \
+             WebSocket (port 9050), or Shared Memory for high performance."
+        ))
     }
     
     /// Register a visualization callback
