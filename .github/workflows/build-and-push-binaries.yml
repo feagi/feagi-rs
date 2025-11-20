@@ -85,29 +85,23 @@ jobs:
           path: feagi-core
           fetch-depth: 0
       
-      - name: Create symlink for path dependencies
+      - name: Update Cargo.toml paths for CI
         shell: bash
         run: |
-          # Create symlink so ../feagi-core paths in Cargo.toml resolve correctly
-          # The workspace is at /home/runner/work/feagi-rust/feagi-rust (Linux/Mac)
-          # or D:\a\feagi-rust\feagi-rust (Windows)
-          # We need ../feagi-core to point to feagi-rust/feagi-core
-          cd ..
+          # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
+          # This works cross-platform without requiring symlinks
+          echo "📝 Updating Cargo.toml paths..."
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            # Windows: Use mklink (requires admin or developer mode)
-            # Alternative: Use junction or just copy structure
-            echo "⚠️  Windows detected - symlinks may require admin privileges"
-            # Try creating directory junction instead
-            if command -v mklink &> /dev/null; then
-              mklink /J feagi-core feagi-rust\feagi-core || echo "Symlink creation may have failed, but continuing..."
-            else
-              echo "mklink not available, attempting alternative approach"
-            fi
+            # Windows: Use PowerShell-compatible sed or direct file manipulation
+            # Replace ../feagi-core with feagi-core in Cargo.toml
+            (Get-Content Cargo.toml) -replace '\.\./feagi-core', 'feagi-core' | Set-Content Cargo.toml
           else
-            # Unix/Linux/Mac
-            ln -s feagi-rust/feagi-core feagi-core
-            echo "✅ Created symlink: $(pwd)/feagi-core -> $(pwd)/feagi-rust/feagi-core"
+            # Unix/Linux/Mac: Use sed
+            sed -i.bak 's|\.\./feagi-core|feagi-core|g' Cargo.toml
           fi
+          echo "✅ Updated Cargo.toml paths"
+          echo "📄 Showing relevant lines:"
+          grep -E "(feagi-core|feagi-)" Cargo.toml | head -10 || echo "Could not display paths"
       
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -121,23 +115,23 @@ jobs:
         run: |
           echo "📁 Current directory: $(pwd)"
           echo "📁 Checking for feagi-core:"
-          if [ -d "../feagi-core" ]; then
-            echo "✅ ../feagi-core exists"
+          if [ -d "feagi-core" ]; then
+            echo "✅ feagi-core exists"
             if [[ "$RUNNER_OS" == "Windows" ]]; then
-              dir ..\feagi-core 2>/dev/null | head -5 || echo "Directory listing may differ on Windows"
+              dir feagi-core 2>/dev/null | head -5 || echo "Directory listing may differ on Windows"
             else
-              ls -la ../feagi-core/ | head -10
+              ls -la feagi-core/ | head -10
             fi
           else
-            echo "❌ ../feagi-core not found"
+            echo "❌ feagi-core not found"
             exit 1
           fi
           echo ""
           echo "📁 Checking Cargo.toml path dependencies:"
-          if [ -f "../feagi-core/crates/feagi-api/Cargo.toml" ]; then
-            echo "✅ ../feagi-core/crates/feagi-api/Cargo.toml exists"
+          if [ -f "feagi-core/crates/feagi-api/Cargo.toml" ]; then
+            echo "✅ feagi-core/crates/feagi-api/Cargo.toml exists"
           else
-            echo "❌ ../feagi-core/crates/feagi-api/Cargo.toml not found"
+            echo "❌ feagi-core/crates/feagi-api/Cargo.toml not found"
             exit 1
           fi
       
