@@ -332,6 +332,7 @@ jobs:
           repository: feagi/feagi
           token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
+          ref: main
           fetch-depth: 0
       
       - name: Create branch name
@@ -485,10 +486,43 @@ jobs:
           echo "Staged file list:"
           git diff --staged --name-only
           
+          # Compare with main branch to see what's different
+          echo ""
+          echo "Comparing with main branch:"
+          git fetch origin main:main 2>/dev/null || true
+          git diff main --name-status feagi/bin/ || echo "No differences with main"
+          
           # Check if there are changes
           if git diff --staged --quiet; then
-            echo "No changes to commit (binaries may be identical)"
-            exit 0
+            echo "WARNING: No changes staged - checking if binaries differ from main..."
+            # Check if binaries exist in main
+            if git show main:feagi/bin/linux-x86_64/feagi > /dev/null 2>&1; then
+              echo "Binaries exist in main - comparing..."
+              for bin in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+                if [ -f "$bin" ]; then
+                  if git show main:"$bin" > /tmp/main_bin 2>/dev/null; then
+                    if cmp -s "$bin" /tmp/main_bin; then
+                      echo "  $bin: IDENTICAL to main"
+                    else
+                      echo "  $bin: DIFFERENT from main"
+                      git add -f "$bin"
+                    fi
+                  else
+                    echo "  $bin: NOT in main - adding"
+                    git add -f "$bin"
+                  fi
+                fi
+              done
+            else
+              echo "Binaries don't exist in main - all should be added"
+              git add -f feagi/bin/
+            fi
+            
+            # Check again
+            if git diff --staged --quiet; then
+              echo "No changes to commit (all binaries identical to main)"
+              exit 0
+            fi
           fi
           
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
@@ -537,7 +571,6 @@ jobs:
         with:
           token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
-          repository: feagi/feagi
           branch: ${{ steps.branch_name.outputs.branch_name }}
           base: main
           delete-branch: false
