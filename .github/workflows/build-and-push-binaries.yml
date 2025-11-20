@@ -89,8 +89,8 @@ jobs:
         shell: bash
         run: |
           # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
-          # This works cross-platform without requiring symlinks
-          echo "Updating Cargo.toml paths..."
+          # Also enable vendored OpenSSL for cross-compilation
+          echo "Updating Cargo.toml paths and enabling vendored OpenSSL..."
           python3 << 'PYTHON_SCRIPT'
           import re
           import sys
@@ -108,6 +108,35 @@ jobs:
           
           with open('Cargo.toml', 'w', encoding='utf-8') as f:
               f.write(updated)
+          
+          # Also update feagi-core/crates/feagi-api/Cargo.toml to enable vendored OpenSSL for reqwest
+          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
+          try:
+              with open(api_cargo_path, 'r', encoding='utf-8') as f:
+                  api_content = f.read()
+              
+              # Enable vendored feature for reqwest if it exists
+              if 'reqwest' in api_content:
+                  # Replace reqwest line to add vendored-openssl feature
+                  # Handle both with and without existing features
+                  if 'features = ["json"]' in api_content:
+                      api_content = api_content.replace(
+                          'reqwest = { version = "0.11", features = ["json"] }',
+                          'reqwest = { version = "0.11", features = ["json", "vendored-openssl"] }'
+                      )
+                  elif 'reqwest = { version =' in api_content:
+                      # If reqwest exists but no features, add them
+                      api_content = re.sub(
+                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
+                          r'\1, features = ["json", "vendored-openssl"] }',
+                          api_content
+                      )
+                  
+                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
+                      f.write(api_content)
+                  print("Enabled vendored-openssl for reqwest in feagi-api")
+          except FileNotFoundError:
+              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
           
           print("Updated Cargo.toml paths")
           PYTHON_SCRIPT
