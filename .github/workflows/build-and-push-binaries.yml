@@ -5,19 +5,19 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: 'Source commit SHA (default: latest staging)'
+        description: 'Source commit SHA (default: latest main)'
         required: false
         type: string
       source_branch:
-        description: 'Source branch (default: staging)'
+        description: 'Source branch (default: main)'
         required: false
         type: string
-        default: 'staging'
+        default: 'main'
   
-  # Automatic trigger on PR merge
+  # Automatic trigger on PR merge to main
   pull_request:
     branches:
-      - staging
+      - main
     types: [closed]
     paths:
       - '**/*.rs'
@@ -60,10 +60,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     
     steps:
-      - name: Checkout source branch
+      - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.source_branch || 'staging' }}
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
+          fetch-depth: 0
+      
+      - name: Checkout feagi-core (dependency repo)
+        uses: actions/checkout@v4
+        with:
+          repository: Neuraville/feagi-core
+          token: ${{ secrets.FEAGI_CORE_TOKEN || github.token }}
+          ref: main
+          path: ../feagi-core
           fetch-depth: 0
       
       - name: Setup Rust
@@ -72,6 +81,29 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
           override: true
+      
+      - name: Verify directory structure
+        run: |
+          echo "📁 Current directory: $(pwd)"
+          echo "📁 Directory structure:"
+          ls -la
+          echo ""
+          echo "📁 Checking for feagi-core:"
+          if [ -d "../feagi-core" ]; then
+            echo "✅ ../feagi-core exists"
+            ls -la ../feagi-core/ | head -10
+          else
+            echo "❌ ../feagi-core not found"
+            exit 1
+          fi
+          echo ""
+          echo "📁 Checking Cargo.toml path dependencies:"
+          if [ -f "../feagi-core/crates/feagi-api/Cargo.toml" ]; then
+            echo "✅ ../feagi-core/crates/feagi-api/Cargo.toml exists"
+          else
+            echo "❌ ../feagi-core/crates/feagi-api/Cargo.toml not found"
+            exit 1
+          fi
       
       - name: Build FEAGI
         run: |
@@ -96,7 +128,7 @@ jobs:
       - name: Checkout source branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.source_branch || 'staging' }}
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
           fetch-depth: 0
       
       - name: Determine source commit
@@ -108,7 +140,7 @@ jobs:
             SOURCE_SHA="${{ github.sha }}"
           fi
           
-          SOURCE_BRANCH="${{ github.event.inputs.source_branch || 'staging' }}"
+          SOURCE_BRANCH="${{ github.event.inputs.source_branch || 'main' }}"
           
           echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
           echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
@@ -192,7 +224,7 @@ jobs:
           - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64
           - Triggered by: Manual workflow dispatch"
           else
-            COMMIT_MSG="chore: update FEAGI binaries from staging
+            COMMIT_MSG="chore: update FEAGI binaries from main
 
           - Built from commit: ${{ steps.source_info.outputs.source_sha }}
           - Source: ${{ github.repository }}@${{ steps.source_info.outputs.source_branch }}
@@ -219,7 +251,7 @@ jobs:
           body: |
             ## 🔄 Automated Binary Update
             
-            This PR updates FEAGI binaries built from the latest ${{ steps.source_info.outputs.source_branch }} branch.
+            This PR updates FEAGI binaries built from the `main` branch.
             
             ### 📦 Included Binaries
             - ✅ Linux x86_64
