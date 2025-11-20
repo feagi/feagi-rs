@@ -1,6 +1,20 @@
 name: Build Binaries and Create PR to Public Repo
 
 on:
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Source commit SHA (default: latest staging)'
+        required: false
+        type: string
+      source_branch:
+        description: 'Source branch (default: staging)'
+        required: false
+        type: string
+        default: 'staging'
+  
+  # Automatic trigger on PR merge
   pull_request:
     branches:
       - staging
@@ -45,16 +59,11 @@ jobs:
     
     runs-on: ${{ matrix.os }}
     
-    # Only run if PR was successfully merged to staging
-    if: |
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'staging'
-    
     steps:
-      - name: Checkout staging branch
+      - name: Checkout source branch
         uses: actions/checkout@v4
         with:
-          ref: refs/heads/staging
+          ref: ${{ github.event.inputs.source_branch || 'staging' }}
           fetch-depth: 0
       
       - name: Setup Rust
@@ -83,17 +92,27 @@ jobs:
     needs: build-binaries
     runs-on: ubuntu-latest
     
-    # Only run if PR was successfully merged to staging
-    if: |
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'staging'
-    
     steps:
-      - name: Checkout staging branch (source repo)
+      - name: Checkout source branch
         uses: actions/checkout@v4
         with:
-          ref: refs/heads/staging
+          ref: ${{ github.event.inputs.source_branch || 'staging' }}
           fetch-depth: 0
+      
+      - name: Determine source commit
+        id: source_info
+        run: |
+          if [ -n "${{ github.event.inputs.source_sha }}" ]; then
+            SOURCE_SHA="${{ github.event.inputs.source_sha }}"
+          else
+            SOURCE_SHA="${{ github.sha }}"
+          fi
+          
+          SOURCE_BRANCH="${{ github.event.inputs.source_branch || 'staging' }}"
+          
+          echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
+          echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
+          echo "📝 Source: $SOURCE_BRANCH@$SOURCE_SHA"
       
       - name: Download all binaries
         uses: actions/download-artifact@v4
@@ -111,7 +130,11 @@ jobs:
       - name: Create branch name
         id: branch_name
         run: |
-          BRANCH_NAME="update-binaries-$(date +%Y%m%d-%H%M%S)-$(echo ${{ github.sha }} | cut -c1-7)"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            BRANCH_NAME="update-binaries-manual-$(date +%Y%m%d-%H%M%S)-$(echo ${{ steps.source_info.outputs.source_sha }} | cut -c1-7)"
+          else
+            BRANCH_NAME="update-binaries-$(date +%Y%m%d-%H%M%S)-$(echo ${{ steps.source_info.outputs.source_sha }} | cut -c1-7)"
+          fi
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           echo "📝 Branch name: $BRANCH_NAME"
       
@@ -161,12 +184,21 @@ jobs:
             exit 0
           fi
           
-          COMMIT_MSG="chore: update FEAGI binaries from staging
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            COMMIT_MSG="chore: update FEAGI binaries (manual trigger)
 
-          - Built from commit: ${{ github.sha }}
-          - Source: ${{ github.repository }}@staging
+          - Built from commit: ${{ steps.source_info.outputs.source_sha }}
+          - Source: ${{ github.repository }}@${{ steps.source_info.outputs.source_branch }}
+          - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64
+          - Triggered by: Manual workflow dispatch"
+          else
+            COMMIT_MSG="chore: update FEAGI binaries from staging
+
+          - Built from commit: ${{ steps.source_info.outputs.source_sha }}
+          - Source: ${{ github.repository }}@${{ steps.source_info.outputs.source_branch }}
           - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64
           - Triggered by: PR #${{ github.event.pull_request.number }}"
+          fi
           
           git commit -m "$COMMIT_MSG"
           echo "✅ Changes committed"
@@ -183,11 +215,11 @@ jobs:
           token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
           branch: ${{ steps.branch_name.outputs.branch_name }}
-          title: "chore: Update FEAGI binaries from staging"
+          title: "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
           body: |
             ## 🔄 Automated Binary Update
             
-            This PR updates FEAGI binaries built from the latest staging merge.
+            This PR updates FEAGI binaries built from the latest ${{ steps.source_info.outputs.source_branch }} branch.
             
             ### 📦 Included Binaries
             - ✅ Linux x86_64
@@ -197,10 +229,10 @@ jobs:
             - ✅ Windows x86_64
             
             ### 📝 Details
-            - **Source Commit**: `${{ github.sha }}`
+            - **Source Commit**: `${{ steps.source_info.outputs.source_sha }}`
             - **Source Repo**: `${{ github.repository }}`
-            - **Source Branch**: `staging`
-            - **Triggered by**: PR #${{ github.event.pull_request.number }}
+            - **Source Branch**: `${{ steps.source_info.outputs.source_branch }}`
+            - **Trigger**: ${{ github.event_name == 'workflow_dispatch' && 'Manual workflow dispatch' || format('PR #{0}', github.event.pull_request.number) }}
             
             ### ✅ Verification
             Please verify the binaries before merging:
@@ -214,4 +246,3 @@ jobs:
             automated
             binaries
           draft: false
-
