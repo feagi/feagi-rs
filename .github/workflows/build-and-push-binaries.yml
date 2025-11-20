@@ -115,26 +115,26 @@ jobs:
               with open(api_cargo_path, 'r', encoding='utf-8') as f:
                   api_content = f.read()
               
-              # Enable vendored feature for reqwest if it exists
+              # Enable vendored feature for reqwest if it exists (for cross-compilation)
               if 'reqwest' in api_content:
-                  # Replace reqwest line to add vendored-openssl feature
+                  # Replace reqwest line to add native-tls-vendored feature (compiles OpenSSL from source)
                   # Handle both with and without existing features
                   if 'features = ["json"]' in api_content:
                       api_content = api_content.replace(
                           'reqwest = { version = "0.11", features = ["json"] }',
-                          'reqwest = { version = "0.11", features = ["json", "vendored-openssl"] }'
+                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
                       )
                   elif 'reqwest = { version =' in api_content:
                       # If reqwest exists but no features, add them
                       api_content = re.sub(
                           r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
-                          r'\1, features = ["json", "vendored-openssl"] }',
+                          r'\1, features = ["json", "native-tls-vendored"] }',
                           api_content
                       )
                   
                   with open(api_cargo_path, 'w', encoding='utf-8') as f:
                       f.write(api_content)
-                  print("Enabled vendored-openssl for reqwest in feagi-api")
+                  print("Enabled native-tls-vendored for reqwest in feagi-api")
           except FileNotFoundError:
               print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
           
