@@ -70,10 +70,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Neuraville/feagi-core
+          # Note: FEAGI_CORE_TOKEN secret must be configured with access to private feagi-core repo
+          # If not set, github.token will be used (may not have access to private repos)
           token: ${{ secrets.FEAGI_CORE_TOKEN || github.token }}
           ref: main
-          path: ../feagi-core
+          path: feagi-core
           fetch-depth: 0
+      
+      - name: Create symlink for path dependencies
+        run: |
+          # Create symlink so ../feagi-core paths in Cargo.toml resolve correctly
+          # The workspace is at /home/runner/work/feagi-rust/feagi-rust
+          # We need ../feagi-core to point to feagi-core
+          cd ..
+          ln -s feagi-rust/feagi-core feagi-core
+          echo "✅ Created symlink: $(pwd)/feagi-core -> $(pwd)/feagi-rust/feagi-core"
+          ls -la | grep feagi
       
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -88,7 +100,7 @@ jobs:
           echo "📁 Directory structure:"
           ls -la
           echo ""
-          echo "📁 Checking for feagi-core:"
+          echo "📁 Checking for feagi-core (symlink):"
           if [ -d "../feagi-core" ]; then
             echo "✅ ../feagi-core exists"
             ls -la ../feagi-core/ | head -10
