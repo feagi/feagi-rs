@@ -261,6 +261,15 @@ jobs:
         with:
           path: binaries
       
+      - name: List downloaded artifacts
+        shell: bash
+        run: |
+          echo "Downloaded artifacts structure:"
+          find binaries -type f -o -type d | head -20
+          echo ""
+          echo "Looking for feagi binaries:"
+          find binaries -name "feagi*" -o -name "*.exe" || echo "No binaries found"
+      
       - name: Verify all binaries are present
         shell: bash
         run: |
@@ -322,6 +331,9 @@ jobs:
         shell: bash
         run: |
           echo "Organizing binaries..."
+          echo "Checking downloaded artifacts:"
+          ls -la binaries/ || echo "binaries directory not found"
+          find binaries -type f -name "feagi*" || echo "No feagi binaries found"
           
           # Create directory structure
           cd public-repo
@@ -331,21 +343,66 @@ jobs:
           mkdir -p feagi/bin/darwin-aarch64
           mkdir -p feagi/bin/windows-x86_64
           
-          # Copy binaries to correct locations
-          cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
-          cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
-          cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
-          cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
-          cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
+          # Copy binaries to correct locations with error checking
+          echo "Copying binaries..."
+          MISSING=0
           
-          # Set executable permissions (for Unix binaries)
-          chmod +x feagi/bin/linux-x86_64/feagi
-          chmod +x feagi/bin/linux-aarch64/feagi
-          chmod +x feagi/bin/darwin-x86_64/feagi
-          chmod +x feagi/bin/darwin-aarch64/feagi
+          if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
+            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
+            chmod +x feagi/bin/linux-x86_64/feagi
+            echo "Copied: linux-x86_64/feagi"
+          else
+            echo "ERROR: Missing linux-x86_64/feagi"
+            MISSING=1
+          fi
           
-          echo "Binaries organized:"
+          if [ -f "../binaries/feagi-linux-aarch64/feagi" ]; then
+            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
+            chmod +x feagi/bin/linux-aarch64/feagi
+            echo "Copied: linux-aarch64/feagi"
+          else
+            echo "ERROR: Missing linux-aarch64/feagi"
+            MISSING=1
+          fi
+          
+          if [ -f "../binaries/feagi-darwin-x86_64/feagi" ]; then
+            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
+            chmod +x feagi/bin/darwin-x86_64/feagi
+            echo "Copied: darwin-x86_64/feagi"
+          else
+            echo "ERROR: Missing darwin-x86_64/feagi"
+            MISSING=1
+          fi
+          
+          if [ -f "../binaries/feagi-darwin-aarch64/feagi" ]; then
+            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
+            chmod +x feagi/bin/darwin-aarch64/feagi
+            echo "Copied: darwin-aarch64/feagi"
+          else
+            echo "ERROR: Missing darwin-aarch64/feagi"
+            MISSING=1
+          fi
+          
+          if [ -f "../binaries/feagi-windows-x86_64/feagi.exe" ]; then
+            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
+            echo "Copied: windows-x86_64/feagi.exe"
+          else
+            echo "ERROR: Missing windows-x86_64/feagi.exe"
+            MISSING=1
+          fi
+          
+          if [ $MISSING -eq 1 ]; then
+            echo "ERROR: One or more binaries are missing!"
+            exit 1
+          fi
+          
+          echo "All binaries copied successfully:"
           ls -lh feagi/bin/*/
+          echo ""
+          echo "Verifying all binaries exist:"
+          for dir in feagi/bin/*/; do
+            echo "  $dir: $(ls -1 $dir | wc -l) file(s)"
+          done
       
       - name: Commit changes
         shell: bash
