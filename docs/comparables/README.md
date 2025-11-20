@@ -2,7 +2,7 @@
 
 **Purpose**: Comparative analysis of FEAGI against other neural network frameworks and neuromorphic computing platforms.
 
-**Last Updated**: November 1, 2025
+**Last Updated**: November 10, 2025
 
 ---
 
@@ -53,7 +53,7 @@ This directory contains comprehensive comparative analyses between FEAGI and maj
 
 **Best for**: Quick decision-making, executive overview, strategic planning
 
-**Note**: Survey document currently covers 6 frameworks; will be updated to include NEST, Brian2, and SpiNNaker in next revision.
+**Note**: Survey document currently covers 6 SNN frameworks; PyTorch comparison added as separate physical AI-focused analysis.
 
 ---
 
@@ -135,7 +135,42 @@ This directory contains comprehensive comparative analyses between FEAGI and maj
 
 ---
 
-### 5. FEAGI vs GeNN
+### 5. FEAGI vs PyTorch ⭐ (PHYSICAL AI FOCUS)
+**File**: `COMPARATIVE_ANALYSIS_PYTORCH.md`
+
+**PyTorch Overview**:
+- Dominant deep learning framework (general-purpose)
+- Massive ecosystem (TorchVision, TorchRL, PyTorch3D)
+- SOTA perception models (YOLOv8, SAM, foundation models)
+- GPU-accelerated training and inference
+- Adapted for robotics through extensive integrations
+
+**Key Distinctions**:
+- **FEAGI**: Purpose-built for physical AI (embodied intelligence, real-time control)
+- **PyTorch**: General-purpose ML framework adapted for robotics
+
+**Critical Comparison Points**:
+- **Real-Time Control**: FEAGI native (<10ms), PyTorch requires integration
+- **Multi-Agent**: FEAGI native (ZMQ), PyTorch requires custom infrastructure
+- **Perception**: PyTorch SOTA, FEAGI developing (GPU planned 2025)
+- **Online Learning**: FEAGI native (STDP), PyTorch offline-focused
+- **Cost**: FEAGI $2K/robot (CPU), PyTorch $5-10K (GPU)
+
+**Best Use Cases**:
+- **FEAGI**: Robot fleets, real-time control, continuous adaptation, multi-agent swarms
+- **PyTorch**: SOTA perception, complex manipulation, imitation learning, research
+
+**Hybrid Recommended**: PyTorch perception + FEAGI control/coordination
+
+**Key Finding**: FEAGI can overtake PyTorch in physical AI by 2030 through:
+1. Fundamental architectural advantages (real-time, multi-agent)
+2. Market timing (fleet robotics explosion)
+3. Cost advantages (5-10x lower per robot)
+4. Purpose-built design vs. adapted framework
+
+---
+
+### 6. FEAGI vs GeNN
 **File**: `COMPARATIVE_ANALYSIS_GENN.md`
 
 **GeNN Overview**:
@@ -243,6 +278,7 @@ This directory contains comprehensive comparative analyses between FEAGI and maj
 | Framework | Primary Focus | Hardware | Learning | Scale | Best For |
 |-----------|--------------|----------|----------|-------|----------|
 | **FEAGI** | Embodied AI, AGI | CPU (GPU planned) | Evolutionary + STDP | Millions | Autonomous robots, multi-agent |
+| **PyTorch** | General ML/DL | CPU, GPU, TPU | All paradigms | Unlimited | SOTA perception, research, general ML |
 | **Lava** | Neuromorphic computing | Loihi, CPU, GPU | SLAYER, STDP | Millions | Loihi deployment, low-power |
 | **Nengo** | Cognitive modeling | CPU, GPU, Loihi, SpiNNaker | NEF, backprop | Millions | Cognitive tasks, education |
 | **CARLsim** | Visual cortex research | NVIDIA GPU | STDP, DA-STDP, STP | 10M+ | Neuroscience, GPU simulation |
@@ -294,11 +330,14 @@ Across all comparisons, FEAGI differentiates through:
 
 Several frameworks could synergize with FEAGI:
 
-1. **Lava + FEAGI**: Evolutionary optimization on Loihi hardware
-2. **Nengo + FEAGI**: Cognitive modules with evolutionary agents
-3. **CARLsim + FEAGI**: GPU-accelerated evolutionary development
-4. **snnTorch + FEAGI**: Supervised perception + evolutionary control
-5. **GeNN + FEAGI**: Large-scale simulation + real-time deployment
+1. **PyTorch + FEAGI** ⭐ **MOST PRACTICAL**: PyTorch perception (SOTA) + FEAGI control/coordination
+2. **Lava + FEAGI**: Evolutionary optimization on Loihi hardware
+3. **Nengo + FEAGI**: Cognitive modules with evolutionary agents
+4. **CARLsim + FEAGI**: GPU-accelerated evolutionary development
+5. **snnTorch + FEAGI**: Supervised perception + evolutionary control
+6. **GeNN + FEAGI**: Large-scale simulation + real-time deployment
+
+**Most Recommended Hybrid**: PyTorch for perception (object detection, segmentation) + FEAGI for real-time control and multi-agent coordination. This combines SOTA accuracy with purpose-built robotics architecture.
 
 ---
 

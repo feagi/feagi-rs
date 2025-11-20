@@ -15,6 +15,7 @@ Thumbs.db
 
 # Logs
 *.log
+*.log.*
 feagi.log
 
 # Temporary files

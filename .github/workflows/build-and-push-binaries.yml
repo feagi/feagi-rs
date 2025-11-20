@@ -1,0 +1,218 @@
+name: Build Binaries and Create PR to Public Repo
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types: [closed]
+    paths:
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-and-push-binaries.yml'
+
+permissions:
+  contents: write      # Required to create branches, commit, and push
+  pull-requests: write # Required to create PRs
+  metadata: read       # Basic repository access
+
+jobs:
+  # Build binaries for all platforms
+  build-binaries:
+    name: Build FEAGI Binaries
+    strategy:
+      matrix:
+        include:
+          - platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary_name: feagi
+          - platform: linux-aarch64
+            target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary_name: feagi
+          - platform: darwin-x86_64
+            target: x86_64-apple-darwin
+            os: macos-13
+            binary_name: feagi
+          - platform: darwin-aarch64
+            target: aarch64-apple-darwin
+            os: macos-latest
+            binary_name: feagi
+          - platform: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary_name: feagi.exe
+    
+    runs-on: ${{ matrix.os }}
+    
+    # Only run if PR was successfully merged to staging
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'staging'
+    
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/staging
+          fetch-depth: 0
+      
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      
+      - name: Build FEAGI
+        run: |
+          echo "🔨 Building FEAGI for ${{ matrix.platform }}..."
+          cargo build --release --target ${{ matrix.target }}
+          echo "✅ Build complete"
+      
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: feagi-${{ matrix.platform }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+          retention-days: 1
+
+  # Collect all binaries and create PR
+  create-pr:
+    name: Create PR with Binaries
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    
+    # Only run if PR was successfully merged to staging
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'staging'
+    
+    steps:
+      - name: Checkout staging branch (source repo)
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/staging
+          fetch-depth: 0
+      
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+      
+      - name: Checkout public repo
+        uses: actions/checkout@v4
+        with:
+          repository: feagi/feagi
+          token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
+          path: public-repo
+          fetch-depth: 0
+      
+      - name: Create branch name
+        id: branch_name
+        run: |
+          BRANCH_NAME="update-binaries-$(date +%Y%m%d-%H%M%S)-$(echo ${{ github.sha }} | cut -c1-7)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "📝 Branch name: $BRANCH_NAME"
+      
+      - name: Create and checkout branch
+        run: |
+          cd public-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b ${{ steps.branch_name.outputs.branch_name }}
+      
+      - name: Organize and copy binaries
+        run: |
+          echo "📦 Organizing binaries..."
+          
+          # Create directory structure
+          cd public-repo
+          mkdir -p feagi/bin/linux-x86_64
+          mkdir -p feagi/bin/linux-aarch64
+          mkdir -p feagi/bin/darwin-x86_64
+          mkdir -p feagi/bin/darwin-aarch64
+          mkdir -p feagi/bin/windows-x86_64
+          
+          # Copy binaries to correct locations
+          cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
+          cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
+          cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
+          cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
+          cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
+          
+          # Set executable permissions (for Unix binaries)
+          chmod +x feagi/bin/linux-x86_64/feagi
+          chmod +x feagi/bin/linux-aarch64/feagi
+          chmod +x feagi/bin/darwin-x86_64/feagi
+          chmod +x feagi/bin/darwin-aarch64/feagi
+          
+          echo "✅ Binaries organized:"
+          ls -lh feagi/bin/*/
+      
+      - name: Commit changes
+        run: |
+          cd public-repo
+          git add feagi/bin/
+          
+          # Check if there are changes
+          if git diff --staged --quiet; then
+            echo "⚠️  No changes to commit (binaries may be identical)"
+            exit 0
+          fi
+          
+          COMMIT_MSG="chore: update FEAGI binaries from staging
+
+          - Built from commit: ${{ github.sha }}
+          - Source: ${{ github.repository }}@staging
+          - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64
+          - Triggered by: PR #${{ github.event.pull_request.number }}"
+          
+          git commit -m "$COMMIT_MSG"
+          echo "✅ Changes committed"
+      
+      - name: Push branch
+        run: |
+          cd public-repo
+          git push origin ${{ steps.branch_name.outputs.branch_name }}
+          echo "✅ Branch pushed"
+      
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
+          path: public-repo
+          branch: ${{ steps.branch_name.outputs.branch_name }}
+          title: "chore: Update FEAGI binaries from staging"
+          body: |
+            ## 🔄 Automated Binary Update
+            
+            This PR updates FEAGI binaries built from the latest staging merge.
+            
+            ### 📦 Included Binaries
+            - ✅ Linux x86_64
+            - ✅ Linux ARM64
+            - ✅ macOS Intel (x86_64)
+            - ✅ macOS Apple Silicon (ARM64)
+            - ✅ Windows x86_64
+            
+            ### 📝 Details
+            - **Source Commit**: `${{ github.sha }}`
+            - **Source Repo**: `${{ github.repository }}`
+            - **Source Branch**: `staging`
+            - **Triggered by**: PR #${{ github.event.pull_request.number }}
+            
+            ### ✅ Verification
+            Please verify the binaries before merging:
+            1. Check that all platform binaries are present
+            2. Verify binary sizes are reasonable
+            3. Test on at least one platform if possible
+            
+            ---
+            *This PR was automatically created by GitHub Actions*
+          labels: |
+            automated
+            binaries
+          draft: false
+
