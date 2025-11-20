@@ -364,6 +364,22 @@ jobs:
           
           # Create directory structure
           cd public-repo
+          
+          # Check if .gitignore exists and what it contains
+          echo "Checking .gitignore:"
+          if [ -f ".gitignore" ]; then
+            echo ".gitignore exists:"
+            cat .gitignore | grep -i "bin\|feagi\|\.exe" || echo "No binary-related ignores found"
+          else
+            echo ".gitignore does not exist"
+          fi
+          
+          # Check what's currently in feagi/bin/ if it exists
+          if [ -d "feagi/bin" ]; then
+            echo "Current feagi/bin contents:"
+            find feagi/bin -type f || echo "No files in feagi/bin"
+          fi
+          
           mkdir -p feagi/bin/linux-x86_64
           mkdir -p feagi/bin/linux-aarch64
           mkdir -p feagi/bin/darwin-x86_64
@@ -435,7 +451,39 @@ jobs:
         shell: bash
         run: |
           cd public-repo
-          git add feagi/bin/
+          
+          # Check what files exist before adding
+          echo "Files in feagi/bin/ before git add:"
+          find feagi/bin -type f -exec ls -lh {} \;
+          
+          # Check git status before adding
+          echo "Git status before adding:"
+          git status --short feagi/bin/ || echo "No status for feagi/bin"
+          
+          # Force add binary files (in case they're in .gitignore)
+          echo "Force adding binaries..."
+          git add -f feagi/bin/linux-x86_64/feagi || echo "Failed to add linux-x86_64"
+          git add -f feagi/bin/linux-aarch64/feagi || echo "Failed to add linux-aarch64"
+          git add -f feagi/bin/darwin-x86_64/feagi || echo "Failed to add darwin-x86_64"
+          git add -f feagi/bin/darwin-aarch64/feagi || echo "Failed to add darwin-aarch64"
+          git add -f feagi/bin/windows-x86_64/feagi.exe || echo "Failed to add windows-x86_64"
+          
+          # Also add directories to ensure structure is tracked
+          git add feagi/bin/ || echo "Failed to add feagi/bin directory"
+          
+          # Show what's staged
+          echo ""
+          echo "Git status after adding:"
+          git status --short
+          echo ""
+          echo "Staged files:"
+          git diff --staged --name-status
+          echo ""
+          echo "Staged file count:"
+          git diff --staged --name-only | wc -l
+          echo ""
+          echo "Staged file list:"
+          git diff --staged --name-only
           
           # Check if there are changes
           if git diff --staged --quiet; then
