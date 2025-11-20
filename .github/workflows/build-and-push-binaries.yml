@@ -150,6 +150,20 @@ jobs:
           target: ${{ matrix.target }}
           override: true
       
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'feagi-core/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-${{ matrix.target }}-
+            ${{ runner.os }}-rust-
+      
       - name: Setup cross-compilation for Linux aarch64
         if: matrix.target == 'aarch64-unknown-linux-gnu' && matrix.os == 'ubuntu-latest'
         shell: bash
@@ -376,27 +390,29 @@ jobs:
         with:
           token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
+          repository: feagi/feagi
           branch: ${{ steps.branch_name.outputs.branch_name }}
+          base: main
           title: "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
           body: |
-            ## 🔄 Automated Binary Update
+            ## Automated Binary Update
             
             This PR updates FEAGI binaries built from the `main` branch.
             
-            ### 📦 Included Binaries
-            - ✅ Linux x86_64
-            - ✅ Linux ARM64
-            - ✅ macOS Intel (x86_64)
-            - ✅ macOS Apple Silicon (ARM64)
-            - ✅ Windows x86_64
+            ### Included Binaries
+            - Linux x86_64
+            - Linux ARM64
+            - macOS Intel (x86_64)
+            - macOS Apple Silicon (ARM64)
+            - Windows x86_64
             
-            ### 📝 Details
+            ### Details
             - **Source Commit**: `${{ steps.source_info.outputs.source_sha }}`
             - **Source Repo**: `${{ github.repository }}`
             - **Source Branch**: `${{ steps.source_info.outputs.source_branch }}`
             - **Trigger**: ${{ github.event_name == 'workflow_dispatch' && 'Manual workflow dispatch' || format('PR #{0}', github.event.pull_request.number) }}
             
-            ### ✅ Verification
+            ### Verification
             Please verify the binaries before merging:
             1. Check that all platform binaries are present
             2. Verify binary sizes are reasonable
@@ -407,4 +423,6 @@ jobs:
           labels: |
             automated
             binaries
+          commit-message: "chore: update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
+          delete-branch: true
           draft: false
