@@ -124,36 +124,33 @@ jobs:
       - name: Verify directory structure
         shell: bash
         run: |
-          echo "📁 Current directory: $(pwd)"
-          echo "📁 Checking for feagi-core:"
+          echo "Current directory: $(pwd)"
+          echo "Checking for feagi-core:"
           if [ -d "feagi-core" ]; then
-            echo "✅ feagi-core exists"
-            if [[ "$RUNNER_OS" == "Windows" ]]; then
-              dir feagi-core 2>/dev/null | head -5 || echo "Directory listing may differ on Windows"
-            else
-              ls -la feagi-core/ | head -10
-            fi
+            echo "feagi-core exists"
+            ls -la feagi-core/ | head -10 || echo "Directory listing completed"
           else
-            echo "❌ feagi-core not found"
+            echo "ERROR: feagi-core not found"
             exit 1
           fi
           echo ""
-          echo "📁 Checking Cargo.toml path dependencies:"
+          echo "Checking Cargo.toml path dependencies:"
           if [ -f "feagi-core/crates/feagi-api/Cargo.toml" ]; then
-            echo "✅ feagi-core/crates/feagi-api/Cargo.toml exists"
+            echo "feagi-core/crates/feagi-api/Cargo.toml exists"
           else
-            echo "❌ feagi-core/crates/feagi-api/Cargo.toml not found"
+            echo "ERROR: feagi-core/crates/feagi-api/Cargo.toml not found"
             exit 1
           fi
       
       - name: Build FEAGI
+        shell: bash
         run: |
-          echo "🔨 Building FEAGI for ${{ matrix.platform }}..."
+          echo "Building FEAGI for ${{ matrix.platform }}..."
           if ! cargo build --release --target ${{ matrix.target }}; then
-            echo "❌ Build failed for ${{ matrix.platform }}"
+            echo "Build failed for ${{ matrix.platform }}"
             exit 1
           fi
-          echo "✅ Build complete for ${{ matrix.platform }}"
+          echo "Build complete for ${{ matrix.platform }}"
       
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -179,6 +176,7 @@ jobs:
       
       - name: Determine source commit
         id: source_info
+        shell: bash
         run: |
           if [ -n "${{ github.event.inputs.source_sha }}" ]; then
             SOURCE_SHA="${{ github.event.inputs.source_sha }}"
@@ -190,7 +188,7 @@ jobs:
           
           echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
           echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
-          echo "📝 Source: $SOURCE_BRANCH@$SOURCE_SHA"
+          echo "Source: $SOURCE_BRANCH@$SOURCE_SHA"
       
       - name: Download all binaries
         uses: actions/download-artifact@v4
@@ -198,8 +196,9 @@ jobs:
           path: binaries
       
       - name: Verify all binaries are present
+        shell: bash
         run: |
-          echo "🔍 Verifying all required binaries are present..."
+          echo "Verifying all required binaries are present..."
           REQUIRED_BINARIES=(
             "feagi-linux-x86_64/feagi"
             "feagi-linux-aarch64/feagi"
@@ -211,19 +210,19 @@ jobs:
           MISSING=0
           for binary in "${REQUIRED_BINARIES[@]}"; do
             if [ ! -f "binaries/$binary" ]; then
-              echo "❌ Missing binary: $binary"
+              echo "ERROR: Missing binary: $binary"
               MISSING=1
             else
-              echo "✅ Found: $binary"
+              echo "Found: $binary"
             fi
           done
           
           if [ $MISSING -eq 1 ]; then
-            echo "❌ One or more required binaries are missing. Build job may have failed."
+            echo "ERROR: One or more required binaries are missing. Build job may have failed."
             exit 1
           fi
           
-          echo "✅ All required binaries are present"
+          echo "All required binaries are present"
       
       - name: Checkout public repo
         uses: actions/checkout@v4
@@ -235,6 +234,7 @@ jobs:
       
       - name: Create branch name
         id: branch_name
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             BRANCH_NAME="update-binaries-manual-$(date +%Y%m%d-%H%M%S)-$(echo ${{ steps.source_info.outputs.source_sha }} | cut -c1-7)"
@@ -242,9 +242,10 @@ jobs:
             BRANCH_NAME="update-binaries-$(date +%Y%m%d-%H%M%S)-$(echo ${{ steps.source_info.outputs.source_sha }} | cut -c1-7)"
           fi
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          echo "📝 Branch name: $BRANCH_NAME"
+          echo "Branch name: $BRANCH_NAME"
       
       - name: Create and checkout branch
+        shell: bash
         run: |
           cd public-repo
           git config user.name "github-actions[bot]"
@@ -252,8 +253,9 @@ jobs:
           git checkout -b ${{ steps.branch_name.outputs.branch_name }}
       
       - name: Organize and copy binaries
+        shell: bash
         run: |
-          echo "📦 Organizing binaries..."
+          echo "Organizing binaries..."
           
           # Create directory structure
           cd public-repo
@@ -276,17 +278,18 @@ jobs:
           chmod +x feagi/bin/darwin-x86_64/feagi
           chmod +x feagi/bin/darwin-aarch64/feagi
           
-          echo "✅ Binaries organized:"
+          echo "Binaries organized:"
           ls -lh feagi/bin/*/
       
       - name: Commit changes
+        shell: bash
         run: |
           cd public-repo
           git add feagi/bin/
           
           # Check if there are changes
           if git diff --staged --quiet; then
-            echo "⚠️  No changes to commit (binaries may be identical)"
+            echo "No changes to commit (binaries may be identical)"
             exit 0
           fi
           
@@ -307,13 +310,14 @@ jobs:
           fi
           
           git commit -m "$COMMIT_MSG"
-          echo "✅ Changes committed"
+          echo "Changes committed"
       
       - name: Push branch
+        shell: bash
         run: |
           cd public-repo
           git push origin ${{ steps.branch_name.outputs.branch_name }}
-          echo "✅ Branch pushed"
+          echo "Branch pushed"
       
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
