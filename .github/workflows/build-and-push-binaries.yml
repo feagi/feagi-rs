@@ -152,17 +152,28 @@ jobs:
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
+        id: cache-deps
         with:
           path: |
             ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'feagi-core/**/Cargo.toml') }}
+          # Cache dependencies separately - only invalidate when Cargo.lock changes
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-deps-
+      
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        id: cache-build
+        with:
+          path: target/
+          # Cache compiled binaries - invalidate when source code or Cargo.lock changes
+          key: ${{ runner.os }}-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}-${{ hashFiles('**/*.rs', 'feagi-core/**/*.rs', '**/Cargo.toml', 'feagi-core/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}-
             ${{ runner.os }}-rust-${{ matrix.target }}-
-            ${{ runner.os }}-rust-
       
       - name: Setup cross-compilation for Linux aarch64
         if: matrix.target == 'aarch64-unknown-linux-gnu' && matrix.os == 'ubuntu-latest'
@@ -212,11 +223,27 @@ jobs:
         shell: bash
         run: |
           echo "Building FEAGI for ${{ matrix.platform }}..."
-          if ! cargo build --release --target ${{ matrix.target }}; then
-            echo "Build failed for ${{ matrix.platform }}"
-            exit 1
+          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          
+          # Check if binary already exists from cache
+          if [ -f "$BINARY_PATH" ]; then
+            echo "Binary found in cache - verifying..."
+            ls -lh "$BINARY_PATH"
+            file "$BINARY_PATH" || true
+            echo "Using cached binary - skipping build"
+          else
+            echo "Binary not in cache - building from source..."
+            echo "Cache status:"
+            echo "  Dependencies cache: ${{ steps.cache-deps.outputs.cache-hit }}"
+            echo "  Build cache: ${{ steps.cache-build.outputs.cache-hit }}"
+            
+            if ! cargo build --release --target ${{ matrix.target }}; then
+              echo "Build failed for ${{ matrix.platform }}"
+              exit 1
+            fi
+            echo "Build complete for ${{ matrix.platform }}"
+            ls -lh "$BINARY_PATH"
           fi
-          echo "Build complete for ${{ matrix.platform }}"
       
       - name: Upload binary
         uses: actions/upload-artifact@v4
