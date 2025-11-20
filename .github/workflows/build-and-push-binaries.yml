@@ -86,20 +86,25 @@ jobs:
           fetch-depth: 0
       
       - name: Update Cargo.toml paths for CI
-        shell: bash
         run: |
           # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
           # This works cross-platform without requiring symlinks
           echo "📝 Updating Cargo.toml paths..."
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            # Windows: Use PowerShell-compatible sed or direct file manipulation
-            # Replace ../feagi-core with feagi-core in Cargo.toml
-            (Get-Content Cargo.toml) -replace '\.\./feagi-core', 'feagi-core' | Set-Content Cargo.toml
-          else
-            # Unix/Linux/Mac: Use sed
-            sed -i.bak 's|\.\./feagi-core|feagi-core|g' Cargo.toml
-          fi
-          echo "✅ Updated Cargo.toml paths"
+          python3 << 'PYTHON_SCRIPT'
+          import re
+          import sys
+          
+          with open('Cargo.toml', 'r', encoding='utf-8') as f:
+              content = f.read()
+          
+          # Replace ../feagi-core with feagi-core
+          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
+          
+          with open('Cargo.toml', 'w', encoding='utf-8') as f:
+              f.write(updated)
+          
+          print("✅ Updated Cargo.toml paths")
+          PYTHON_SCRIPT
           echo "📄 Showing relevant lines:"
           grep -E "(feagi-core|feagi-)" Cargo.toml | head -10 || echo "Could not display paths"
       
