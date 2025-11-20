@@ -90,10 +90,15 @@ jobs:
         run: |
           # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
           # This works cross-platform without requiring symlinks
-          echo "📝 Updating Cargo.toml paths..."
+          echo "Updating Cargo.toml paths..."
           python3 << 'PYTHON_SCRIPT'
           import re
           import sys
+          import io
+          
+          # Set stdout to UTF-8 to handle emojis on Windows
+          if sys.platform == 'win32':
+              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
           
           with open('Cargo.toml', 'r', encoding='utf-8') as f:
               content = f.read()
@@ -104,9 +109,9 @@ jobs:
           with open('Cargo.toml', 'w', encoding='utf-8') as f:
               f.write(updated)
           
-          print("✅ Updated Cargo.toml paths")
+          print("Updated Cargo.toml paths")
           PYTHON_SCRIPT
-          echo "📄 Showing relevant lines:"
+          echo "Showing relevant lines:"
           grep -E "(feagi-core|feagi-)" Cargo.toml | head -10 || echo "Could not display paths"
       
       - name: Setup Rust
