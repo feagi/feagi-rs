@@ -159,6 +159,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross \
             pkg-config \
             perl \
@@ -167,6 +168,7 @@ jobs:
           # Use vendored OpenSSL feature to compile from source (avoids system package issues)
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
           echo "Cross-compilation setup complete"
