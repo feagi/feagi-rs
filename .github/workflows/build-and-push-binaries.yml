@@ -14,7 +14,6 @@ on:
 permissions:
   contents: write      # Required to create branches, commit, and push
   pull-requests: write # Required to create PRs
-  metadata: read       # Basic repository access
 
 jobs:
   # Build binaries for all platforms
