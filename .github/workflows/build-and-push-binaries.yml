@@ -469,7 +469,22 @@ jobs:
           git push origin ${{ steps.branch_name.outputs.branch_name }}
           echo "Branch pushed"
       
+      - name: Verify branch exists before creating PR
+        shell: bash
+        run: |
+          cd public-repo
+          echo "Checking if branch exists on remote..."
+          git fetch origin
+          if git ls-remote --heads origin ${{ steps.branch_name.outputs.branch_name }} | grep -q .; then
+            echo "Branch ${{ steps.branch_name.outputs.branch_name }} exists on remote"
+            git log origin/${{ steps.branch_name.outputs.branch_name }} --oneline -5
+          else
+            echo "ERROR: Branch ${{ steps.branch_name.outputs.branch_name }} not found on remote!"
+            exit 1
+          fi
+      
       - name: Create Pull Request
+        id: create_pr
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
@@ -477,6 +492,7 @@ jobs:
           repository: feagi/feagi
           branch: ${{ steps.branch_name.outputs.branch_name }}
           base: main
+          delete-branch: false
           title: "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
           body: |
             ## Automated Binary Update
@@ -508,5 +524,16 @@ jobs:
             automated
             binaries
           commit-message: "chore: update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
-          delete-branch: true
           draft: false
+      
+      - name: Output PR information
+        shell: bash
+        run: |
+          if [ -n "${{ steps.create_pr.outputs.pull-request-number }}" ]; then
+            echo "PR created successfully:"
+            echo "  PR Number: ${{ steps.create_pr.outputs.pull-request-number }}"
+            echo "  PR URL: ${{ steps.create_pr.outputs.pull-request-url }}"
+          else
+            echo "WARNING: PR may not have been created. Check the logs above."
+            echo "Branch URL: https://github.com/feagi/feagi/tree/${{ steps.branch_name.outputs.branch_name }}"
+          fi
