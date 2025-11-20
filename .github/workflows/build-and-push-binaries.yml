@@ -126,15 +126,23 @@ jobs:
         shell: bash
         run: |
           echo "Setting up cross-compilation for aarch64..."
+          # Enable multiarch support for arm64
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64 pkg-config-aarch64-linux-gnu
+          # Install cross-compilation tools and ARM64 OpenSSL libraries
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            libc6-dev:arm64 \
+            libssl-dev:arm64 \
+            pkg-config
+          # Set up environment variables for cross-compilation
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
           echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
           echo "OPENSSL_DIR=/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "PKG_CONFIG=aarch64-linux-gnu-pkg-config" >> $GITHUB_ENV
+          echo "Cross-compilation setup complete"
       
       - name: Verify directory structure
         shell: bash
