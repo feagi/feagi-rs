@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: 'main'
+      feagi_core_branch:
+        description: 'feagi-core branch to use (default: main, or leave empty for default branch)'
+        required: false
+        type: string
+        default: 'main'
   
   # Automatic trigger on PR merge to main
   pull_request:
@@ -34,6 +39,7 @@ jobs:
   build-binaries:
     name: Build FEAGI Binaries
     strategy:
+      fail-fast: true  # Stop all jobs immediately if one fails
       matrix:
         include:
           - platform: linux-x86_64
@@ -70,22 +76,38 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Neuraville/feagi-core
-          # Note: FEAGI_CORE_TOKEN secret must be configured with access to private feagi-core repo
-          # If not set, github.token will be used (may not have access to private repos)
-          token: ${{ secrets.FEAGI_CORE_TOKEN || github.token }}
+          # CRITICAL: FEAGI_CORE_TOKEN secret must be configured in repository settings
+          # The token must have 'repo' scope and access to Neuraville/feagi-core private repository
+          # Configure at: Settings > Secrets and variables > Actions > New repository secret
+          token: ${{ secrets.FEAGI_CORE_TOKEN }}
+          # TODO: What branch should feagi-core use? (main, master, staging, or default?)
           ref: main
           path: feagi-core
           fetch-depth: 0
       
       - name: Create symlink for path dependencies
+        shell: bash
         run: |
           # Create symlink so ../feagi-core paths in Cargo.toml resolve correctly
-          # The workspace is at /home/runner/work/feagi-rust/feagi-rust
-          # We need ../feagi-core to point to feagi-core
+          # The workspace is at /home/runner/work/feagi-rust/feagi-rust (Linux/Mac)
+          # or D:\a\feagi-rust\feagi-rust (Windows)
+          # We need ../feagi-core to point to feagi-rust/feagi-core
           cd ..
-          ln -s feagi-rust/feagi-core feagi-core
-          echo "✅ Created symlink: $(pwd)/feagi-core -> $(pwd)/feagi-rust/feagi-core"
-          ls -la | grep feagi
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # Windows: Use mklink (requires admin or developer mode)
+            # Alternative: Use junction or just copy structure
+            echo "⚠️  Windows detected - symlinks may require admin privileges"
+            # Try creating directory junction instead
+            if command -v mklink &> /dev/null; then
+              mklink /J feagi-core feagi-rust\feagi-core || echo "Symlink creation may have failed, but continuing..."
+            else
+              echo "mklink not available, attempting alternative approach"
+            fi
+          else
+            # Unix/Linux/Mac
+            ln -s feagi-rust/feagi-core feagi-core
+            echo "✅ Created symlink: $(pwd)/feagi-core -> $(pwd)/feagi-rust/feagi-core"
+          fi
       
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -95,15 +117,17 @@ jobs:
           override: true
       
       - name: Verify directory structure
+        shell: bash
         run: |
           echo "📁 Current directory: $(pwd)"
-          echo "📁 Directory structure:"
-          ls -la
-          echo ""
-          echo "📁 Checking for feagi-core (symlink):"
+          echo "📁 Checking for feagi-core:"
           if [ -d "../feagi-core" ]; then
             echo "✅ ../feagi-core exists"
-            ls -la ../feagi-core/ | head -10
+            if [[ "$RUNNER_OS" == "Windows" ]]; then
+              dir ..\feagi-core 2>/dev/null | head -5 || echo "Directory listing may differ on Windows"
+            else
+              ls -la ../feagi-core/ | head -10
+            fi
           else
             echo "❌ ../feagi-core not found"
             exit 1
@@ -120,8 +144,11 @@ jobs:
       - name: Build FEAGI
         run: |
           echo "🔨 Building FEAGI for ${{ matrix.platform }}..."
-          cargo build --release --target ${{ matrix.target }}
-          echo "✅ Build complete"
+          if ! cargo build --release --target ${{ matrix.target }}; then
+            echo "❌ Build failed for ${{ matrix.platform }}"
+            exit 1
+          fi
+          echo "✅ Build complete for ${{ matrix.platform }}"
       
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -135,6 +162,8 @@ jobs:
     name: Create PR with Binaries
     needs: build-binaries
     runs-on: ubuntu-latest
+    # Only run if ALL binary builds succeeded
+    if: success()
     
     steps:
       - name: Checkout source branch
@@ -162,6 +191,34 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: binaries
+      
+      - name: Verify all binaries are present
+        run: |
+          echo "🔍 Verifying all required binaries are present..."
+          REQUIRED_BINARIES=(
+            "feagi-linux-x86_64/feagi"
+            "feagi-linux-aarch64/feagi"
+            "feagi-darwin-x86_64/feagi"
+            "feagi-darwin-aarch64/feagi"
+            "feagi-windows-x86_64/feagi.exe"
+          )
+          
+          MISSING=0
+          for binary in "${REQUIRED_BINARIES[@]}"; do
+            if [ ! -f "binaries/$binary" ]; then
+              echo "❌ Missing binary: $binary"
+              MISSING=1
+            else
+              echo "✅ Found: $binary"
+            fi
+          done
+          
+          if [ $MISSING -eq 1 ]; then
+            echo "❌ One or more required binaries are missing. Build job may have failed."
+            exit 1
+          fi
+          
+          echo "✅ All required binaries are present"
       
       - name: Checkout public repo
         uses: actions/checkout@v4
