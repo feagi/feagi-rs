@@ -332,7 +332,7 @@ jobs:
           repository: feagi/feagi
           token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
-          ref: main
+          ref: staging
           fetch-depth: 0
       
       - name: Inspect public repo structure
@@ -385,7 +385,18 @@ jobs:
           cd public-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # CRITICAL: Show what branch we're on before creating new branch
+          echo "Current branch before creating new branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "Staging branch commit: $(git rev-parse origin/staging 2>/dev/null || echo 'not fetched yet')"
+          
+          # Create new branch from current HEAD (which should be staging)
           git checkout -b ${{ steps.branch_name.outputs.branch_name }}
+          
+          echo "Created branch: ${{ steps.branch_name.outputs.branch_name }}"
+          echo "Branch is based on: $(git rev-parse HEAD)"
+          echo "Branch parent: $(git rev-parse HEAD^ 2>/dev/null || echo 'no parent')"
       
       - name: Organize and copy binaries
         shell: bash
@@ -624,9 +635,58 @@ jobs:
           
           # Compare with main branch to see what's different
           echo ""
-          echo "Comparing with main branch:"
-          git fetch origin main:main 2>/dev/null || true
-          git diff main --name-status feagi/bin/ || echo "No differences with main"
+          echo "=== COMPARING WITH MAIN BRANCH ==="
+          
+          # CRITICAL: Fetch staging and ensure we're comparing to the remote staging, not local
+          git fetch origin staging:refs/remotes/origin/staging 2>/dev/null || true
+          
+          # Show what we're comparing
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          STAGING_COMMIT=$(git rev-parse origin/staging 2>/dev/null || echo "unknown")
+          
+          echo "Current branch: $CURRENT_BRANCH"
+          echo "Current commit: $CURRENT_COMMIT"
+          echo "Staging branch (origin/staging) commit: $STAGING_COMMIT"
+          echo ""
+          
+          if [ "$CURRENT_COMMIT" = "$STAGING_COMMIT" ]; then
+            echo "⚠ WARNING: Current branch commit is SAME as staging - we haven't committed yet!"
+            echo "This comparison is before commit, so it's expected to be the same."
+          else
+            echo "✓ Current branch differs from staging (good!)"
+          fi
+          echo ""
+          
+          echo "Files in staging branch (origin/staging) (feagi/bin):"
+          git ls-tree -r origin/staging --name-only 2>/dev/null | grep "^feagi/bin" || echo "No feagi/bin files in staging!"
+          echo ""
+          
+          echo "Files in current branch (feagi/bin):"
+          git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "No feagi/bin files in current branch!"
+          echo ""
+          
+          echo "Differences between origin/staging and current branch (before commit):"
+          git diff origin/staging HEAD --name-status feagi/bin/ 2>/dev/null || echo "No differences with staging (expected before commit)"
+          echo ""
+          
+          # Check if files are identical (compare working directory files with staging)
+          echo "Checking if binaries in working directory are identical to staging:"
+          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+            if [ -f "$file" ]; then
+              if git show origin/staging:"$file" > /tmp/staging_file 2>/dev/null; then
+                if cmp -s "$file" /tmp/staging_file; then
+                  echo "  $file: IDENTICAL to staging (will not show as changed)"
+                else
+                  echo "  $file: DIFFERENT from staging (will show as changed)"
+                fi
+              else
+                echo "  $file: NOT IN STAGING (will be added as new file)"
+              fi
+            else
+              echo "  $file: MISSING in working directory!"
+            fi
+          done
           
           # CRITICAL: Verify we have files staged before committing
           STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || true)
@@ -637,6 +697,9 @@ jobs:
             echo "This should never happen - we just added 5 binaries"
             echo "Git status:"
             git status
+            echo ""
+            echo "Files on disk:"
+            find feagi/bin -type f
             exit 1
           fi
           
@@ -644,10 +707,16 @@ jobs:
             echo "ERROR: Only $STAGED_COUNT files staged, expected 5!"
             echo "Staged files:"
             echo "$STAGED_FILES"
+            echo ""
+            echo "Files on disk:"
+            find feagi/bin -type f
             exit 1
           fi
           
           echo "✓ Verified: $STAGED_COUNT files staged (all 5 binaries)"
+          echo ""
+          echo "Staged files list:"
+          echo "$STAGED_FILES"
           
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             COMMIT_MSG="chore: update FEAGI binaries (manual trigger)
@@ -724,6 +793,64 @@ jobs:
           echo "Directory structure in commit:"
           git ls-tree -r HEAD --name-only | grep "^feagi/bin" | sed 's|^feagi/bin/||' | sort
       
+      - name: Show what's in staging before pushing
+        shell: bash
+        run: |
+          cd public-repo
+          echo "=== WHAT'S IN STAGING BRANCH ==="
+          
+          # CRITICAL: Always fetch from origin/staging, never create local staging branch
+          git fetch origin staging:refs/remotes/origin/staging
+          
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          STAGING_COMMIT=$(git rev-parse origin/staging)
+          
+          echo "Current branch: $CURRENT_BRANCH"
+          echo "Current commit: $CURRENT_COMMIT"
+          echo "Staging branch (origin/staging) commit: $STAGING_COMMIT"
+          echo ""
+          
+          if [ "$CURRENT_COMMIT" = "$STAGING_COMMIT" ]; then
+            echo "⚠ ERROR: Current branch commit is SAME as staging!"
+            echo "This means we haven't committed our changes yet, or we're comparing to ourselves!"
+            echo "This should never happen after we commit."
+          else
+            echo "✓ Current branch differs from staging (good - we have a commit)"
+          fi
+          echo ""
+          
+          echo "Staging branch date: $(git log -1 --format=%cd origin/staging)"
+          echo ""
+          echo "Files in origin/staging/feagi/bin:"
+          STAGING_BINARIES=$(git ls-tree -r origin/staging --name-only | grep "^feagi/bin" || echo "")
+          if [ -z "$STAGING_BINARIES" ]; then
+            echo "  ✗ NO BINARIES IN STAGING - all 5 should be added"
+            STAGING_COUNT=0
+          else
+            echo "$STAGING_BINARIES" | while read -r file; do
+              if [ -n "$file" ]; then
+                SIZE=$(git cat-file -s origin/staging:"$file" 2>/dev/null || echo "unknown")
+                DATE=$(git log -1 --format=%cd --date=short origin/staging -- "$file" 2>/dev/null || echo "unknown")
+                echo "  $file ($SIZE bytes, committed $DATE)"
+              fi
+            done
+            STAGING_COUNT=$(echo "$STAGING_BINARIES" | grep -c . || echo "0")
+          fi
+          echo ""
+          echo "Staging has $STAGING_COUNT binary files"
+          echo ""
+          echo "Our branch has 5 binary files"
+          echo ""
+          echo "Differences between origin/staging and our branch:"
+          git diff origin/staging HEAD --name-status feagi/bin/ || echo "No differences (this would be a problem!)"
+          echo ""
+          if [ "$STAGING_COUNT" -lt 5 ]; then
+            echo "✓ Staging is missing binaries - PR should show differences"
+          else
+            echo "⚠ Staging has $STAGING_COUNT binaries - checking if they're identical..."
+          fi
+      
       - name: Push branch
         shell: bash
         run: |
@@ -758,6 +885,9 @@ jobs:
           echo "=== VERIFYING FILES IN PUSHED BRANCH ==="
           git fetch origin ${{ steps.branch_name.outputs.branch_name }}:${{ steps.branch_name.outputs.branch_name }} 2>/dev/null || true
           git checkout ${{ steps.branch_name.outputs.branch_name }}
+          
+          # Also fetch staging to compare
+          git fetch origin staging:refs/remotes/origin/staging
           
           echo ""
           echo "Files on disk in pushed branch:"
@@ -800,6 +930,137 @@ jobs:
           echo "Final directory structure:"
           tree feagi/bin/ 2>/dev/null || find feagi/bin -type f -exec echo {} \;
       
+      - name: Verify branch has changes before creating PR
+        shell: bash
+        run: |
+          cd public-repo
+          echo "=== FINAL VERIFICATION BEFORE PR CREATION ==="
+          git fetch origin main:main
+          
+          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "Main branch commit: $(git rev-parse main)"
+          echo ""
+          
+          echo "Files in main branch:"
+          MAIN_FILES=$(git ls-tree -r main --name-only | grep "^feagi/bin" || echo "")
+          if [ -z "$MAIN_FILES" ]; then
+            echo "  ✗ No feagi/bin files in main - all binaries will be new"
+            MAIN_COUNT=0
+          else
+            echo "$MAIN_FILES" | while read -r file; do
+              if [ -n "$file" ]; then
+                SIZE=$(git cat-file -s main:"$file" 2>/dev/null || echo "unknown")
+                echo "  $file ($SIZE bytes)"
+              fi
+            done
+            MAIN_COUNT=$(echo "$MAIN_FILES" | grep -c . || echo "0")
+          fi
+          echo "Main has $MAIN_COUNT binary files"
+          echo ""
+          
+          echo "Files in branch ${{ steps.branch_name.outputs.branch_name }}:"
+          BRANCH_FILES=$(git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "")
+          if [ -z "$BRANCH_FILES" ]; then
+            echo "  ✗ ERROR: No feagi/bin files in branch!"
+            echo "Commit contents:"
+            git ls-tree -r HEAD --name-only | head -20
+            exit 1
+          else
+            echo "$BRANCH_FILES" | while read -r file; do
+              if [ -n "$file" ]; then
+                SIZE=$(git cat-file -s HEAD:"$file" 2>/dev/null || echo "unknown")
+                echo "  $file ($SIZE bytes)"
+              fi
+            done
+            BRANCH_COUNT=$(echo "$BRANCH_FILES" | grep -c . || echo "0")
+          fi
+          echo "Branch has $BRANCH_COUNT binary files"
+          echo ""
+          
+          if [ "$BRANCH_COUNT" -ne 5 ]; then
+            echo "ERROR: Branch should have 5 binaries, found $BRANCH_COUNT"
+            exit 1
+          fi
+          
+          # Check if there are actual differences - ALWAYS use origin/staging, never local staging
+          echo "Checking differences between origin/staging and branch:"
+          DIFF_OUTPUT=$(git diff origin/staging HEAD --name-status feagi/bin/ 2>&1 || echo "")
+          
+          if [ -z "$DIFF_OUTPUT" ] || echo "$DIFF_OUTPUT" | grep -q "no differences"; then
+            echo "  ✗ WARNING: git diff shows no differences - this is the problem!"
+            echo ""
+            echo "Current branch commit: $(git rev-parse HEAD)"
+            echo "Origin/staging commit: $(git rev-parse origin/staging)"
+            echo ""
+            echo "Manual file-by-file comparison:"
+            MISSING_IN_STAGING=0
+            DIFFERENT_FROM_STAGING=0
+            for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+              if git cat-file -e origin/staging:"$file" 2>/dev/null; then
+                # File exists in staging - check if identical
+                if git diff --quiet origin/staging HEAD -- "$file" 2>/dev/null; then
+                  echo "  $file: EXISTS in origin/staging and IDENTICAL (this is why PR shows no diff)"
+                else
+                  echo "  $file: EXISTS in origin/staging but DIFFERENT"
+                  DIFFERENT_FROM_STAGING=1
+                fi
+              else
+                echo "  $file: NOT in origin/staging - should be added (A)"
+                MISSING_IN_STAGING=1
+              fi
+            done
+            
+            echo ""
+            if [ $MISSING_IN_STAGING -eq 1 ] || [ $DIFFERENT_FROM_STAGING -eq 1 ]; then
+              echo "ERROR: Files are missing or different in origin/staging, but git diff shows no changes!"
+              echo "This indicates a git tracking issue or we're comparing to the wrong commit."
+              echo ""
+              echo "Attempting to force git to see the differences..."
+              # Force refresh git's view
+              git update-index --refresh
+              git diff origin/staging HEAD --name-status feagi/bin/
+              echo ""
+              echo "If still no differences, there may be a git cache issue or commit problem."
+            else
+              echo "All files exist in origin/staging and are identical - no update needed"
+              echo "This means the binaries in staging are already up to date."
+            fi
+          else
+            echo "✓ Differences found:"
+            echo "$DIFF_OUTPUT"
+          fi
+          
+          echo ""
+          echo "Proceeding with PR creation (PR action will handle the comparison)..."
+      
+      - name: Force commit differences if needed
+        shell: bash
+        run: |
+          cd public-repo
+          echo "=== FORCING COMMIT DIFFERENCES ==="
+          
+          # Check if branch differs from main
+          if git diff --quiet main HEAD -- feagi/bin/ 2>/dev/null; then
+            echo "WARNING: Branch has no differences from main for feagi/bin/"
+            echo "This means either:"
+            echo "  1. Main already has identical binaries (from previous merge)"
+            echo "  2. Git is not tracking the files correctly"
+            echo ""
+            echo "Checking what's actually in main:"
+            git ls-tree -r main --name-only | grep "^feagi/bin" || echo "No feagi/bin files in main"
+            echo ""
+            echo "Checking what's in our branch:"
+            git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "No feagi/bin files in branch"
+            echo ""
+            echo "Since we verified all 5 binaries are in the commit, we'll proceed."
+            echo "The PR action may skip creation if it detects no differences,"
+            echo "but the branch will still be pushed with all binaries."
+          else
+            echo "✓ Branch has differences from main - PR should be created"
+            git diff main HEAD --name-status feagi/bin/
+          fi
+      
       - name: Create Pull Request
         id: create_pr
         uses: peter-evans/create-pull-request@v5
@@ -807,20 +1068,20 @@ jobs:
           token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
           branch: ${{ steps.branch_name.outputs.branch_name }}
-          base: main
+          base: staging
           delete-branch: false
           title: "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
           body: |
             ## Automated Binary Update
             
-            This PR updates FEAGI binaries built from the `main` branch.
+            This PR updates FEAGI binaries built from the `main` branch of feagi-rust.
             
             ### Included Binaries
-            - Linux x86_64
-            - Linux ARM64
-            - macOS Intel (x86_64)
-            - macOS Apple Silicon (ARM64)
-            - Windows x86_64
+            - Linux x86_64 (`feagi/bin/linux-x86_64/feagi`)
+            - Linux ARM64 (`feagi/bin/linux-aarch64/feagi`)
+            - macOS Intel (`feagi/bin/darwin-x86_64/feagi`)
+            - macOS Apple Silicon (`feagi/bin/darwin-aarch64/feagi`)
+            - Windows x86_64 (`feagi/bin/windows-x86_64/feagi.exe`)
             
             ### Details
             - **Source Commit**: `${{ steps.source_info.outputs.source_sha }}`
@@ -829,8 +1090,9 @@ jobs:
             - **Trigger**: ${{ github.event_name == 'workflow_dispatch' && 'Manual workflow dispatch' || format('PR #{0}', github.event.pull_request.number) }}
             
             ### Verification
-            Please verify the binaries before merging:
-            1. Check that all platform binaries are present
+            All 5 binaries have been verified to exist in this branch.
+            Please verify before merging:
+            1. Check that all platform binaries are present in the file tree
             2. Verify binary sizes are reasonable
             3. Test on at least one platform if possible
             
