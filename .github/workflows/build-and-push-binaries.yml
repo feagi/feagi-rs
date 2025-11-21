@@ -1076,6 +1076,10 @@ jobs:
           branch: ${{ steps.branch_name.outputs.branch_name }}
           base: staging
           delete-branch: false
+          # NOTE: Do not use commit-message parameter here. The branch already has
+          # a commit with binaries. Using commit-message would cause the action to
+          # create a new commit, potentially without the binaries if they're not
+          # in the working directory at that moment.
           title: "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
           body: |
             ## Automated Binary Update
@@ -1107,7 +1111,6 @@ jobs:
           labels: |
             automated
             binaries
-          commit-message: "chore: update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
           draft: false
       
       - name: Output PR information
