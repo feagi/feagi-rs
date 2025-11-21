@@ -781,53 +781,69 @@ jobs:
           echo "Staged files count: $(git diff --staged --name-only | wc -l)"
           echo ""
           
-          # Check if commit would be empty
-          if git diff --staged --quiet; then
-            echo "WARNING: No changes to commit - all files are identical to HEAD!"
-            echo "This means the binaries are already in the current branch (staging)."
+          # CRITICAL: Always commit all 5 binaries, even if git thinks they're identical
+          # We want to overwrite binaries regardless of whether they're identical
+          echo "Committing binaries (will commit even if identical to HEAD)..."
+          
+          # Force add all binaries one more time right before commit to ensure they're staged
+          echo "Force adding all binaries one final time before commit:"
+          git add -f feagi/bin/linux-x86_64/feagi
+          git add -f feagi/bin/linux-aarch64/feagi
+          git add -f feagi/bin/darwin-x86_64/feagi
+          git add -f feagi/bin/darwin-aarch64/feagi
+          git add -f feagi/bin/windows-x86_64/feagi.exe
+          
+          # Verify all 5 are staged
+          STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || echo "")
+          STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
+          echo "Files staged: $STAGED_COUNT"
+          echo "$STAGED_FILES"
+          
+          if [ "$STAGED_COUNT" -ne 5 ]; then
+            echo "ERROR: Expected 5 files staged, found $STAGED_COUNT!"
+            echo "This means some binaries weren't added to git."
             echo ""
-            echo "Checking what's in current HEAD:"
-            HEAD_FILES=$(git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "")
-            if [ -z "$HEAD_FILES" ]; then
-              echo "  No feagi/bin files in HEAD - this is wrong!"
-              echo "  Files on disk:"
-              find feagi/bin -type f
-              echo ""
-              echo "  Files should be in HEAD but aren't - forcing commit anyway..."
-              # Force commit by touching a file or using --allow-empty
-              git commit --allow-empty -m "$COMMIT_MSG (no changes detected but binaries should be present)"
-            else
-              echo "  Files in HEAD:"
-              echo "$HEAD_FILES"
-              echo ""
-              echo "  Comparing with files on disk:"
-              for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-                if git cat-file -e HEAD:"$file" 2>/dev/null; then
-                  if cmp -s "$file" <(git show HEAD:"$file"); then
-                    echo "    $file: IDENTICAL to HEAD"
-                  else
-                    echo "    $file: DIFFERENT from HEAD (should be staged!)"
-                  fi
+            echo "Checking each file:"
+            for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+              if [ -f "$file" ]; then
+                if git diff --staged --name-only | grep -q "^$file$"; then
+                  echo "  ✓ $file: staged"
                 else
-                  echo "    $file: NOT in HEAD (should be added!)"
+                  echo "  ✗ $file: NOT staged (exists on disk but not staged)"
+                  # Try to add it one more time
+                  git add -f "$file"
+                  if git diff --staged --name-only | grep -q "^$file$"; then
+                    echo "    → Now staged after retry"
+                  else
+                    echo "    → Still not staged after retry - checking if ignored"
+                    git check-ignore -v "$file" || echo "    → Not ignored, but still not staging"
+                  fi
                 fi
-              done
+              else
+                echo "  ✗ $file: MISSING on disk"
+              fi
+            done
+            
+            # Check again
+            STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || echo "")
+            STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
+            
+            if [ "$STAGED_COUNT" -ne 5 ]; then
               echo ""
-              echo "  ERROR: Binaries exist in HEAD and match disk, but git says no changes!"
-              echo "  This suggests the files were already committed in staging."
-              echo "  Skipping commit - binaries are already up to date in staging."
-              exit 0
-            fi
-          else
-            echo "✓ Changes detected - proceeding with commit"
-            if ! git commit -m "$COMMIT_MSG"; then
-              echo "ERROR: git commit failed!"
-              echo "Staged files:"
-              git diff --staged --name-only
+              echo "ERROR: Still only $STAGED_COUNT files staged after retry!"
               exit 1
             fi
-            echo "Changes committed"
           fi
+          
+          # Commit - we should have 5 files staged now
+          if ! git commit -m "$COMMIT_MSG"; then
+            echo "ERROR: git commit failed!"
+            echo "Staged files:"
+            git diff --staged --name-only
+            exit 1
+          fi
+          
+          echo "Changes committed"
           
           echo ""
           echo "Commit SHA: $(git rev-parse HEAD)"
