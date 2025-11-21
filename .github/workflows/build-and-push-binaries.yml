@@ -340,6 +340,9 @@ jobs:
         run: |
           cd public-repo
           echo "=== PUBLIC REPO STRUCTURE ==="
+          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo ""
           echo "Root directory contents:"
           ls -la
           echo ""
@@ -354,6 +357,9 @@ jobs:
               echo ""
               echo "Directory structure:"
               find feagi/bin -type d | sort
+              echo ""
+              echo "Files in git (current branch):"
+              git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "No feagi/bin files in git"
             else
               echo "✗ feagi/bin/ does not exist"
             fi
@@ -633,9 +639,9 @@ jobs:
           echo "Staged file list:"
           git diff --staged --name-only
           
-          # Compare with main branch to see what's different
+          # Compare with staging branch to see what's different
           echo ""
-          echo "=== COMPARING WITH MAIN BRANCH ==="
+          echo "=== COMPARING WITH STAGING BRANCH ==="
           
           # CRITICAL: Fetch staging and ensure we're comparing to the remote staging, not local
           git fetch origin staging:refs/remotes/origin/staging 2>/dev/null || true
@@ -689,27 +695,59 @@ jobs:
           done
           
           # CRITICAL: Verify we have files staged before committing
+          echo ""
+          echo "=== PRE-COMMIT VERIFICATION ==="
+          echo "Files on disk in feagi/bin/:"
+          find feagi/bin -type f -exec ls -lh {} \;
+          echo ""
+          
+          echo "Git status (all files):"
+          git status
+          echo ""
+          
+          echo "Git status (feagi/bin only):"
+          git status feagi/bin/
+          echo ""
+          
           STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || true)
           STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
           
+          echo "Staged files count: $STAGED_COUNT"
+          echo "Staged files:"
+          echo "$STAGED_FILES" || echo "(none)"
+          echo ""
+          
           if [ "$STAGED_COUNT" -eq 0 ]; then
             echo "ERROR: No files staged for commit!"
-            echo "This should never happen - we just added 5 binaries"
-            echo "Git status:"
-            git status
+            echo "Files exist on disk but are not staged."
             echo ""
-            echo "Files on disk:"
-            find feagi/bin -type f
-            exit 1
+            echo "Attempting to add them again..."
+            git add -f feagi/bin/linux-x86_64/feagi
+            git add -f feagi/bin/linux-aarch64/feagi
+            git add -f feagi/bin/darwin-x86_64/feagi
+            git add -f feagi/bin/darwin-aarch64/feagi
+            git add -f feagi/bin/windows-x86_64/feagi.exe
+            
+            # Check again
+            STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || true)
+            STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
+            
+            if [ "$STAGED_COUNT" -eq 0 ]; then
+              echo "ERROR: Still no files staged after re-adding!"
+              echo "Checking if files are in .gitignore:"
+              git check-ignore -v feagi/bin/linux-x86_64/feagi || echo "Not ignored"
+              git check-ignore -v feagi/bin/linux-aarch64/feagi || echo "Not ignored"
+              git check-ignore -v feagi/bin/darwin-x86_64/feagi || echo "Not ignored"
+              git check-ignore -v feagi/bin/darwin-aarch64/feagi || echo "Not ignored"
+              git check-ignore -v feagi/bin/windows-x86_64/feagi.exe || echo "Not ignored"
+              exit 1
+            fi
           fi
           
           if [ "$STAGED_COUNT" -lt 5 ]; then
             echo "ERROR: Only $STAGED_COUNT files staged, expected 5!"
             echo "Staged files:"
             echo "$STAGED_FILES"
-            echo ""
-            echo "Files on disk:"
-            find feagi/bin -type f
             exit 1
           fi
           
@@ -735,14 +773,66 @@ jobs:
           fi
           
           # Commit with explicit verification
-          if ! git commit -m "$COMMIT_MSG"; then
-            echo "ERROR: git commit failed!"
-            echo "Staged files:"
-            git diff --staged --name-only
-            exit 1
+          echo ""
+          echo "=== COMMITTING ==="
+          echo "Staged files before commit:"
+          git diff --staged --name-only
+          echo ""
+          echo "Staged files count: $(git diff --staged --name-only | wc -l)"
+          echo ""
+          
+          # Check if commit would be empty
+          if git diff --staged --quiet; then
+            echo "WARNING: No changes to commit - all files are identical to HEAD!"
+            echo "This means the binaries are already in the current branch (staging)."
+            echo ""
+            echo "Checking what's in current HEAD:"
+            HEAD_FILES=$(git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "")
+            if [ -z "$HEAD_FILES" ]; then
+              echo "  No feagi/bin files in HEAD - this is wrong!"
+              echo "  Files on disk:"
+              find feagi/bin -type f
+              echo ""
+              echo "  Files should be in HEAD but aren't - forcing commit anyway..."
+              # Force commit by touching a file or using --allow-empty
+              git commit --allow-empty -m "$COMMIT_MSG (no changes detected but binaries should be present)"
+            else
+              echo "  Files in HEAD:"
+              echo "$HEAD_FILES"
+              echo ""
+              echo "  Comparing with files on disk:"
+              for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+                if git cat-file -e HEAD:"$file" 2>/dev/null; then
+                  if cmp -s "$file" <(git show HEAD:"$file"); then
+                    echo "    $file: IDENTICAL to HEAD"
+                  else
+                    echo "    $file: DIFFERENT from HEAD (should be staged!)"
+                  fi
+                else
+                  echo "    $file: NOT in HEAD (should be added!)"
+                fi
+              done
+              echo ""
+              echo "  ERROR: Binaries exist in HEAD and match disk, but git says no changes!"
+              echo "  This suggests the files were already committed in staging."
+              echo "  Skipping commit - binaries are already up to date in staging."
+              exit 0
+            fi
+          else
+            echo "✓ Changes detected - proceeding with commit"
+            if ! git commit -m "$COMMIT_MSG"; then
+              echo "ERROR: git commit failed!"
+              echo "Staged files:"
+              git diff --staged --name-only
+              exit 1
+            fi
+            echo "Changes committed"
           fi
           
-          echo "Changes committed"
+          echo ""
+          echo "Commit SHA: $(git rev-parse HEAD)"
+          echo "Commit message:"
+          git log -1 --pretty=format:"%s" HEAD
           
           # CRITICAL: Verify what's in the commit - fail if any binary is missing
           echo ""
@@ -930,33 +1020,14 @@ jobs:
           echo "Final directory structure:"
           tree feagi/bin/ 2>/dev/null || find feagi/bin -type f -exec echo {} \;
       
-      - name: Verify branch has changes before creating PR
+      - name: Verify binaries are in branch before creating PR
         shell: bash
         run: |
           cd public-repo
-          echo "=== FINAL VERIFICATION BEFORE PR CREATION ==="
-          git fetch origin main:main
+          echo "=== VERIFYING BINARIES IN BRANCH ==="
           
           echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
           echo "Current commit: $(git rev-parse HEAD)"
-          echo "Main branch commit: $(git rev-parse main)"
-          echo ""
-          
-          echo "Files in main branch:"
-          MAIN_FILES=$(git ls-tree -r main --name-only | grep "^feagi/bin" || echo "")
-          if [ -z "$MAIN_FILES" ]; then
-            echo "  ✗ No feagi/bin files in main - all binaries will be new"
-            MAIN_COUNT=0
-          else
-            echo "$MAIN_FILES" | while read -r file; do
-              if [ -n "$file" ]; then
-                SIZE=$(git cat-file -s main:"$file" 2>/dev/null || echo "unknown")
-                echo "  $file ($SIZE bytes)"
-              fi
-            done
-            MAIN_COUNT=$(echo "$MAIN_FILES" | grep -c . || echo "0")
-          fi
-          echo "Main has $MAIN_COUNT binary files"
           echo ""
           
           echo "Files in branch ${{ steps.branch_name.outputs.branch_name }}:"
@@ -966,100 +1037,19 @@ jobs:
             echo "Commit contents:"
             git ls-tree -r HEAD --name-only | head -20
             exit 1
-          else
-            echo "$BRANCH_FILES" | while read -r file; do
-              if [ -n "$file" ]; then
-                SIZE=$(git cat-file -s HEAD:"$file" 2>/dev/null || echo "unknown")
-                echo "  $file ($SIZE bytes)"
-              fi
-            done
-            BRANCH_COUNT=$(echo "$BRANCH_FILES" | grep -c . || echo "0")
           fi
+          
+          BRANCH_COUNT=$(echo "$BRANCH_FILES" | grep -c . || echo "0")
           echo "Branch has $BRANCH_COUNT binary files"
-          echo ""
           
           if [ "$BRANCH_COUNT" -ne 5 ]; then
             echo "ERROR: Branch should have 5 binaries, found $BRANCH_COUNT"
             exit 1
           fi
           
-          # Check if there are actual differences - ALWAYS use origin/staging, never local staging
-          echo "Checking differences between origin/staging and branch:"
-          DIFF_OUTPUT=$(git diff origin/staging HEAD --name-status feagi/bin/ 2>&1 || echo "")
-          
-          if [ -z "$DIFF_OUTPUT" ] || echo "$DIFF_OUTPUT" | grep -q "no differences"; then
-            echo "  ✗ WARNING: git diff shows no differences - this is the problem!"
-            echo ""
-            echo "Current branch commit: $(git rev-parse HEAD)"
-            echo "Origin/staging commit: $(git rev-parse origin/staging)"
-            echo ""
-            echo "Manual file-by-file comparison:"
-            MISSING_IN_STAGING=0
-            DIFFERENT_FROM_STAGING=0
-            for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-              if git cat-file -e origin/staging:"$file" 2>/dev/null; then
-                # File exists in staging - check if identical
-                if git diff --quiet origin/staging HEAD -- "$file" 2>/dev/null; then
-                  echo "  $file: EXISTS in origin/staging and IDENTICAL (this is why PR shows no diff)"
-                else
-                  echo "  $file: EXISTS in origin/staging but DIFFERENT"
-                  DIFFERENT_FROM_STAGING=1
-                fi
-              else
-                echo "  $file: NOT in origin/staging - should be added (A)"
-                MISSING_IN_STAGING=1
-              fi
-            done
-            
-            echo ""
-            if [ $MISSING_IN_STAGING -eq 1 ] || [ $DIFFERENT_FROM_STAGING -eq 1 ]; then
-              echo "ERROR: Files are missing or different in origin/staging, but git diff shows no changes!"
-              echo "This indicates a git tracking issue or we're comparing to the wrong commit."
-              echo ""
-              echo "Attempting to force git to see the differences..."
-              # Force refresh git's view
-              git update-index --refresh
-              git diff origin/staging HEAD --name-status feagi/bin/
-              echo ""
-              echo "If still no differences, there may be a git cache issue or commit problem."
-            else
-              echo "All files exist in origin/staging and are identical - no update needed"
-              echo "This means the binaries in staging are already up to date."
-            fi
-          else
-            echo "✓ Differences found:"
-            echo "$DIFF_OUTPUT"
-          fi
-          
+          echo "✓ All 5 binaries verified in branch"
           echo ""
-          echo "Proceeding with PR creation (PR action will handle the comparison)..."
-      
-      - name: Force commit differences if needed
-        shell: bash
-        run: |
-          cd public-repo
-          echo "=== FORCING COMMIT DIFFERENCES ==="
-          
-          # Check if branch differs from main
-          if git diff --quiet main HEAD -- feagi/bin/ 2>/dev/null; then
-            echo "WARNING: Branch has no differences from main for feagi/bin/"
-            echo "This means either:"
-            echo "  1. Main already has identical binaries (from previous merge)"
-            echo "  2. Git is not tracking the files correctly"
-            echo ""
-            echo "Checking what's actually in main:"
-            git ls-tree -r main --name-only | grep "^feagi/bin" || echo "No feagi/bin files in main"
-            echo ""
-            echo "Checking what's in our branch:"
-            git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "No feagi/bin files in branch"
-            echo ""
-            echo "Since we verified all 5 binaries are in the commit, we'll proceed."
-            echo "The PR action may skip creation if it detects no differences,"
-            echo "but the branch will still be pushed with all binaries."
-          else
-            echo "✓ Branch has differences from main - PR should be created"
-            git diff main HEAD --name-status feagi/bin/
-          fi
+          echo "Proceeding with PR creation..."
       
       - name: Create Pull Request
         id: create_pr
