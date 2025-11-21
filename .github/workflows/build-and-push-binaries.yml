@@ -335,6 +335,38 @@ jobs:
           ref: main
           fetch-depth: 0
       
+      - name: Inspect public repo structure
+        shell: bash
+        run: |
+          cd public-repo
+          echo "=== PUBLIC REPO STRUCTURE ==="
+          echo "Root directory contents:"
+          ls -la
+          echo ""
+          echo "Checking for feagi directory:"
+          if [ -d "feagi" ]; then
+            echo "✓ feagi/ exists"
+            ls -la feagi/
+            if [ -d "feagi/bin" ]; then
+              echo "✓ feagi/bin/ exists"
+              echo "Current contents:"
+              find feagi/bin -type f -exec ls -lh {} \;
+              echo ""
+              echo "Directory structure:"
+              find feagi/bin -type d | sort
+            else
+              echo "✗ feagi/bin/ does not exist"
+            fi
+          else
+            echo "✗ feagi/ does not exist - will be created"
+          fi
+          echo ""
+          echo "Checking .gitignore:"
+          if [ -f ".gitignore" ]; then
+            echo ".gitignore contents related to binaries:"
+            grep -i "bin\|feagi\|\.exe" .gitignore || echo "No binary-related ignores"
+          fi
+      
       - name: Create branch name
         id: branch_name
         shell: bash
@@ -366,7 +398,28 @@ jobs:
           # Create directory structure
           cd public-repo
           
+          # Check repository structure
+          echo "Repository structure:"
+          ls -la
+          echo ""
+          echo "Checking if feagi directory exists:"
+          if [ -d "feagi" ]; then
+            echo "feagi/ exists:"
+            ls -la feagi/
+            if [ -d "feagi/bin" ]; then
+              echo "feagi/bin/ exists:"
+              ls -la feagi/bin/
+              echo "Current contents:"
+              find feagi/bin -type f || echo "No files in feagi/bin"
+            else
+              echo "feagi/bin/ does not exist - will create"
+            fi
+          else
+            echo "feagi/ does not exist - will create"
+          fi
+          
           # Check if .gitignore exists and what it contains
+          echo ""
           echo "Checking .gitignore:"
           if [ -f ".gitignore" ]; then
             echo ".gitignore exists:"
@@ -375,68 +428,97 @@ jobs:
             echo ".gitignore does not exist"
           fi
           
-          # Check what's currently in feagi/bin/ if it exists
-          if [ -d "feagi/bin" ]; then
-            echo "Current feagi/bin contents:"
-            find feagi/bin -type f || echo "No files in feagi/bin"
-          fi
-          
+          # Create directory structure
           mkdir -p feagi/bin/linux-x86_64
           mkdir -p feagi/bin/linux-aarch64
           mkdir -p feagi/bin/darwin-x86_64
           mkdir -p feagi/bin/darwin-aarch64
           mkdir -p feagi/bin/windows-x86_64
           
-          # Copy binaries to correct locations with error checking
-          echo "Copying binaries..."
-          MISSING=0
+          echo ""
+          echo "Directory structure after creation:"
+          tree feagi/bin/ 2>/dev/null || find feagi/bin -type d
           
-          if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
-            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
-            chmod +x feagi/bin/linux-x86_64/feagi
-            echo "Copied: linux-x86_64/feagi"
+          # Copy binaries to correct locations - always copy and overwrite
+          # We don't check if source exists first - we try to copy and fail if copy fails
+          echo "Copying binaries (will overwrite existing files)..."
+          COPY_FAILED=0
+          
+          # Linux x86_64 - always copy, overwrite if exists
+          if cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi; then
+            if [ -f "feagi/bin/linux-x86_64/feagi" ]; then
+              SIZE=$(stat -f%z "feagi/bin/linux-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-x86_64/feagi" 2>/dev/null || echo "unknown")
+              echo "  ✓ Copied: linux-x86_64/feagi ($SIZE bytes)"
+            else
+              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              COPY_FAILED=1
+            fi
           else
-            echo "ERROR: Missing linux-x86_64/feagi"
-            MISSING=1
+            echo "  ✗ ERROR: Copy command failed for linux-x86_64/feagi"
+            COPY_FAILED=1
           fi
           
-          if [ -f "../binaries/feagi-linux-aarch64/feagi" ]; then
-            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
-            chmod +x feagi/bin/linux-aarch64/feagi
-            echo "Copied: linux-aarch64/feagi"
+          # Linux aarch64 - always copy, overwrite if exists
+          if cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi; then
+            if [ -f "feagi/bin/linux-aarch64/feagi" ]; then
+              SIZE=$(stat -f%z "feagi/bin/linux-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-aarch64/feagi" 2>/dev/null || echo "unknown")
+              echo "  ✓ Copied: linux-aarch64/feagi ($SIZE bytes)"
+            else
+              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              COPY_FAILED=1
+            fi
           else
-            echo "ERROR: Missing linux-aarch64/feagi"
-            MISSING=1
+            echo "  ✗ ERROR: Copy command failed for linux-aarch64/feagi"
+            COPY_FAILED=1
           fi
           
-          if [ -f "../binaries/feagi-darwin-x86_64/feagi" ]; then
-            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
-            chmod +x feagi/bin/darwin-x86_64/feagi
-            echo "Copied: darwin-x86_64/feagi"
+          # Darwin x86_64 - always copy, overwrite if exists
+          if cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi; then
+            if [ -f "feagi/bin/darwin-x86_64/feagi" ]; then
+              SIZE=$(stat -f%z "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || echo "unknown")
+              echo "  ✓ Copied: darwin-x86_64/feagi ($SIZE bytes)"
+            else
+              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              COPY_FAILED=1
+            fi
           else
-            echo "ERROR: Missing darwin-x86_64/feagi"
-            MISSING=1
+            echo "  ✗ ERROR: Copy command failed for darwin-x86_64/feagi"
+            COPY_FAILED=1
           fi
           
-          if [ -f "../binaries/feagi-darwin-aarch64/feagi" ]; then
-            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
-            chmod +x feagi/bin/darwin-aarch64/feagi
-            echo "Copied: darwin-aarch64/feagi"
+          # Darwin aarch64 - always copy, overwrite if exists
+          if cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi; then
+            if [ -f "feagi/bin/darwin-aarch64/feagi" ]; then
+              SIZE=$(stat -f%z "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || echo "unknown")
+              echo "  ✓ Copied: darwin-aarch64/feagi ($SIZE bytes)"
+            else
+              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              COPY_FAILED=1
+            fi
           else
-            echo "ERROR: Missing darwin-aarch64/feagi"
-            MISSING=1
+            echo "  ✗ ERROR: Copy command failed for darwin-aarch64/feagi"
+            COPY_FAILED=1
           fi
           
-          if [ -f "../binaries/feagi-windows-x86_64/feagi.exe" ]; then
-            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
-            echo "Copied: windows-x86_64/feagi.exe"
+          # Windows x86_64 - always copy, overwrite if exists
+          if cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe; then
+            if [ -f "feagi/bin/windows-x86_64/feagi.exe" ]; then
+              SIZE=$(stat -f%z "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || stat -c%s "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || echo "unknown")
+              echo "  ✓ Copied: windows-x86_64/feagi.exe ($SIZE bytes)"
+            else
+              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              COPY_FAILED=1
+            fi
           else
-            echo "ERROR: Missing windows-x86_64/feagi.exe"
-            MISSING=1
+            echo "  ✗ ERROR: Copy command failed for windows-x86_64/feagi.exe"
+            COPY_FAILED=1
           fi
           
-          if [ $MISSING -eq 1 ]; then
-            echo "ERROR: One or more binaries are missing!"
+          if [ $COPY_FAILED -eq 1 ]; then
+            echo ""
+            echo "ERROR: One or more binary copies failed!"
+            echo "Verifying what was actually copied:"
+            find feagi/bin -type f -exec ls -lh {} \;
             exit 1
           fi
           
@@ -446,7 +528,11 @@ jobs:
           echo "Verifying all binaries exist:"
           for dir in feagi/bin/*/; do
             echo "  $dir: $(ls -1 $dir | wc -l) file(s)"
+            ls -lh "$dir"
           done
+          echo ""
+          echo "Full directory tree:"
+          tree feagi/bin/ 2>/dev/null || find feagi/bin -type f -exec ls -lh {} \;
       
       - name: Commit changes
         shell: bash
@@ -461,16 +547,66 @@ jobs:
           echo "Git status before adding:"
           git status --short feagi/bin/ || echo "No status for feagi/bin"
           
-          # Force add binary files (in case they're in .gitignore)
-          echo "Force adding binaries..."
-          git add -f feagi/bin/linux-x86_64/feagi || echo "Failed to add linux-x86_64"
-          git add -f feagi/bin/linux-aarch64/feagi || echo "Failed to add linux-aarch64"
-          git add -f feagi/bin/darwin-x86_64/feagi || echo "Failed to add darwin-x86_64"
-          git add -f feagi/bin/darwin-aarch64/feagi || echo "Failed to add darwin-aarch64"
-          git add -f feagi/bin/windows-x86_64/feagi.exe || echo "Failed to add windows-x86_64"
+          # Ensure directories exist in git (create .gitkeep if needed)
+          for dir in feagi/bin/linux-x86_64 feagi/bin/linux-aarch64 feagi/bin/darwin-x86_64 feagi/bin/darwin-aarch64 feagi/bin/windows-x86_64; do
+            if [ ! -d "$dir" ]; then
+              mkdir -p "$dir"
+            fi
+            # Ensure directory is tracked (git add on empty dir does nothing, but we have files)
+            git add -N "$dir" 2>/dev/null || true
+          done
           
-          # Also add directories to ensure structure is tracked
-          git add feagi/bin/ || echo "Failed to add feagi/bin directory"
+          # Force add binary files (in case they're in .gitignore)
+          echo "Force adding binaries to git..."
+          ADD_FAILED=0
+          
+          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+            if [ ! -f "$file" ]; then
+              echo "  ✗ ERROR: File does not exist: $file"
+              ADD_FAILED=1
+              continue
+            fi
+            
+            if git add -f "$file"; then
+              # Verify it's actually staged
+              if git diff --staged --name-only | grep -q "^$file$"; then
+                SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "unknown")
+                echo "  ✓ Added and staged: $file ($SIZE bytes)"
+              else
+                echo "  ✗ ERROR: File added but not in staged list: $file"
+                ADD_FAILED=1
+              fi
+            else
+              echo "  ✗ ERROR: git add failed for: $file"
+              ADD_FAILED=1
+            fi
+          done
+          
+          if [ $ADD_FAILED -eq 1 ]; then
+            echo ""
+            echo "ERROR: Failed to add one or more binaries to git!"
+            echo "Staged files:"
+            git diff --staged --name-only
+            exit 1
+          fi
+          
+          # Also add the entire bin directory structure to ensure it's tracked
+          if ! git add -f feagi/bin/; then
+            echo "WARNING: Failed to add feagi/bin/ directory, but individual files were added"
+          fi
+          
+          # Final verification: all 5 files must be staged
+          echo ""
+          echo "Final verification - all binaries must be staged:"
+          STAGED_COUNT=$(git diff --staged --name-only | grep -c "^feagi/bin/.*/feagi" || echo "0")
+          if [ "$STAGED_COUNT" -lt 5 ]; then
+            echo "  ✗ ERROR: Only $STAGED_COUNT binaries staged, expected 5!"
+            echo "Staged files:"
+            git diff --staged --name-only | grep "^feagi/bin"
+            exit 1
+          else
+            echo "  ✓ All 5 binaries are staged"
+          fi
           
           # Show what's staged
           echo ""
@@ -492,38 +628,26 @@ jobs:
           git fetch origin main:main 2>/dev/null || true
           git diff main --name-status feagi/bin/ || echo "No differences with main"
           
-          # Check if there are changes
-          if git diff --staged --quiet; then
-            echo "WARNING: No changes staged - checking if binaries differ from main..."
-            # Check if binaries exist in main
-            if git show main:feagi/bin/linux-x86_64/feagi > /dev/null 2>&1; then
-              echo "Binaries exist in main - comparing..."
-              for bin in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-                if [ -f "$bin" ]; then
-                  if git show main:"$bin" > /tmp/main_bin 2>/dev/null; then
-                    if cmp -s "$bin" /tmp/main_bin; then
-                      echo "  $bin: IDENTICAL to main"
-                    else
-                      echo "  $bin: DIFFERENT from main"
-                      git add -f "$bin"
-                    fi
-                  else
-                    echo "  $bin: NOT in main - adding"
-                    git add -f "$bin"
-                  fi
-                fi
-              done
-            else
-              echo "Binaries don't exist in main - all should be added"
-              git add -f feagi/bin/
-            fi
-            
-            # Check again
-            if git diff --staged --quiet; then
-              echo "No changes to commit (all binaries identical to main)"
-              exit 0
-            fi
+          # CRITICAL: Verify we have files staged before committing
+          STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || true)
+          STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
+          
+          if [ "$STAGED_COUNT" -eq 0 ]; then
+            echo "ERROR: No files staged for commit!"
+            echo "This should never happen - we just added 5 binaries"
+            echo "Git status:"
+            git status
+            exit 1
           fi
+          
+          if [ "$STAGED_COUNT" -lt 5 ]; then
+            echo "ERROR: Only $STAGED_COUNT files staged, expected 5!"
+            echo "Staged files:"
+            echo "$STAGED_FILES"
+            exit 1
+          fi
+          
+          echo "✓ Verified: $STAGED_COUNT files staged (all 5 binaries)"
           
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             COMMIT_MSG="chore: update FEAGI binaries (manual trigger)
@@ -541,8 +665,64 @@ jobs:
           - Triggered by: PR #${{ github.event.pull_request.number }}"
           fi
           
-          git commit -m "$COMMIT_MSG"
+          # Commit with explicit verification
+          if ! git commit -m "$COMMIT_MSG"; then
+            echo "ERROR: git commit failed!"
+            echo "Staged files:"
+            git diff --staged --name-only
+            exit 1
+          fi
+          
           echo "Changes committed"
+          
+          # CRITICAL: Verify what's in the commit - fail if any binary is missing
+          echo ""
+          echo "=== COMMIT VERIFICATION ==="
+          echo "Commit SHA: $(git rev-parse HEAD)"
+          echo ""
+          echo "Files in the commit:"
+          git show --name-status --oneline HEAD
+          echo ""
+          echo "All files in commit (full paths):"
+          COMMIT_FILES=$(git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "")
+          if [ -z "$COMMIT_FILES" ]; then
+            echo "ERROR: No feagi/bin files in commit!"
+            echo "This is a critical failure - the commit is empty or files are missing!"
+            exit 1
+          fi
+          echo "$COMMIT_FILES"
+          echo ""
+          
+          # Verify each binary individually
+          echo "Binary file verification in commit:"
+          ALL_PRESENT=1
+          COMMIT_COUNT=0
+          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+            if git cat-file -e HEAD:"$file" 2>/dev/null; then
+              SIZE=$(git cat-file -s HEAD:"$file")
+              echo "  ✓ $file: $SIZE bytes ($(numfmt --to=iec-i --suffix=B $SIZE 2>/dev/null || echo "$SIZE bytes"))"
+              COMMIT_COUNT=$((COMMIT_COUNT + 1))
+            else
+              echo "  ✗ $file: NOT IN COMMIT!"
+              ALL_PRESENT=0
+            fi
+          done
+          echo ""
+          
+          if [ $ALL_PRESENT -eq 0 ] || [ $COMMIT_COUNT -ne 5 ]; then
+            echo "ERROR: Not all binaries are in the commit!"
+            echo "Expected 5 binaries, found $COMMIT_COUNT"
+            echo "Commit contents:"
+            git ls-tree -r HEAD --name-only | grep "^feagi/bin"
+            exit 1
+          fi
+          
+          echo "✓ All 5 binaries verified in commit"
+          
+          # Show directory structure in commit
+          echo ""
+          echo "Directory structure in commit:"
+          git ls-tree -r HEAD --name-only | grep "^feagi/bin" | sed 's|^feagi/bin/||' | sort
       
       - name: Push branch
         shell: bash
@@ -550,6 +730,14 @@ jobs:
           cd public-repo
           git push origin ${{ steps.branch_name.outputs.branch_name }}
           echo "Branch pushed"
+          
+          # Verify what was pushed
+          echo ""
+          echo "Verifying pushed branch contents:"
+          git ls-remote --heads origin ${{ steps.branch_name.outputs.branch_name }} || echo "Branch not found on remote"
+          echo ""
+          echo "Files in pushed branch:"
+          git ls-tree -r origin/${{ steps.branch_name.outputs.branch_name }} --name-only | grep "feagi/bin" || echo "No feagi/bin files in pushed branch!"
       
       - name: Verify branch exists before creating PR
         shell: bash
@@ -564,6 +752,53 @@ jobs:
             echo "ERROR: Branch ${{ steps.branch_name.outputs.branch_name }} not found on remote!"
             exit 1
           fi
+          
+          # CRITICAL: Verify files are actually in the pushed branch
+          echo ""
+          echo "=== VERIFYING FILES IN PUSHED BRANCH ==="
+          git fetch origin ${{ steps.branch_name.outputs.branch_name }}:${{ steps.branch_name.outputs.branch_name }} 2>/dev/null || true
+          git checkout ${{ steps.branch_name.outputs.branch_name }}
+          
+          echo ""
+          echo "Files on disk in pushed branch:"
+          find feagi/bin -type f -exec ls -lh {} \; || echo "ERROR: feagi/bin directory not found!"
+          
+          echo ""
+          echo "Files in git tree of pushed branch:"
+          git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "ERROR: No feagi/bin files in git tree!"
+          
+          echo ""
+          echo "Verifying each binary exists in pushed branch:"
+          ALL_PRESENT=1
+          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+            if [ -f "$file" ]; then
+              SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "unknown")
+              if git cat-file -e HEAD:"$file" 2>/dev/null; then
+                GIT_SIZE=$(git cat-file -s HEAD:"$file")
+                echo "  ✓ $file: exists on disk ($SIZE bytes), in git ($GIT_SIZE bytes)"
+              else
+                echo "  ✗ $file: exists on disk ($SIZE bytes) but NOT in git!"
+                ALL_PRESENT=0
+              fi
+            else
+              echo "  ✗ $file: MISSING on disk!"
+              ALL_PRESENT=0
+            fi
+          done
+          
+          if [ $ALL_PRESENT -eq 0 ]; then
+            echo ""
+            echo "ERROR: Not all binaries are present in the pushed branch!"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✓ All 5 binaries verified in pushed branch"
+          
+          # Show the actual directory structure
+          echo ""
+          echo "Final directory structure:"
+          tree feagi/bin/ 2>/dev/null || find feagi/bin -type f -exec echo {} \;
       
       - name: Create Pull Request
         id: create_pr
