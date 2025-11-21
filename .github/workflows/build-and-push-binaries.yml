@@ -261,23 +261,25 @@ jobs:
     if: success()
     
     steps:
-      - name: Checkout source branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.source_branch || 'main' }}
-          fetch-depth: 0
-      
       - name: Determine source commit
         id: source_info
         shell: bash
         run: |
+          # Get source info from workflow inputs or GitHub context
+          # No need to checkout the repo - we only need metadata for commit messages/PR descriptions
           if [ -n "${{ github.event.inputs.source_sha }}" ]; then
             SOURCE_SHA="${{ github.event.inputs.source_sha }}"
           else
             SOURCE_SHA="${{ github.sha }}"
           fi
           
-          SOURCE_BRANCH="${{ github.event.inputs.source_branch || 'main' }}"
+          if [ -n "${{ github.event.inputs.source_branch }}" ]; then
+            SOURCE_BRANCH="${{ github.event.inputs.source_branch }}"
+          elif [ -n "${{ github.ref_name }}" ]; then
+            SOURCE_BRANCH="${{ github.ref_name }}"
+          else
+            SOURCE_BRANCH="main"
+          fi
           
           echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
           echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
@@ -338,7 +340,18 @@ jobs:
       - name: Inspect public repo structure
         shell: bash
         run: |
-          cd public-repo
+          # Verify public-repo directory exists (from checkout step)
+          if [ ! -d "public-repo" ]; then
+            echo "ERROR: public-repo directory not found!"
+            echo "The checkout step may have failed. Check the previous step logs."
+            exit 1
+          fi
+          
+          cd public-repo || {
+            echo "ERROR: Failed to change directory to public-repo"
+            exit 1
+          }
+          
           echo "=== PUBLIC REPO STRUCTURE ==="
           echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
           echo "Current commit: $(git rev-parse HEAD)"
@@ -361,16 +374,21 @@ jobs:
               echo "Files in git (current branch):"
               git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "No feagi/bin files in git"
             else
-              echo "✗ feagi/bin/ does not exist"
+              echo "⚠ WARNING: feagi/bin/ does not exist - will be created during binary copy step"
+              echo "This is expected if this is the first time binaries are being added."
             fi
           else
-            echo "✗ feagi/ does not exist - will be created"
+            echo "⚠ WARNING: feagi/ does not exist - will be created during binary copy step"
+            echo "This is expected if this is the first time binaries are being added."
           fi
           echo ""
           echo "Checking .gitignore:"
           if [ -f ".gitignore" ]; then
+            echo ".gitignore exists"
             echo ".gitignore contents related to binaries:"
-            grep -i "bin\|feagi\|\.exe" .gitignore || echo "No binary-related ignores"
+            grep -i "bin\|feagi\|\.exe" .gitignore || echo "No binary-related ignores found"
+          else
+            echo "⚠ WARNING: .gitignore does not exist"
           fi
       
       - name: Create branch name
@@ -1067,51 +1085,73 @@ jobs:
           echo ""
           echo "Proceeding with PR creation..."
       
+      - name: Setup GitHub CLI
+        shell: bash
+        run: |
+          gh auth login --with-token <<< "${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}"
+      
       - name: Create Pull Request
         id: create_pr
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
-          path: public-repo
-          branch: ${{ steps.branch_name.outputs.branch_name }}
-          base: staging
-          delete-branch: false
-          # NOTE: Do not use commit-message parameter here. The branch already has
-          # a commit with binaries. Using commit-message would cause the action to
-          # create a new commit, potentially without the binaries if they're not
-          # in the working directory at that moment.
-          title: "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}"
-          body: |
-            ## Automated Binary Update
-            
-            This PR updates FEAGI binaries built from the `main` branch of feagi-rust.
-            
-            ### Included Binaries
-            - Linux x86_64 (`feagi/bin/linux-x86_64/feagi`)
-            - Linux ARM64 (`feagi/bin/linux-aarch64/feagi`)
-            - macOS Intel (`feagi/bin/darwin-x86_64/feagi`)
-            - macOS Apple Silicon (`feagi/bin/darwin-aarch64/feagi`)
-            - Windows x86_64 (`feagi/bin/windows-x86_64/feagi.exe`)
-            
-            ### Details
-            - **Source Commit**: `${{ steps.source_info.outputs.source_sha }}`
-            - **Source Repo**: `${{ github.repository }}`
-            - **Source Branch**: `${{ steps.source_info.outputs.source_branch }}`
-            - **Trigger**: ${{ github.event_name == 'workflow_dispatch' && 'Manual workflow dispatch' || format('PR #{0}', github.event.pull_request.number) }}
-            
-            ### Verification
-            All 5 binaries have been verified to exist in this branch.
-            Please verify before merging:
-            1. Check that all platform binaries are present in the file tree
-            2. Verify binary sizes are reasonable
-            3. Test on at least one platform if possible
-            
-            ---
-            *This PR was automatically created by GitHub Actions*
-          labels: |
-            automated
-            binaries
-          draft: false
+        shell: bash
+        run: |
+          # Create PR using GitHub CLI - this creates PR from existing remote branch
+          # without needing to checkout, preserving all commits and binaries
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TRIGGER_INFO="Manual workflow dispatch"
+          else
+            TRIGGER_INFO="PR #${{ github.event.pull_request.number }}"
+          fi
+          
+          # Create PR body in a temporary file for reliable multi-line handling
+          cat > /tmp/pr_body.md << EOF
+          ## Automated Binary Update
+          
+          This PR updates FEAGI binaries built from the \`main\` branch of feagi-rust.
+          
+          ### Included Binaries
+          - Linux x86_64 (\`feagi/bin/linux-x86_64/feagi\`)
+          - Linux ARM64 (\`feagi/bin/linux-aarch64/feagi\`)
+          - macOS Intel (\`feagi/bin/darwin-x86_64/feagi\`)
+          - macOS Apple Silicon (\`feagi/bin/darwin-aarch64/feagi\`)
+          - Windows x86_64 (\`feagi/bin/windows-x86_64/feagi.exe\`)
+          
+          ### Details
+          - **Source Commit**: \`${{ steps.source_info.outputs.source_sha }}\`
+          - **Source Repo**: \`${{ github.repository }}\`
+          - **Source Branch**: \`${{ steps.source_info.outputs.source_branch }}\`
+          - **Trigger**: $TRIGGER_INFO
+          
+          ### Verification
+          All 5 binaries have been verified to exist in this branch.
+          Please verify before merging:
+          1. Check that all platform binaries are present in the file tree
+          2. Verify binary sizes are reasonable
+          3. Test on at least one platform if possible
+          
+          ---
+          *This PR was automatically created by GitHub Actions*
+          EOF
+          
+          PR_OUTPUT=$(gh pr create \
+            --repo feagi/feagi \
+            --base staging \
+            --head ${{ steps.branch_name.outputs.branch_name }} \
+            --title "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}" \
+            --body-file /tmp/pr_body.md \
+            --label automated,binaries \
+            --json number,url) || exit 1
+          
+          PR_NUMBER=$(echo "$PR_OUTPUT" | jq -r '.number')
+          PR_URL=$(echo "$PR_OUTPUT" | jq -r '.url')
+          
+          echo "pull-request-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pull-request-url=$PR_URL" >> $GITHUB_OUTPUT
+          
+          echo "PR created successfully:"
+          echo "  PR Number: $PR_NUMBER"
+          echo "  PR URL: $PR_URL"
+        env:
+          GH_TOKEN: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
       
       - name: Output PR information
         shell: bash
