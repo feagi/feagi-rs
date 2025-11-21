@@ -1177,14 +1177,13 @@ jobs:
           *This PR was automatically created by GitHub Actions*
           EOF
           
-          # Create PR - gh pr create outputs the PR URL on success
+          # Create PR first without labels (labels may not exist in repo)
           PR_OUTPUT=$(gh pr create \
             --repo feagi/feagi \
             --base staging \
             --head ${{ steps.branch_name.outputs.branch_name }} \
             --title "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}" \
-            --body-file /tmp/pr_body.md \
-            --label automated,binaries) || exit 1
+            --body-file /tmp/pr_body.md) || exit 1
           
           # Parse PR URL from output (format: https://github.com/feagi/feagi/pull/123)
           PR_URL=$(echo "$PR_OUTPUT" | grep -o 'https://github.com/[^ ]*' | head -1)
@@ -1203,12 +1202,23 @@ jobs:
             exit 1
           fi
           
-          echo "pull-request-number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "pull-request-url=$PR_URL" >> $GITHUB_OUTPUT
-          
           echo "PR created successfully:"
           echo "  PR Number: $PR_NUMBER"
           echo "  PR URL: $PR_URL"
+          
+          # Try to add labels (non-blocking - labels may not exist)
+          echo ""
+          echo "Attempting to add labels..."
+          if gh pr edit "$PR_NUMBER" --repo feagi/feagi --add-label "automated,binaries" 2>/dev/null; then
+            echo "  ✓ Labels added successfully"
+          else
+            echo "  ⚠ WARNING: Could not add labels (they may not exist in the repository)"
+            echo "  This is not a critical error - PR was created successfully"
+            echo "  You can add labels manually: automated, binaries"
+          fi
+          
+          echo "pull-request-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pull-request-url=$PR_URL" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
       
