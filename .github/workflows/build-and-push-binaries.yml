@@ -1081,7 +1081,52 @@ jobs:
             exit 1
           fi
           
-          echo "✓ All 5 binaries verified in branch"
+          echo ""
+          echo "=== VERIFYING FILES ARE ACTUALLY IN COMMIT (not just staged) ==="
+          COMMIT_SHA=$(git rev-parse HEAD)
+          ALL_IN_COMMIT=1
+          
+          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
+            # Check if file exists in commit using git cat-file
+            if git cat-file -e HEAD:"$file" 2>/dev/null; then
+              FILE_SIZE=$(git cat-file -s HEAD:"$file")
+              FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
+              echo "  ✓ $file: $FILE_SIZE bytes (~${FILE_SIZE_MB} MB) - IN COMMIT"
+              
+              # Check file size limit (GitHub has 100MB limit per file)
+              if [ "$FILE_SIZE" -gt 104857600 ]; then
+                echo "    ⚠ WARNING: File exceeds GitHub's 100MB limit!"
+                ALL_IN_COMMIT=0
+              fi
+              
+              # Verify we can actually extract the file
+              if git cat-file blob HEAD:"$file" > /dev/null 2>&1; then
+                echo "    ✓ File is accessible via git cat-file"
+              else
+                echo "    ✗ ERROR: File cannot be extracted from commit!"
+                ALL_IN_COMMIT=0
+              fi
+            else
+              echo "  ✗ $file: NOT IN COMMIT!"
+              ALL_IN_COMMIT=0
+            fi
+          done
+          
+          if [ $ALL_IN_COMMIT -eq 0 ]; then
+            echo ""
+            echo "ERROR: Not all binaries are properly committed!"
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== GITHUB UI NOTE ==="
+          echo "GitHub's web UI may not display binary files in the tree view."
+          echo "However, the files ARE in the commit and can be accessed via:"
+          echo "  - Direct file URL: https://github.com/feagi/feagi/blob/${{ steps.branch_name.outputs.branch_name }}/feagi/bin/PLATFORM/feagi"
+          echo "  - Git clone: git clone -b ${{ steps.branch_name.outputs.branch_name }} https://github.com/feagi/feagi.git"
+          echo "  - PR file changes tab will show them as added/modified"
+          echo ""
+          echo "✓ All 5 binaries verified in commit and accessible"
           echo ""
           echo "Proceeding with PR creation..."
       
