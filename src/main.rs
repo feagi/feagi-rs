@@ -29,6 +29,7 @@ use feagi_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::impls::AgentServiceImpl;
+use feagi_services::types::LoadGenomeParams;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_observability::{parse_debug_flags, init_logging_default};
 use feagi_pns::PNS;
@@ -345,93 +346,30 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     })
 }
 
-/// Load and develop a genome
-async fn load_genome(
-    manager: &Arc<RwLock<ConnectomeManager>>,
-    genome_path: &PathBuf,
-) -> Result<()> {
-    use feagi_evo::{load_genome_from_file, validate_genome};
-    
-    // Load genome from file
-    let genome = load_genome_from_file(genome_path)
-        .context("Failed to load genome file")?;
-    
-    // Validate genome
-    let validation = validate_genome(&genome);
-    if !validation.errors.is_empty() {
-        error!("Genome validation errors:");
-        for error in &validation.errors {
-            error!("  - {}", error);
-        }
-        return Err(anyhow::anyhow!("Genome validation failed"));
-    }
-    
-    if !validation.warnings.is_empty() {
-        warn!("Genome validation warnings:");
-        for warning in &validation.warnings {
-            warn!("  - {}", warning);
-        }
-    }
-    
-    // Load genome into connectome (includes neuroembryogenesis)
-    // CRITICAL: Don't hold write lock during entire operation - neuroembryogenesis
-    // manages its own fine-grained locks. This prevents blocking analytics reads.
-    let result = {
-        // Acquire write lock only for prepare/resize operations
-        let mut mgr = manager.write();
-        mgr.prepare_for_new_genome()
-            .context("Failed to prepare for new genome")?;
-        
-        // Resize if needed (requires write lock)
-        mgr.resize_for_genome(&genome)
-            .context("Failed to resize for genome")?;
-        
-        // Release write lock before long-running neuroembryogenesis
-        drop(mgr);
-        
-        // Now develop genome (will acquire its own fine-grained locks)
-        use feagi_bdu::neuroembryogenesis::Neuroembryogenesis;
-        let mut neuro = Neuroembryogenesis::new(manager.clone());
-        neuro.develop_from_genome(&genome)
-            .context("Failed to develop brain from genome")?;
-        
-        neuro.get_progress()
-    };
-    
-    info!("    [GENOME-LOAD] Neuroembryogenesis complete: {} neurons, {} synapses", 
-          result.neurons_created, result.synapses_created);
-    
-    Ok(())
-}
-
 /// Load genome and notify PNS for dynamic gating
 /// Returns the genome's simulation_timestep (in seconds) if available
 async fn load_genome_with_pns(
-    manager: &Arc<RwLock<ConnectomeManager>>,
+    genome_service: &Arc<GenomeServiceImpl>,
     pns: &Arc<PNS>,
     genome_path: &PathBuf,
 ) -> Result<Option<f64>> {
-    info!("    [GENOME-LOAD] Step 1: Loading genome file...");
+    info!("    [GENOME-LOAD] Step 1: Reading genome file...");
     
-    // Load genome file to extract simulation_timestep
-    use feagi_evo::{load_genome_from_file};
-    let genome = load_genome_from_file(genome_path)
-        .context("Failed to load genome file")?;
+    // Read genome file to JSON string
+    let json_str = std::fs::read_to_string(genome_path)
+        .context("Failed to read genome file")?;
     
-    let simulation_timestep = genome.physiology.simulation_timestep;
-    info!("    [GENOME-LOAD] Genome specifies simulation_timestep: {}s ({:.0}Hz)", 
-          simulation_timestep, 1.0 / simulation_timestep);
+    info!("    [GENOME-LOAD] Step 2: Loading genome via GenomeService...");
     
-    // Load genome into connectome
-    match load_genome(manager, genome_path).await {
-        Ok(_) => {
-            info!("    [GENOME-LOAD] Step 2: Genome loaded successfully");
-        }
-        Err(e) => {
-            error!("    [GENOME-LOAD] ✗ Failed at Step 2 (load_genome): {}", e);
-            return Err(e);
-        }
-    }
+    // Use GenomeService::load_genome which properly stores RuntimeGenome
+    let genome_info = genome_service.load_genome(LoadGenomeParams {
+        json_str,
+    }).await
+        .map_err(|e| anyhow::anyhow!("Failed to load genome: {}", e))?;
+    
+    let simulation_timestep = genome_info.simulation_timestep;
+    info!("    [GENOME-LOAD] Genome loaded: {} cortical areas, {}s timestep ({:.0}Hz)", 
+          genome_info.cortical_area_count, simulation_timestep, 1.0 / simulation_timestep);
     
     info!("    [GENOME-LOAD] Step 3: Notifying PNS (triggers dynamic stream evaluation)...");
     // Notify PNS that genome is loaded (triggers stream evaluation)
@@ -467,7 +405,7 @@ async fn start_services(
         }
     });
 
-    // Create remaining services
+    // Create genome service FIRST (needed for genome loading at startup)
     info!("  Creating service layer...");
     
     // Get parameter queue from burst runner for async parameter updates
@@ -477,6 +415,41 @@ async fn start_services(
         Arc::clone(&components.connectome_manager),
         parameter_queue,
     ));
+    info!("    ✓ Genome service created (with RuntimeGenome storage)");
+    
+    // Load genome BEFORE starting other services (so RuntimeGenome is stored)
+    // This must happen after burst engine is started but before API server
+    if let Some(genome_path) = &args.genome {
+        info!("  Loading genome from: {}", genome_path.display());
+        match load_genome_with_pns(&genome_service, &components.pns, genome_path).await {
+            Ok(Some(genome_timestep)) => {
+                info!("    ✓ Genome loaded via GenomeService (RuntimeGenome stored)");
+                info!("    ✓ Dynamic stream evaluation triggered");
+                
+                // Update burst frequency to match genome's simulation_timestep
+                let new_freq = 1.0 / genome_timestep;
+                info!("    ✓ Updating burst frequency from genome: {}Hz ({}s timestep)", 
+                      new_freq, genome_timestep);
+                components.burst_runner.write().set_frequency(new_freq);
+                info!("    ✓ Burst frequency updated successfully");
+            }
+            Ok(None) => {
+                info!("    ✓ Genome loaded (using config burst frequency)");
+                info!("    ✓ Dynamic stream evaluation triggered");
+            }
+            Err(e) => {
+                error!("    ✗ Failed to load genome: {}", e);
+                error!("    ✗ FEAGI will continue without genome (no data streams will start)");
+                error!("    ✗ You can load a genome later via the REST API");
+                // Don't fail startup - allow FEAGI to run without genome
+            }
+        }
+    } else {
+        info!("  No genome specified, starting with empty connectome");
+        info!("    ⚠️  Data streams will not start until genome is loaded");
+    }
+    
+    // Now create remaining services
     let connectome_service = Arc::new(ConnectomeServiceImpl::new(
         Arc::clone(&components.connectome_manager)
     ));
@@ -563,37 +536,6 @@ async fn start_services(
     info!("  Connecting NPU to PNS sensory stream...");
     components.pns.connect_npu_to_sensory_stream(Arc::clone(&components.npu));
     info!("    ✓ NPU connected to sensory stream");
-    
-    // Load genome AFTER burst engine is running (so neuroembryogenesis can complete)
-    if let Some(genome_path) = &args.genome {
-        info!("  Loading genome from: {}", genome_path.display());
-        match load_genome_with_pns(&components.connectome_manager, &components.pns, genome_path).await {
-            Ok(Some(genome_timestep)) => {
-                info!("    ✓ Genome loaded and brain developed");
-                info!("    ✓ Dynamic stream evaluation triggered");
-                
-                // Update burst frequency to match genome's simulation_timestep
-                let new_freq = 1.0 / genome_timestep;
-                info!("    ✓ Updating burst frequency from genome: {}Hz ({}s timestep)", 
-                      new_freq, genome_timestep);
-                components.burst_runner.write().set_frequency(new_freq);
-                info!("    ✓ Burst frequency updated successfully");
-            }
-            Ok(None) => {
-                info!("    ✓ Genome loaded (using config burst frequency)");
-                info!("    ✓ Dynamic stream evaluation triggered");
-            }
-            Err(e) => {
-                error!("    ✗ Failed to load genome: {}", e);
-                error!("    ✗ FEAGI will continue without genome (no data streams will start)");
-                error!("    ✗ You can load a genome later via the REST API");
-                // Don't fail startup - allow FEAGI to run without genome
-            }
-        }
-    } else {
-        info!("  No genome specified, starting with empty connectome");
-        info!("    ⚠️  Data streams will not start until genome is loaded");
-    }
 
     // Data streams start DYNAMICALLY based on:
     // 1. Genome loaded (NPU has neurons)
