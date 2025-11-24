@@ -66,9 +66,9 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     
     let mut pns_config = PNSConfig::default();
     pns_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
-    pns_config.zmq_motor_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_motor_port);
-    pns_config.zmq_viz_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_visualization_port);
-    pns_config.zmq_sensory_address = format!("tcp://0.0.0.0:{}", config.ports.zmq_sensory_port);
+    pns_config.zmq_motor_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port);
+    pns_config.zmq_viz_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_visualization_port);
+    pns_config.zmq_sensory_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_sensory_port);
     
     // Load WebSocket configuration
     pns_config.websocket.enabled = config.websocket.enabled;

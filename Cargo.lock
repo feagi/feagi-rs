@@ -241,6 +241,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -939,6 +945,7 @@ dependencies = [
  "feagi-evo",
  "feagi-observability",
  "feagi-types",
+ "feagi_data_structures",
  "ndarray",
  "once_cell",
  "parking_lot",
@@ -1004,6 +1011,7 @@ dependencies = [
  "chrono",
  "feagi-observability",
  "feagi-types",
+ "feagi_data_structures",
  "rand",
  "serde",
  "serde_json",
@@ -1079,6 +1087,7 @@ dependencies = [
  "feagi-observability",
  "feagi-pns",
  "feagi-types",
+ "feagi_data_structures",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1137,9 +1146,9 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_serialization"
-version = "0.0.50-beta.50"
+version = "0.0.50-beta.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63913521f21370c29f7b4833e23579c3da0d72f256e55ceb58723d737211b666"
+checksum = "09c74d161efe0a2d7acd82f5ee302806c2be4f56bd5e1f22f885780b85fa63d0"
 dependencies = [
  "byteorder",
  "feagi_data_structures",
@@ -1148,11 +1157,13 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_structures"
-version = "0.0.50-beta.50"
+version = "0.0.50-beta.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02802388fb209b3eda782c29165cc4ca6dd2325a1cedcb88538243587e6e3801"
+checksum = "e6807a6ddbc431c787437b91b8547e2e3162eb83d95e71ca20eb778148ddff9d"
 dependencies = [
+ "base64 0.22.1",
  "ndarray",
+ "paste",
  "rayon",
  "serde_json",
 ]
@@ -2652,7 +2663,7 @@ version = "0.11.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd67538700a17451e7cba03ac727fb961abb7607553461627b97de0b89cf4a62"
 dependencies = [
- "base64",
+ "base64 0.21.7",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -2761,7 +2772,7 @@ version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
 dependencies = [
- "base64",
+ "base64 0.21.7",
 ]
 
 [[package]]
