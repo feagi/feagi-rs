@@ -481,6 +481,14 @@ async fn start_services(
     let snapshot_dir = std::path::PathBuf::from("./snapshots");
     let snapshot_service = Arc::new(feagi_services::SnapshotServiceImpl::new(snapshot_dir));
     
+    // Get FEAGI session timestamp (when this instance started)
+    let feagi_session_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    
+    info!("    ✓ FEAGI session timestamp: {}", feagi_session_timestamp);
+    
     let api_state = ApiState {
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
         genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
@@ -489,6 +497,7 @@ async fn start_services(
         runtime_service: components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
         neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
+        feagi_session_timestamp,
     };
 
     // Start PNS control streams FIRST (this wires the dynamic gating callbacks)
