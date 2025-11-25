@@ -71,6 +71,7 @@ pub type VisualizationCallback = Box<dyn Fn(&RawFireQueueSnapshot) + Send + Sync
 /// - HTTP server runs on dedicated Tokio runtime
 pub struct FeagiInstance {
     components: Arc<Mutex<Option<FeagiComponents>>>,
+    #[allow(dead_code)]
     config: FeagiConfig,
     runtime: Arc<tokio::runtime::Runtime>,
     viz_callback: Arc<Mutex<Option<VisualizationCallback>>>,

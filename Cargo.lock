@@ -1149,9 +1149,9 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_serialization"
-version = "0.0.50-beta.52"
+version = "0.0.50-beta.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09c74d161efe0a2d7acd82f5ee302806c2be4f56bd5e1f22f885780b85fa63d0"
+checksum = "d00e9fd7f507bbeb4bb19d704d4000195ef79767936ff117cd64ac0be86deb22"
 dependencies = [
  "byteorder",
  "feagi_data_structures",
@@ -1160,14 +1160,15 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_structures"
-version = "0.0.50-beta.52"
+version = "0.0.50-beta.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6807a6ddbc431c787437b91b8547e2e3162eb83d95e71ca20eb778148ddff9d"
+checksum = "d6786f8221eb2a8203261414d727752fa96c868f5a1a1e98cf8c2d8de009f475"
 dependencies = [
  "base64 0.22.1",
  "ndarray",
  "paste",
  "rayon",
+ "serde",
  "serde_json",
 ]
 
