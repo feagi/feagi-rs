@@ -183,8 +183,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         "fp32" | "f32" => {
             info!("    Creating FP32 NPU (32-bit floating point, highest precision)");
             feagi_burst_engine::DynamicNPU::F32(feagi_burst_engine::RustNPU::new(
-                config.connectome.min_neuron_space,
-                config.connectome.min_synapse_space,
+                config.connectome.neuron_space,
+                config.connectome.synapse_space,
                 10, // fire_ledger_window
                 Some(&gpu_config),
             ))
@@ -192,8 +192,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         "int8" => {
             info!("    Creating INT8 NPU (8-bit integer, 42% memory reduction)");
             feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
-                config.connectome.min_neuron_space,
-                config.connectome.min_synapse_space,
+                config.connectome.neuron_space,
+                config.connectome.synapse_space,
                 10, // fire_ledger_window
                 Some(&gpu_config),
             ))
@@ -201,8 +201,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         _ => {
             warn!("    Unknown precision '{}', defaulting to INT8", precision);
             feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
-                config.connectome.min_neuron_space,
-                config.connectome.min_synapse_space,
+                config.connectome.neuron_space,
+                config.connectome.synapse_space,
                 10, // fire_ledger_window
                 Some(&gpu_config),
             ))
@@ -211,8 +211,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     
     info!("    ✓ NPU initialized with {} precision (capacity: {} neurons, {} synapses)",
           npu.lock().unwrap().precision_name(),
-          config.connectome.min_neuron_space,
-          config.connectome.min_synapse_space);
+          config.connectome.neuron_space,
+          config.connectome.synapse_space);
 
     // Initialize ConnectomeManager
     info!("  Initializing ConnectomeManager...");
@@ -637,7 +637,7 @@ fn log_config_summary(config: &FeagiConfig) {
     info!("    - Batch size: {}", config.neural.batch_size);
     info!("  Resources:");
     info!("    - GPU enabled: {}", config.resources.use_gpu);
-    info!("    - Max neurons: {}", config.connectome.min_neuron_space);
+    info!("    - Max neurons: {}", config.connectome.neuron_space);
 }
 
 /// Print FEAGI banner

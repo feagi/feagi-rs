@@ -908,6 +908,7 @@ name = "feagi-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.21.7",
  "chrono",
  "feagi-bdu",
  "feagi-burst-engine",
@@ -969,6 +970,7 @@ dependencies = [
  "feagi-connectome-serialization",
  "feagi-neural",
  "feagi-observability",
+ "feagi-state-manager",
  "feagi-synapse",
  "feagi-types",
  "feagi_data_serialization",
@@ -1060,6 +1062,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "crossbeam",
  "feagi-burst-engine",
  "feagi-transports",
@@ -1150,9 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_serialization"
-version = "0.0.50-beta.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b025c2c121e985a7fac15b68a7fecf2d36238f3afa0fe2947ccbc85d5f396e8d"
+version = "0.0.50-beta.56"
 dependencies = [
  "byteorder",
  "feagi_data_structures",
@@ -1161,9 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_structures"
-version = "0.0.50-beta.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdd460d1a044d3e8c611281cb8871f8dbd753dad1f964024a4b612fe4b9ba90c"
+version = "0.0.50-beta.56"
 dependencies = [
  "base64 0.22.1",
  "ndarray",

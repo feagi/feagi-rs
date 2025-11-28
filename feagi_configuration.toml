@@ -239,12 +239,6 @@ initial_membrane_potential = 0.0  # Initial membrane potential for memory neuron
 # - "design": Allocate memory based on percentage of max neurons (development/experimentation)
 mode = "inference"  # "inference" | "design"
 
-# Maximum neurons the system can theoretically support (hardware/memory limits)
-max_supported_neurons = 10000000  # 10M neurons maximum capacity
-
-# Design mode settings (when mode = "design")
-design_mode_allocation_percent = 80  # Use 80% of max_supported_neurons for memory allocation
-
 # Memory allocation multipliers for safety margins
 fcl_capacity_multiplier = 1.5        # FCL capacity = genome_neurons * 1.5 (for burst accumulation)
 fire_queue_capacity_multiplier = 1.2  # Fire Queue capacity = genome_neurons * 1.2 (for firing spikes)
@@ -253,6 +247,12 @@ memory_area_multiplier = 2.0          # Memory areas can expand beyond base geno
 # Performance tuning
 enable_preallocation = true           # Pre-allocate all arrays at genome load (Rust-compatible)
 enable_capacity_warnings = true       # Warn if approaching capacity limits during operation
+
+# Sleep Mode Configuration
+# Note: All sleep parameters (thresholds, frequencies, etc.) are defined in genome.json under physiology.sleep
+# This is the MASTER KILL SWITCH only - set to false to disable sleep globally
+[burst_engine.sleep]
+enabled = true  # Master enable/disable for sleep mode (all sleep params come from genome)
 
 # Hybrid CPU/GPU Processing Configuration
 [neural.hybrid]
@@ -264,18 +264,19 @@ keepalive_interval = 30.0  # Keep-alive interval in seconds
 auto_tune_threshold = false  # Automatically adjust threshold based on performance (experimental)
 
 [connectome]
-# Connectome sizing and memory allocation
-# These values determine the minimum reserved space for neurons and synapses
-# regardless of genome requirements
-min_neuron_space = 100000      # Minimum neuron slots to reserve (default safety margin)
-min_synapse_space = 500000     # Minimum synapse slots to reserve (default safety margin)
-min_memory_neuron_space = 50000 # Minimum memory neuron slots to reserve (separate SoA)
+# ============================================================================
+# NPU CAPACITY CONFIGURATION (SINGLE SOURCE OF TRUTH)
+# ============================================================================
+# These values define the MAXIMUM capacity allocated at NPU initialization.
+# There is NO dynamic growth - these ARE the hard limits.
+# If physical system memory is insufficient, FEAGI will exit with clear error.
+# ============================================================================
+neuron_space = 100000      # Neuron capacity (allocated at startup, fixed limit)
+synapse_space = 500000     # Synapse capacity (allocated at startup, fixed limit)
+memory_neuron_space = 50000 # Memory neuron capacity (separate SoA, allocated at startup, fixed limit)
 
-# Dynamic sizing policy:
-# - Read genome stats to determine actual neuron/synapse requirements
-# - Reserve 50% more than genome requirements OR the minimum values above (whichever is larger)
-# - This prevents memory waste while ensuring adequate space for growth
-buffer_multiplier = 1.5        # Reserve 50% more than genome requirements (1.5x = +50%)
+# DEPRECATED: buffer_multiplier is no longer used (capacity is fixed at initialization)
+# buffer_multiplier = 1.5
 
 # Memory system configuration
 memory_processing_batch_size = 100    # Process N memory areas per batch operation

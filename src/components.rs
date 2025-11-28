@@ -45,8 +45,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     
     // Default to INT8 quantization for embedded mode (memory efficient)
     let npu = Arc::new(Mutex::new(DynamicNPU::INT8(RustNPU::new(
-        config.connectome.min_neuron_space,
-        config.connectome.min_synapse_space,
+        config.connectome.neuron_space,
+        config.connectome.synapse_space,
         10, // fire_ledger_window
         Some(&gpu_config),
     ))));
