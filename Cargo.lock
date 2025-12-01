@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_serialization"
-version = "0.0.50-beta.56"
+version = "0.0.50-beta.57"
 dependencies = [
  "byteorder",
  "feagi_data_structures",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_structures"
-version = "0.0.50-beta.56"
+version = "0.0.50-beta.57"
 dependencies = [
  "base64 0.22.1",
  "ndarray",
