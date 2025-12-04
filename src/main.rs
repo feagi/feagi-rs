@@ -170,8 +170,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     // Initialize NPU with appropriate precision
     info!("  Initializing NPU with {} quantization...", precision.to_uppercase());
     
-    // Create GPU config from TOML settings
-    let gpu_config = GpuConfig {
+    // GPU config is available but not yet used in NPU initialization
+    let _gpu_config = GpuConfig {
         use_gpu: config.resources.use_gpu,
         hybrid_enabled: config.neural.hybrid.enabled,
         gpu_threshold: config.neural.hybrid.gpu_threshold,

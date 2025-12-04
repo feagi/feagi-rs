@@ -39,8 +39,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     
     info!("  Initializing NPU...");
     
-    // Create GPU config
-    let gpu_config = GpuConfig {
+    // GPU config is available but not yet used in NPU initialization
+    let _gpu_config = GpuConfig {
         use_gpu: config.resources.use_gpu,
         hybrid_enabled: config.neural.hybrid.enabled,
         gpu_threshold: config.neural.hybrid.gpu_threshold,
