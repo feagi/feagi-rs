@@ -179,38 +179,50 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     };
     
     // Create NPU based on quantization precision
+    use feagi_runtime_std::StdRuntime;
+    use feagi_burst_engine::backend::CPUBackend;
+    
+    let runtime = StdRuntime;
+    let backend = CPUBackend::new();
+    
     let npu = Arc::new(Mutex::new(match precision.as_str() {
         "fp32" | "f32" => {
             info!("    Creating FP32 NPU (32-bit floating point, highest precision)");
             feagi_burst_engine::DynamicNPU::F32(feagi_burst_engine::RustNPU::new(
+                runtime,
+                backend,
                 config.connectome.neuron_space,
                 config.connectome.synapse_space,
                 10, // fire_ledger_window
-                Some(&gpu_config),
-            ))
+            )?)
         },
         "int8" => {
             info!("    Creating INT8 NPU (8-bit integer, 42% memory reduction)");
             feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+                runtime,
+                backend,
                 config.connectome.neuron_space,
                 config.connectome.synapse_space,
                 10, // fire_ledger_window
-                Some(&gpu_config),
-            ))
+            )?)
         },
         _ => {
             warn!("    Unknown precision '{}', defaulting to INT8", precision);
             feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+                runtime,
+                backend,
                 config.connectome.neuron_space,
                 config.connectome.synapse_space,
                 10, // fire_ledger_window
-                Some(&gpu_config),
-            ))
+            )?)
         }
     }));
     
     info!("    ✓ NPU initialized with {} precision (capacity: {} neurons, {} synapses)",
-          npu.lock().unwrap().precision_name(),
+          match &*npu.lock().unwrap() {
+            feagi_burst_engine::DynamicNPU::F32(_) => "fp32",
+            feagi_burst_engine::DynamicNPU::INT8(_) => "int8",
+        },
           config.connectome.neuron_space,
           config.connectome.synapse_space);
 

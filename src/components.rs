@@ -33,6 +33,10 @@ pub struct FeagiComponents {
 /// 
 /// This function is adapted from main.rs initialization logic.
 pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> {
+    use feagi_neural::types::FeagiError;
+    use feagi_runtime_std::StdRuntime;
+    use feagi_burst_engine::backend::CPUBackend;
+    
     info!("  Initializing NPU...");
     
     // Create GPU config
@@ -44,12 +48,20 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     };
     
     // Default to INT8 quantization for embedded mode (memory efficient)
-    let npu = Arc::new(Mutex::new(DynamicNPU::INT8(RustNPU::new(
+    let runtime = StdRuntime;
+    let backend = CPUBackend::new();
+    
+    let npu_result = RustNPU::new(
+        runtime,
+        backend,
         config.connectome.neuron_space,
         config.connectome.synapse_space,
         10, // fire_ledger_window
-        Some(&gpu_config),
-    ))));
+    );
+    
+    let npu = Arc::new(Mutex::new(DynamicNPU::INT8(
+        npu_result.map_err(|e: FeagiError| anyhow::anyhow!("Failed to create NPU: {}", e))?
+    )));
     
     info!("    ✓ NPU initialized with INT8 quantization");
 
