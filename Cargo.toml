@@ -24,7 +24,7 @@ required-features = ["cli"]
 # FEAGI Core Components (from feagi-core workspace)
 # Note: feagi-types removed - functionality split into feagi-neural and feagi_data_structures
 feagi-neural = { path = "../feagi-core/crates/feagi-neural" }
-feagi_data_structures = { path = "../feagi-data-processing/feagi_data_structures" }
+feagi_data_structures = { path = "../feagi-core/crates/feagi_data_structures" }
 feagi-runtime = { path = "../feagi-core/crates/feagi-runtime" }
 feagi-runtime-std = { path = "../feagi-core/crates/feagi-runtime-std" }
 feagi-config = { path = "../feagi-core/crates/feagi-config" }

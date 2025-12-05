@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-api"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "axum",
  "base64 0.21.7",
@@ -826,7 +826,7 @@ dependencies = [
  "feagi-neural",
  "feagi-observability",
  "feagi_data_structures",
- "ndarray 0.16.1",
+ "ndarray",
  "once_cell",
  "parking_lot",
  "rand",
@@ -853,7 +853,7 @@ dependencies = [
  "feagi_data_serialization",
  "feagi_data_structures",
  "memmap2",
- "ndarray 0.16.1",
+ "ndarray",
  "parking_lot",
  "rayon",
  "serde_json",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_serialization"
-version = "0.0.50-beta.61"
+version = "2.0.0"
 dependencies = [
  "byteorder",
  "feagi_data_structures",
@@ -1038,14 +1038,15 @@ dependencies = [
 
 [[package]]
 name = "feagi_data_structures"
-version = "0.0.50-beta.61"
+version = "2.0.0"
 dependencies = [
  "base64 0.22.1",
- "ndarray 0.17.1",
+ "ndarray",
  "paste",
  "rayon",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -1799,22 +1800,6 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
-]
-
-[[package]]
-name = "ndarray"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c7c9125e8f6f10c9da3aad044cc918cf8784fa34de857b1aa68038eb05a50a9"
-dependencies = [
- "matrixmultiply",
- "num-complex",
- "num-integer",
- "num-traits",
- "portable-atomic",
- "portable-atomic-util",
- "rawpointer",
- "rayon",
 ]
 
 [[package]]
