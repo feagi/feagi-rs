@@ -174,6 +174,30 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     })
 }
 
+/// Wire GenomeService and ConnectomeService to RegistrationHandler
+/// 
+/// This is REQUIRED for the auto-creation of missing IPU/OPU cortical areas feature.
+/// All FEAGI embedders must call this function after creating services and before
+/// starting the HTTP API server.
+/// 
+/// # Arguments
+/// * `registration_handler` - The registration handler from PNS
+/// * `genome_service` - The genome service instance
+/// * `connectome_service` - The connectome service instance  
+/// * `auto_create_enabled` - Whether to auto-create missing cortical areas (from config)
+pub fn wire_registration_handler_services(
+    registration_handler: &Arc<parking_lot::Mutex<feagi_pns::RegistrationHandler>>,
+    genome_service: &Arc<dyn feagi_services::traits::GenomeService + Send + Sync>,
+    connectome_service: &Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>,
+    auto_create_enabled: bool,
+) {
+    let mut handler = registration_handler.lock();
+    handler.set_genome_service(Arc::clone(genome_service) as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>);
+    handler.set_connectome_service(Arc::clone(connectome_service) as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>);
+    handler.set_auto_create_missing_areas(auto_create_enabled);
+    info!("    ✓ RegistrationHandler services wired (GenomeService, ConnectomeService, auto-create: {})", auto_create_enabled);
+}
+
 /// Start HTTP API server
 /// 
 /// Spawns Axum server on Tokio runtime (non-blocking).
@@ -204,12 +228,32 @@ pub async fn start_http_server(
     let agent_registry = components.pns.get_agent_registry();
     let registration_handler = components.pns.get_registration_handler();
     
+    // Wire services to RegistrationHandler (required for auto-creation of missing cortical areas)
+    wire_registration_handler_services(
+        &registration_handler,
+        &(genome_service.clone() as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>),
+        &(connectome_service.clone() as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>),
+        config.agent.auto_create_missing_cortical_areas,
+    );
+    
     let mut agent_service_impl = AgentServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         agent_registry,
     );
     
-    agent_service_impl.set_registration_handler(registration_handler);
+    // Convert Arc<Mutex<RegistrationHandler>> to Arc<dyn RegistrationHandlerTrait>
+    use feagi_services::traits::registration_handler::RegistrationHandlerTrait;
+    
+    // Wrapper to convert Arc<Mutex<RegistrationHandler>> to trait object
+    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_pns::RegistrationHandler>>);
+    impl RegistrationHandlerTrait for RegistrationHandlerWrapper {
+        fn process_registration(&self, request: feagi_services::types::registration::RegistrationRequest) -> Result<feagi_services::types::registration::RegistrationResponse, String> {
+            self.0.lock().process_registration(request)
+        }
+    }
+    
+    let handler_trait: Arc<dyn RegistrationHandlerTrait> = Arc::new(RegistrationHandlerWrapper(registration_handler));
+    agent_service_impl.set_registration_handler(handler_trait);
     let agent_service = Arc::new(agent_service_impl);
     info!("    ✓ Services created");
 

@@ -477,13 +477,36 @@ async fn start_services(
     let agent_registry = components.pns.get_agent_registry();
     let registration_handler = components.pns.get_registration_handler();
     
+    // Wire GenomeService and ConnectomeService to RegistrationHandler (required for auto-creation feature)
+    // NOTE: This wiring is REQUIRED for the auto-creation of missing IPU/OPU cortical areas feature.
+    // All FEAGI embedders must perform this wiring after creating services.
+    {
+        let mut handler = registration_handler.lock();
+        handler.set_genome_service(Arc::clone(&genome_service) as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>);
+        handler.set_connectome_service(Arc::clone(&connectome_service) as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>);
+        handler.set_auto_create_missing_areas(config.agent.auto_create_missing_cortical_areas);
+    }
+    info!("    ✓ RegistrationHandler services wired (GenomeService, ConnectomeService, auto-create: {})", config.agent.auto_create_missing_cortical_areas);
+    
     let mut agent_service_impl = AgentServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         agent_registry,
     );
     
     // Wire registration handler for full transport negotiation
-    agent_service_impl.set_registration_handler(registration_handler);
+    // Convert Arc<Mutex<RegistrationHandler>> to Arc<dyn RegistrationHandlerTrait>
+    use feagi_services::traits::registration_handler::RegistrationHandlerTrait;
+    
+    // Wrapper to convert Arc<Mutex<RegistrationHandler>> to trait object
+    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_pns::RegistrationHandler>>);
+    impl RegistrationHandlerTrait for RegistrationHandlerWrapper {
+        fn process_registration(&self, request: feagi_services::types::registration::RegistrationRequest) -> Result<feagi_services::types::registration::RegistrationResponse, String> {
+            self.0.lock().process_registration(request)
+        }
+    }
+    
+    let handler_trait: Arc<dyn RegistrationHandlerTrait> = Arc::new(RegistrationHandlerWrapper(registration_handler));
+    agent_service_impl.set_registration_handler(handler_trait);
     
     let agent_service = Arc::new(agent_service_impl);
     info!("    ✓ Services created (agent service with transport negotiation)");

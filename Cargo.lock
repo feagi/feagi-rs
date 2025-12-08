@@ -944,6 +944,7 @@ dependencies = [
  "feagi-bdu",
  "feagi-burst-engine",
  "feagi-neural",
+ "feagi-services",
  "feagi-transports",
  "feagi_data_serialization",
  "feagi_data_structures",
@@ -987,7 +988,6 @@ dependencies = [
  "feagi-evo",
  "feagi-neural",
  "feagi-observability",
- "feagi-pns",
  "feagi_data_structures",
  "parking_lot",
  "serde",
@@ -1789,9 +1789,9 @@ dependencies = [
 
 [[package]]
 name = "ndarray"
-version = "0.16.1"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
+checksum = "0c7c9125e8f6f10c9da3aad044cc918cf8784fa34de857b1aa68038eb05a50a9"
 dependencies = [
  "matrixmultiply",
  "num-complex",
