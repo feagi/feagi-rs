@@ -297,7 +297,7 @@ jobs:
         with:
           name: feagi-linux-x86_64
           path: target/x86_64-unknown-linux-gnu/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # Linux aarch64 Build Job
@@ -446,7 +446,7 @@ jobs:
         with:
           name: feagi-linux-aarch64
           path: target/aarch64-unknown-linux-gnu/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # macOS Intel Build Job
@@ -583,7 +583,7 @@ jobs:
         with:
           name: feagi-darwin-x86_64
           path: target/x86_64-apple-darwin/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # macOS Apple Silicon Build Job
@@ -720,7 +720,7 @@ jobs:
         with:
           name: feagi-darwin-aarch64
           path: target/aarch64-apple-darwin/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # Windows Build Job
@@ -803,21 +803,24 @@ jobs:
           SCCACHE_VERSION="0.12.0"
           curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc.zip" -o sccache.zip
           unzip -q sccache.zip
-          mkdir -p /usr/local/bin 2>/dev/null || mkdir -p "$HOME/.local/bin"
-          if [ -d "/usr/local/bin" ]; then
-            sudo cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe /usr/local/bin/sccache.exe || cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe "$HOME/.local/bin/sccache.exe"
-            export PATH="$HOME/.local/bin:$PATH"
-          else
-            cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe "$HOME/.local/bin/sccache.exe"
-            export PATH="$HOME/.local/bin:$PATH"
-          fi
-          chmod +x "$HOME/.local/bin/sccache.exe" 2>/dev/null || true
+          
+          # Create local bin directory
+          mkdir -p "$HOME/.local/bin"
+          
+          # Copy sccache to local bin
+          cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe "$HOME/.local/bin/sccache.exe"
+          
+          # Add to PATH for this session
+          export PATH="$HOME/.local/bin:$PATH"
           
           # Configure cargo to use sccache
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
           echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+          
+          # Verify sccache is accessible
+          "$HOME/.local/bin/sccache.exe" --version || echo "Warning: sccache version check failed"
           
           echo "✅ sccache installed and configured"
       
@@ -860,7 +863,7 @@ jobs:
         with:
           name: feagi-windows-x86_64
           path: target/x86_64-pc-windows-msvc/release/feagi.exe
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # Collect all binaries and create PR (for dev builds) or Release (for production/beta/alpha)
@@ -1233,7 +1236,7 @@ jobs:
           3. Ensure it's executable: chmod +x feagi
           4. Run: ./feagi --config feagi_configuration.toml
           
-          For more information, visit: https://github.com/neuraville/feagi-rust
+          For more information, visit: https://github.com/feagi/feagi-rust
           EOF
             cd release-package-linux-x86_64
             tar -czf ../release-assets/feagi-linux-x86_64-v${VERSION}.tar.gz *
@@ -1259,7 +1262,7 @@ jobs:
           3. Ensure it's executable: chmod +x feagi
           4. Run: ./feagi --config feagi_configuration.toml
           
-          For more information, visit: https://github.com/neuraville/feagi-rust
+          For more information, visit: https://github.com/feagi/feagi-rust
           EOF
             cd release-package-linux-aarch64
             tar -czf ../release-assets/feagi-linux-aarch64-v${VERSION}.tar.gz *
@@ -1285,7 +1288,7 @@ jobs:
           3. Ensure it's executable: chmod +x feagi
           4. Run: ./feagi --config feagi_configuration.toml
           
-          For more information, visit: https://github.com/neuraville/feagi-rust
+          For more information, visit: https://github.com/feagi/feagi-rust
           EOF
             cd release-package-darwin-x86_64
             tar -czf ../release-assets/feagi-macos-x86_64-v${VERSION}.tar.gz *
@@ -1311,7 +1314,7 @@ jobs:
           3. Ensure it's executable: chmod +x feagi
           4. Run: ./feagi --config feagi_configuration.toml
           
-          For more information, visit: https://github.com/neuraville/feagi-rust
+          For more information, visit: https://github.com/feagi/feagi-rust
           EOF
             cd release-package-darwin-aarch64
             tar -czf ../release-assets/feagi-macos-arm64-v${VERSION}.tar.gz *
@@ -1343,7 +1346,7 @@ jobs:
           4. Ensure it's executable: chmod +x feagi
           5. Run: ./feagi --config feagi_configuration.toml
           
-          For more information, visit: https://github.com/neuraville/feagi-rust
+          For more information, visit: https://github.com/feagi/feagi-rust
           EOF
             cd release-package-darwin-universal
             tar -czf ../release-assets/feagi-macos-universal-v${VERSION}.tar.gz *
@@ -1368,7 +1371,7 @@ jobs:
           2. Move 'feagi.exe' to desired location
           3. Run: feagi.exe --config feagi_configuration.toml
           
-          For more information, visit: https://github.com/neuraville/feagi-rust
+          For more information, visit: https://github.com/feagi/feagi-rust
           EOF
             cd release-package-windows-x86_64
             zip -r ../release-assets/feagi-windows-x86_64-v${VERSION}.zip *
@@ -1442,7 +1445,7 @@ jobs:
           ## What's Changed
           <!-- Add changelog here -->
           
-          **Full Changelog**: https://github.com/neuraville/feagi-rust/compare/v${VERSION}...v${VERSION}
+          **Full Changelog**: https://github.com/feagi/feagi-rust/compare/v${VERSION}...v${VERSION}
           EOF
       
       - name: Create GitHub Release in feagi/feagi
