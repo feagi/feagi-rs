@@ -220,6 +220,13 @@ jobs:
   build-binaries:
     needs: determine-config
     name: Build FEAGI Binaries
+    # Skip entire job if platform is not enabled
+    if: |
+      (matrix.build_flag_output == 'build_linux_x86_64' && needs.determine-config.outputs.build_linux_x86_64 == 'true') ||
+      (matrix.build_flag_output == 'build_linux_aarch64' && needs.determine-config.outputs.build_linux_aarch64 == 'true') ||
+      (matrix.build_flag_output == 'build_macos_intel' && needs.determine-config.outputs.build_macos_intel == 'true') ||
+      (matrix.build_flag_output == 'build_macos_silicon' && needs.determine-config.outputs.build_macos_silicon == 'true') ||
+      (matrix.build_flag_output == 'build_windows' && needs.determine-config.outputs.build_windows == 'true')
     strategy:
       fail-fast: true  # Stop all jobs immediately if one fails
       matrix:
@@ -253,29 +260,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     
     steps:
-      - name: Check if platform is enabled
-        id: platform_check
-        shell: bash
-        run: |
-          BUILD_FLAG="${{ needs.determine-config.outputs[matrix.build_flag_output] }}"
-          echo "Platform ${{ matrix.platform }} build flag: ${BUILD_FLAG}"
-          if [[ "${BUILD_FLAG}" != "true" ]]; then
-            echo "Platform ${{ matrix.platform }} is disabled, skipping"
-            echo "enabled=false" >> $GITHUB_OUTPUT
-          else
-            echo "Platform ${{ matrix.platform }} is enabled"
-            echo "enabled=true" >> $GITHUB_OUTPUT
-          fi
-      
       - name: Checkout feagi-rust (source repo)
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
       
       - name: Checkout feagi-core (dependency repo)
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
           repository: feagi/feagi-core
@@ -288,7 +279,6 @@ jobs:
           fetch-depth: 0
       
       - name: Update Cargo.toml paths for CI
-        if: steps.platform_check.outputs.enabled == 'true'
         shell: bash
         run: |
           # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
@@ -347,17 +337,39 @@ jobs:
           grep -E "(feagi-core|feagi-)" Cargo.toml | head -10 || echo "Could not display paths"
       
       - name: Setup Rust
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       
       - name: Install sccache
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: mozilla-actions/sccache-action@v0.0.6
+        with:
+          version: "v0.12.0"
+      
+      - name: Configure sccache for GitHub Actions
+        shell: bash
+        run: |
+          echo "Configuring sccache..."
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          # Verify sccache is in PATH and working
+          which sccache || echo "sccache not in PATH"
+          sccache --version || echo "sccache version check failed"
+          # Start sccache server explicitly (required on Windows)
+          sccache --start-server || echo "sccache server start failed"
+          # Verify server is running
+          sleep 1
+          if sccache --show-stats > /dev/null 2>&1; then
+            echo "✅ sccache server is running"
+            sccache --show-stats
+          else
+            echo "❌ ERROR: sccache server failed to start"
+            echo "This will cause build failures. Checking diagnostics..."
+            sccache --show-stats 2>&1 || true
+            exit 1
+          fi
       
       - name: Cache Rust dependencies
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/cache@v4
         id: cache-deps
         with:
@@ -372,7 +384,6 @@ jobs:
             ${{ runner.os }}-cargo-deps-
       
       - name: Cache sccache
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/cache@v4
         id: cache-sccache
         with:
@@ -383,7 +394,6 @@ jobs:
             ${{ runner.os }}-sccache-
       
       - name: Cache Rust build artifacts
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/cache@v4
         id: cache-build
         with:
@@ -398,7 +408,7 @@ jobs:
             ${{ runner.os }}-rust-${{ matrix.target }}-
       
       - name: Setup cross-compilation for Linux aarch64
-        if: steps.platform_check.outputs.enabled == 'true' && matrix.target == 'aarch64-unknown-linux-gnu' && matrix.os == 'ubuntu-latest'
+ && matrix.target == 'aarch64-unknown-linux-gnu' && matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           echo "Setting up cross-compilation for aarch64..."
@@ -421,7 +431,6 @@ jobs:
           echo "Cross-compilation setup complete"
       
       - name: Verify directory structure
-        if: steps.platform_check.outputs.enabled == 'true'
         shell: bash
         run: |
           echo "Current directory: $(pwd)"
@@ -443,11 +452,7 @@ jobs:
           fi
       
       - name: Build FEAGI
-        if: steps.platform_check.outputs.enabled == 'true'
         shell: bash
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
         run: |
           echo "Building FEAGI for ${{ matrix.platform }}..."
           BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
@@ -457,6 +462,16 @@ jobs:
           echo "Dependencies cache: ${{ steps.cache-deps.outputs.cache-hit }}"
           echo "sccache cache: ${{ steps.cache-sccache.outputs.cache-hit }}"
           echo "Build artifacts cache: ${{ steps.cache-build.outputs.cache-hit }}"
+          echo "RUSTC_WRAPPER: ${RUSTC_WRAPPER:-not set}"
+          
+          # Verify sccache is still working before build
+          if [ -n "${RUSTC_WRAPPER:-}" ]; then
+            echo "Verifying sccache before build..."
+            sccache --show-stats || {
+              echo "❌ ERROR: sccache stopped working!"
+              exit 1
+            }
+          fi
           
           # Check if binary already exists from cache
           if [ -f "$BINARY_PATH" ]; then
@@ -468,8 +483,10 @@ jobs:
             echo "Binary not in cache - building from source..."
             
             # Show sccache stats before build
-            echo "sccache stats before build:"
-            sccache --show-stats || true
+            if [ -n "${RUSTC_WRAPPER:-}" ]; then
+              echo "sccache stats before build:"
+              sccache --show-stats || true
+            fi
             
             START_TIME=$(date +%s)
             if ! cargo build --release --target ${{ matrix.target }}; then
@@ -480,15 +497,16 @@ jobs:
             BUILD_DURATION=$((END_TIME - START_TIME))
             
             # Show sccache stats after build
-            echo "sccache stats after build:"
-            sccache --show-stats || true
+            if [ -n "${RUSTC_WRAPPER:-}" ]; then
+              echo "sccache stats after build:"
+              sccache --show-stats || true
+            fi
             
             echo "Build complete for ${{ matrix.platform }} (took ${BUILD_DURATION}s)"
             ls -lh "$BINARY_PATH"
           fi
       
       - name: Upload binary
-        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: feagi-${{ matrix.platform }}
