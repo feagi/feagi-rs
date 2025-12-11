@@ -125,6 +125,14 @@ jobs:
             BUILD_MACOS_SILICON="${{ inputs.build_macos_silicon }}"
             BUILD_WINDOWS="${{ inputs.build_windows }}"
             
+            # Debug: show what we received
+            echo "Platform flags received:"
+            echo "  Linux x86_64: ${BUILD_LINUX_X86_64}"
+            echo "  Linux aarch64: ${BUILD_LINUX_AARCH64}"
+            echo "  macOS Intel: ${BUILD_MACOS_INTEL}"
+            echo "  macOS Silicon: ${BUILD_MACOS_SILICON}"
+            echo "  Windows: ${BUILD_WINDOWS}"
+            
             # Auto-generate version for dev if not provided
             if [[ "${RELEASE_TYPE}" == "dev" && -z "${VERSION}" ]]; then
               VERSION="dev-$(date +%Y%m%d-%H%M%S)"
