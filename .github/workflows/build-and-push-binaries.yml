@@ -1,9 +1,32 @@
-name: Build Binaries and Create PR to Public Repo
+name: Build Binaries and Create PR/Release
 
 on:
+  # Trigger on tags for releases
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v*-beta.*'
+      - 'v*-alpha.*'
+  
   # Manual trigger
   workflow_dispatch:
     inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        type: choice
+        options:
+          - dev
+          - alpha
+          - beta
+          - production
+        default: dev
+      
+      version:
+        description: 'Version number (e.g., 2.0.0 for production/beta/alpha, or leave empty for dev)'
+        required: false
+        type: string
+      
       source_sha:
         description: 'Source commit SHA (default: latest main)'
         required: false
@@ -31,12 +54,90 @@ on:
       - '.github/workflows/build-and-push-binaries.yml'
 
 permissions:
-  contents: write      # Required to create branches, commit, and push
+  contents: write      # Required to create branches, commit, push, and create releases
   pull-requests: write # Required to create PRs
 
 jobs:
+  # Determine build configuration
+  determine-config:
+    runs-on: ubuntu-latest
+    outputs:
+      release_type: ${{ steps.config.outputs.release_type }}
+      version: ${{ steps.config.outputs.version }}
+      source_branch: ${{ steps.config.outputs.source_branch }}
+      source_sha: ${{ steps.config.outputs.source_sha }}
+      feagi_core_branch: ${{ steps.config.outputs.feagi_core_branch }}
+      create_release: ${{ steps.config.outputs.create_release }}
+    steps:
+      - name: Determine build configuration
+        id: config
+        run: |
+          # Determine release type and version
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            RELEASE_TYPE="${{ inputs.release_type }}"
+            VERSION="${{ inputs.version }}"
+            # Strip 'v' prefix if present
+            VERSION="${VERSION#v}"
+            SOURCE_BRANCH="${{ inputs.source_branch || 'main' }}"
+            SOURCE_SHA="${{ inputs.source_sha }}"
+            FEAGI_CORE_BRANCH="${{ inputs.feagi_core_branch || 'main' }}"
+            
+            # Auto-generate version for dev if not provided
+            if [[ "${RELEASE_TYPE}" == "dev" && -z "${VERSION}" ]]; then
+              VERSION="dev-$(date +%Y%m%d-%H%M%S)"
+              echo "ℹ️ Auto-generated dev version: ${VERSION}"
+            fi
+          elif [[ "${{ github.ref }}" =~ refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            RELEASE_TYPE="production"
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            SOURCE_BRANCH="main"
+            SOURCE_SHA=""
+            FEAGI_CORE_BRANCH="main"
+          elif [[ "${{ github.ref }}" =~ refs/tags/.*-beta\. ]]; then
+            RELEASE_TYPE="beta"
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            SOURCE_BRANCH="main"
+            SOURCE_SHA=""
+            FEAGI_CORE_BRANCH="main"
+          elif [[ "${{ github.ref }}" =~ refs/tags/.*-alpha\. ]]; then
+            RELEASE_TYPE="alpha"
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            SOURCE_BRANCH="main"
+            SOURCE_SHA=""
+            FEAGI_CORE_BRANCH="main"
+          else
+            # PR merge or other trigger - default to dev
+            RELEASE_TYPE="dev"
+            VERSION="dev-$(date +%Y%m%d-%H%M%S)"
+            SOURCE_BRANCH="main"
+            SOURCE_SHA=""
+            FEAGI_CORE_BRANCH="main"
+          fi
+          
+          # Determine if we should create a GitHub Release
+          # Only create releases for production, beta, and alpha (not dev)
+          if [[ "${RELEASE_TYPE}" == "production" || "${RELEASE_TYPE}" == "beta" || "${RELEASE_TYPE}" == "alpha" ]]; then
+            CREATE_RELEASE="true"
+          else
+            CREATE_RELEASE="false"
+          fi
+          
+          echo "release_type=${RELEASE_TYPE}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "source_branch=${SOURCE_BRANCH}" >> $GITHUB_OUTPUT
+          echo "source_sha=${SOURCE_SHA}" >> $GITHUB_OUTPUT
+          echo "feagi_core_branch=${FEAGI_CORE_BRANCH}" >> $GITHUB_OUTPUT
+          echo "create_release=${CREATE_RELEASE}" >> $GITHUB_OUTPUT
+          
+          echo "📋 Build Configuration:"
+          echo "   Release Type: ${RELEASE_TYPE}"
+          echo "   Version: ${VERSION}"
+          echo "   Source Branch: ${SOURCE_BRANCH}"
+          echo "   Create Release: ${CREATE_RELEASE}"
+
   # Build binaries for all platforms
   build-binaries:
+    needs: determine-config
     name: Build FEAGI Binaries
     strategy:
       fail-fast: true  # Stop all jobs immediately if one fails
@@ -69,7 +170,7 @@ jobs:
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.source_branch || 'main' }}
+          ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
       
       - name: Checkout feagi-core (dependency repo)
@@ -80,8 +181,7 @@ jobs:
           # The token must have 'repo' scope and access to Neuraville/feagi-core private repository
           # Configure at: Settings > Secrets and variables > Actions > New repository secret
           token: ${{ secrets.FEAGI_CORE_TOKEN }}
-          # TODO: What branch should feagi-core use? (main, master, staging, or default?)
-          ref: main
+          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
           path: feagi-core
           fetch-depth: 0
       
@@ -252,34 +352,27 @@ jobs:
           path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
           retention-days: 1
 
-  # Collect all binaries and create PR
+  # Collect all binaries and create PR (for dev builds) or Release (for production/beta/alpha)
   create-pr:
     name: Create PR with Binaries
-    needs: build-binaries
+    needs: [determine-config, build-binaries]
     runs-on: ubuntu-latest
-    # Only run if ALL binary builds succeeded
-    if: success()
+    # Only run if ALL binary builds succeeded AND it's a dev build (no release)
+    if: success() && needs.determine-config.outputs.create_release == 'false'
     
     steps:
       - name: Determine source commit
         id: source_info
         shell: bash
         run: |
-          # Get source info from workflow inputs or GitHub context
-          # No need to checkout the repo - we only need metadata for commit messages/PR descriptions
-          if [ -n "${{ github.event.inputs.source_sha }}" ]; then
-            SOURCE_SHA="${{ github.event.inputs.source_sha }}"
+          # Get source info from config or GitHub context
+          if [ -n "${{ needs.determine-config.outputs.source_sha }}" ]; then
+            SOURCE_SHA="${{ needs.determine-config.outputs.source_sha }}"
           else
             SOURCE_SHA="${{ github.sha }}"
           fi
           
-          if [ -n "${{ github.event.inputs.source_branch }}" ]; then
-            SOURCE_BRANCH="${{ github.event.inputs.source_branch }}"
-          elif [ -n "${{ github.ref_name }}" ]; then
-            SOURCE_BRANCH="${{ github.ref_name }}"
-          else
-            SOURCE_BRANCH="main"
-          fi
+          SOURCE_BRANCH="${{ needs.determine-config.outputs.source_branch }}"
           
           echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
           echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
@@ -1233,3 +1326,378 @@ jobs:
             echo "WARNING: PR may not have been created. Check the logs above."
             echo "Branch URL: https://github.com/feagi/feagi/tree/${{ steps.branch_name.outputs.branch_name }}"
           fi
+
+  # Push binaries to feagi/feagi repo staging branch (for releases - needed for feagi-desktop)
+  push-binaries-to-repo:
+    name: Push Binaries to feagi/feagi Repo
+    needs: [determine-config, build-binaries]
+    runs-on: ubuntu-latest
+    # Only run if ALL binary builds succeeded AND it's a release build
+    if: success() && needs.determine-config.outputs.create_release == 'true'
+    
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+      
+      - name: Checkout public repo
+        uses: actions/checkout@v4
+        with:
+          repository: feagi/feagi
+          token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
+          path: public-repo
+          ref: staging
+          fetch-depth: 0
+      
+      - name: Organize and copy binaries
+        shell: bash
+        run: |
+          echo "Organizing binaries..."
+          cd public-repo
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create directory structure
+          mkdir -p feagi/bin/linux-x86_64
+          mkdir -p feagi/bin/linux-aarch64
+          mkdir -p feagi/bin/darwin-x86_64
+          mkdir -p feagi/bin/darwin-aarch64
+          mkdir -p feagi/bin/windows-x86_64
+          
+          # Copy binaries
+          cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi || echo "⚠️ Linux x86_64 binary not found"
+          cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi || echo "⚠️ Linux aarch64 binary not found"
+          cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi || echo "⚠️ macOS Intel binary not found"
+          cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi || echo "⚠️ macOS Apple Silicon binary not found"
+          cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe || echo "⚠️ Windows binary not found"
+          
+          echo "✅ Binaries copied to feagi/bin/"
+          ls -lh feagi/bin/*/
+      
+      - name: Commit and push binaries
+        shell: bash
+        run: |
+          cd public-repo
+          
+          # Check if there are changes
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "No changes to commit - binaries are identical to staging branch"
+          else
+            VERSION="${{ needs.determine-config.outputs.version }}"
+            RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
+            
+            # Force add binaries
+            git add -f feagi/bin/
+            
+            # For releases, commit directly to staging branch
+            VERSION="${{ needs.determine-config.outputs.version }}"
+            RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
+            
+            git commit -m "chore: update FEAGI binaries for ${RELEASE_TYPE} release v${VERSION}
+
+          - Built from: ${{ github.repository }}@${{ needs.determine-config.outputs.source_branch }}
+          - Version: v${VERSION}
+          - Release Type: ${RELEASE_TYPE}
+          - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64"
+            
+            git push origin staging
+            echo "✅ Binaries pushed to staging branch"
+          fi
+
+  # Create GitHub Release (for production/beta/alpha builds)
+  create-release:
+    name: Create GitHub Release
+    needs: [determine-config, build-binaries, push-binaries-to-repo]
+    runs-on: ubuntu-latest
+    # Only run if ALL binary builds succeeded AND it's a release build
+    if: success() && needs.determine-config.outputs.create_release == 'true'
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+      
+      - name: Checkout feagi-rust (for config file)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-config.outputs.source_branch }}
+      
+      - name: Install zip for Windows packaging
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+      
+      - name: Package binaries for release
+        shell: bash
+        run: |
+          VERSION="${{ needs.determine-config.outputs.version }}"
+          RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
+          
+          echo "📦 Packaging binaries for ${RELEASE_TYPE} release v${VERSION}..."
+          
+          mkdir -p release-assets
+          
+          # Package Linux x86_64
+          if [ -f "binaries/feagi-linux-x86_64/feagi" ]; then
+            mkdir -p release-package-linux-x86_64
+            cp binaries/feagi-linux-x86_64/feagi release-package-linux-x86_64/
+            cp feagi_configuration.toml release-package-linux-x86_64/
+            cat > release-package-linux-x86_64/README.txt <<EOF
+          FEAGI v${VERSION} for Linux (x86_64)
+          
+          This package contains:
+          - feagi: Linux binary (x86_64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi' to desired location (e.g., /usr/local/bin/)
+          3. Ensure it's executable: chmod +x feagi
+          4. Run: ./feagi --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+            cd release-package-linux-x86_64
+            tar -czf ../release-assets/feagi-linux-x86_64-v${VERSION}.tar.gz *
+            cd ..
+            echo "✅ Created feagi-linux-x86_64-v${VERSION}.tar.gz"
+          fi
+          
+          # Package Linux aarch64
+          if [ -f "binaries/feagi-linux-aarch64/feagi" ]; then
+            mkdir -p release-package-linux-aarch64
+            cp binaries/feagi-linux-aarch64/feagi release-package-linux-aarch64/
+            cp feagi_configuration.toml release-package-linux-aarch64/
+            cat > release-package-linux-aarch64/README.txt <<EOF
+          FEAGI v${VERSION} for Linux (ARM64)
+          
+          This package contains:
+          - feagi: Linux binary (aarch64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi' to desired location (e.g., /usr/local/bin/)
+          3. Ensure it's executable: chmod +x feagi
+          4. Run: ./feagi --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+            cd release-package-linux-aarch64
+            tar -czf ../release-assets/feagi-linux-aarch64-v${VERSION}.tar.gz *
+            cd ..
+            echo "✅ Created feagi-linux-aarch64-v${VERSION}.tar.gz"
+          fi
+          
+          # Package macOS Intel
+          if [ -f "binaries/feagi-darwin-x86_64/feagi" ]; then
+            mkdir -p release-package-darwin-x86_64
+            cp binaries/feagi-darwin-x86_64/feagi release-package-darwin-x86_64/
+            cp feagi_configuration.toml release-package-darwin-x86_64/
+            cat > release-package-darwin-x86_64/README.txt <<EOF
+          FEAGI v${VERSION} for macOS (Intel x86_64)
+          
+          This package contains:
+          - feagi: macOS binary (Intel x86_64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi' to desired location (e.g., /usr/local/bin/)
+          3. Ensure it's executable: chmod +x feagi
+          4. Run: ./feagi --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+            cd release-package-darwin-x86_64
+            tar -czf ../release-assets/feagi-macos-x86_64-v${VERSION}.tar.gz *
+            cd ..
+            echo "✅ Created feagi-macos-x86_64-v${VERSION}.tar.gz"
+          fi
+          
+          # Package macOS Apple Silicon
+          if [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
+            mkdir -p release-package-darwin-aarch64
+            cp binaries/feagi-darwin-aarch64/feagi release-package-darwin-aarch64/
+            cp feagi_configuration.toml release-package-darwin-aarch64/
+            cat > release-package-darwin-aarch64/README.txt <<EOF
+          FEAGI v${VERSION} for macOS (Apple Silicon ARM64)
+          
+          This package contains:
+          - feagi: macOS binary (Apple Silicon ARM64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi' to desired location (e.g., /usr/local/bin/)
+          3. Ensure it's executable: chmod +x feagi
+          4. Run: ./feagi --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+            cd release-package-darwin-aarch64
+            tar -czf ../release-assets/feagi-macos-arm64-v${VERSION}.tar.gz *
+            cd ..
+            echo "✅ Created feagi-macos-arm64-v${VERSION}.tar.gz"
+          fi
+          
+          # Create universal macOS binary if both Intel and Silicon exist
+          if [ -f "binaries/feagi-darwin-x86_64/feagi" ] && [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
+            echo "📦 Creating universal macOS binary..."
+            mkdir -p release-package-darwin-universal
+            # Note: lipo requires macOS, so we'll create a package that includes both binaries
+            # Users can use the appropriate one for their architecture
+            cp binaries/feagi-darwin-x86_64/feagi release-package-darwin-universal/feagi-x86_64
+            cp binaries/feagi-darwin-aarch64/feagi release-package-darwin-universal/feagi-arm64
+            cp feagi_configuration.toml release-package-darwin-universal/
+            cat > release-package-darwin-universal/README.txt <<EOF
+          FEAGI v${VERSION} for macOS (Universal - Intel + Apple Silicon)
+          
+          This package contains:
+          - feagi-x86_64: macOS binary for Intel Macs
+          - feagi-arm64: macOS binary for Apple Silicon Macs
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Choose the appropriate binary for your Mac:
+             - Intel Macs: Use feagi-x86_64 (rename to feagi)
+             - Apple Silicon: Use feagi-arm64 (rename to feagi)
+          3. Move 'feagi' to desired location (e.g., /usr/local/bin/)
+          4. Ensure it's executable: chmod +x feagi
+          5. Run: ./feagi --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+            cd release-package-darwin-universal
+            tar -czf ../release-assets/feagi-macos-universal-v${VERSION}.tar.gz *
+            cd ..
+            echo "✅ Created feagi-macos-universal-v${VERSION}.tar.gz"
+          fi
+          
+          # Package Windows
+          if [ -f "binaries/feagi-windows-x86_64/feagi.exe" ]; then
+            mkdir -p release-package-windows-x86_64
+            cp binaries/feagi-windows-x86_64/feagi.exe release-package-windows-x86_64/
+            cp feagi_configuration.toml release-package-windows-x86_64/
+            cat > release-package-windows-x86_64/README.txt <<EOF
+          FEAGI v${VERSION} for Windows (x86_64)
+          
+          This package contains:
+          - feagi.exe: Windows binary (x86_64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi.exe' to desired location
+          3. Run: feagi.exe --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+            cd release-package-windows-x86_64
+            zip -r ../release-assets/feagi-windows-x86_64-v${VERSION}.zip *
+            cd ..
+            echo "✅ Created feagi-windows-x86_64-v${VERSION}.zip"
+          fi
+          
+          echo ""
+          echo "📦 Release packages created:"
+          ls -lh release-assets/
+      
+      - name: Determine release type
+        id: release_type
+        shell: bash
+        run: |
+          VERSION="${{ needs.determine-config.outputs.version }}"
+          RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
+          
+          if [[ "${RELEASE_TYPE}" == "beta" ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "Release type: Beta (pre-release)"
+          elif [[ "${RELEASE_TYPE}" == "alpha" ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "Release type: Alpha (pre-release)"
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "Release type: Production (stable)"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+      
+      - name: Generate release notes
+        shell: bash
+        run: |
+          VERSION="${{ needs.determine-config.outputs.version }}"
+          RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
+          
+          cat > release-notes.md <<EOF
+          # FEAGI v${VERSION}
+          
+          ## Platform Support
+          - ✅ Linux (x86_64)
+          - ✅ Linux (ARM64)
+          - ✅ macOS (Intel x86_64)
+          - ✅ macOS (Apple Silicon ARM64)
+          - ✅ macOS (Universal - Intel + Apple Silicon)
+          - ✅ Windows (x86_64)
+          
+          ## Downloads
+          - **Linux x86_64**: \`feagi-linux-x86_64-v${VERSION}.tar.gz\`
+          - **Linux ARM64**: \`feagi-linux-aarch64-v${VERSION}.tar.gz\`
+          - **macOS Intel**: \`feagi-macos-x86_64-v${VERSION}.tar.gz\`
+          - **macOS Apple Silicon**: \`feagi-macos-arm64-v${VERSION}.tar.gz\`
+          - **macOS Universal**: \`feagi-macos-universal-v${VERSION}.tar.gz\` (recommended for macOS)
+          - **Windows**: \`feagi-windows-x86_64-v${VERSION}.zip\`
+          
+          ## Installation
+          
+          ### macOS / Linux
+          \`\`\`bash
+          tar -xzf feagi-macos-v${VERSION}.tar.gz
+          cd feagi-macos-v${VERSION}
+          chmod +x feagi
+          ./feagi --config feagi_configuration.toml
+          \`\`\`
+          
+          ### Windows
+          \`\`\`powershell
+          Expand-Archive feagi-windows-x86_64-v${VERSION}.zip
+          cd feagi-windows-x86_64-v${VERSION}
+          .\\feagi.exe --config feagi_configuration.toml
+          \`\`\`
+          
+          ## What's Changed
+          <!-- Add changelog here -->
+          
+          **Full Changelog**: https://github.com/neuraville/feagi-rust/compare/v${VERSION}...v${VERSION}
+          EOF
+          
+          echo "Generated release notes"
+          cat release-notes.md
+      
+      - name: Create GitHub Release in feagi/feagi
+        uses: softprops/action-gh-release@v1
+        with:
+          repository: feagi/feagi
+          tag_name: v${{ needs.determine-config.outputs.version }}
+          name: FEAGI v${{ needs.determine-config.outputs.version }}
+          body_path: release-notes.md
+          prerelease: ${{ steps.release_type.outputs.prerelease }}
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
+      
+      - name: Output release information
+        shell: bash
+        run: |
+          echo "✅ GitHub Release created successfully:"
+          echo "  Tag: v${{ needs.determine-config.outputs.version }}"
+          echo "  Release Type: ${{ needs.determine-config.outputs.release_type }}"
+          echo "  Pre-release: ${{ steps.release_type.outputs.prerelease }}"
+          echo "  Release URL: https://github.com/feagi/feagi/releases/tag/v${{ needs.determine-config.outputs.version }}"
