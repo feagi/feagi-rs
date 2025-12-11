@@ -801,23 +801,29 @@ jobs:
           
           # Create local bin directory
           mkdir -p "$HOME/.local/bin"
+          SCCACHE_DIR="$HOME/.local/bin"
+          SCCACHE_EXE="$SCCACHE_DIR/sccache.exe"
           
           # Copy sccache to local bin
-          cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe "$HOME/.local/bin/sccache.exe"
+          cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe "$SCCACHE_EXE"
           
-          # Add to PATH for this session
-          export PATH="$HOME/.local/bin:$PATH"
+          # Get absolute path (GitHub Actions on Windows uses /d/ format)
+          SCCACHE_ABS=$(cd "$SCCACHE_DIR" && pwd)/sccache.exe
           
-          # Configure cargo to use sccache
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          # Add to PATH for this session and future steps
+          export PATH="$SCCACHE_DIR:$PATH"
+          echo "$SCCACHE_DIR" >> $GITHUB_PATH
+          
+          # Configure cargo to use sccache - use absolute path
+          echo "RUSTC_WRAPPER=$SCCACHE_ABS" >> $GITHUB_ENV
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
           echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
           
           # Verify sccache is accessible
-          "$HOME/.local/bin/sccache.exe" --version || echo "Warning: sccache version check failed"
+          "$SCCACHE_EXE" --version || echo "Warning: sccache version check failed"
           
           echo "✅ sccache installed and configured"
+          echo "   Absolute path: $SCCACHE_ABS"
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -920,6 +926,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: feagi/feagi
+          token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
           ref: staging
           fetch-depth: 0
@@ -941,6 +948,8 @@ jobs:
           cd public-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Configure remote URL with token for push operations
+          git remote set-url origin https://${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}@github.com/feagi/feagi.git
           git checkout -b ${{ steps.branch_name.outputs.branch_name }}
       
       - name: Copy binaries
@@ -1088,6 +1097,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: feagi/feagi
+          token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           path: public-repo
           ref: staging
           fetch-depth: 0
@@ -1099,6 +1109,8 @@ jobs:
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Configure remote URL with token for push operations
+          git remote set-url origin https://${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}@github.com/feagi/feagi.git
           
           # Create directories and copy binaries
           if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
@@ -1445,6 +1457,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           repository: feagi/feagi
+          token: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
           tag_name: v${{ needs.determine-config.outputs.version }}
           name: FEAGI v${{ needs.determine-config.outputs.version }}
           body_path: release-notes.md
