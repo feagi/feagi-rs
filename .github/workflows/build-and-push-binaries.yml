@@ -255,6 +255,7 @@ jobs:
     steps:
       - name: Check if platform is enabled
         id: platform_check
+        shell: bash
         run: |
           BUILD_FLAG="${{ needs.determine-config.outputs[matrix.build_flag_output] }}"
           echo "Platform ${{ matrix.platform }} build flag: ${BUILD_FLAG}"
@@ -293,7 +294,7 @@ jobs:
           # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
           # Also enable vendored OpenSSL for cross-compilation
           echo "Updating Cargo.toml paths and enabling vendored OpenSSL..."
-          python3 << 'PYTHON_SCRIPT'
+          python << 'PYTHON_SCRIPT'
           import re
           import sys
           import io
