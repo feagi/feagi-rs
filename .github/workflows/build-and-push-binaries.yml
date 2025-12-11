@@ -277,9 +277,9 @@ jobs:
         if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
-          repository: Neuraville/feagi-core
+          repository: feagi/feagi-core
           # CRITICAL: FEAGI_CORE_TOKEN secret must be configured in repository settings
-          # The token must have 'repo' scope and access to Neuraville/feagi-core private repository
+          # The token must have 'repo' scope and access to feagi/feagi-core private repository
           # Configure at: Settings > Secrets and variables > Actions > New repository secret
           token: ${{ secrets.FEAGI_CORE_TOKEN }}
           ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
