@@ -242,21 +242,6 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
       
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      
-      - name: Configure sccache
-        shell: bash
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          sccache --start-server || true
-          sleep 1
-          if ! sccache --show-stats > /dev/null 2>&1; then
-            echo "❌ ERROR: sccache server failed to start"
-            exit 1
-          fi
-      
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -269,7 +254,23 @@ jobs:
           restore-keys: |
             linux-x86_64-cargo-deps-
       
-      - name: Cache sccache
+      - name: Setup sccache
+        shell: bash
+        run: |
+          echo "📦 Installing sccache to speed up Rust builds..."
+          SCCACHE_VERSION="0.12.0"
+          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          sudo mv sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache /usr/local/bin/
+          chmod +x /usr/local/bin/sccache
+          
+          # Configure cargo to use sccache
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+          
+          echo "✅ sccache installed and configured"
+      
+      - name: Cache sccache storage
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
@@ -296,7 +297,7 @@ jobs:
         with:
           name: feagi-linux-x86_64
           path: target/x86_64-unknown-linux-gnu/release/feagi
-          retention-days: 30
+          retention-days: 1
 
   # ============================================================================
   # Linux aarch64 Build Job
@@ -372,20 +373,29 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
       
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      
-      - name: Configure sccache
+      - name: Setup sccache
         shell: bash
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "📦 Installing sccache to speed up Rust builds..."
+          SCCACHE_VERSION="0.12.0"
+          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          sudo mv sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache /usr/local/bin/
+          chmod +x /usr/local/bin/sccache
+          
+          # Configure cargo to use sccache
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          sccache --start-server || true
-          sleep 1
-          if ! sccache --show-stats > /dev/null 2>&1; then
-            echo "❌ ERROR: sccache server failed to start"
-            exit 1
-          fi
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+          
+          echo "✅ sccache installed and configured"
+      
+      - name: Cache sccache storage
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: linux-aarch64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            linux-aarch64-sccache-
       
       - name: Setup cross-compilation for Linux aarch64
         shell: bash
@@ -417,14 +427,6 @@ jobs:
           restore-keys: |
             linux-aarch64-cargo-deps-
       
-      - name: Cache sccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/sccache
-          key: linux-aarch64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
-          restore-keys: |
-            linux-aarch64-sccache-
-      
       - name: Build FEAGI
         shell: bash
         run: |
@@ -444,7 +446,7 @@ jobs:
         with:
           name: feagi-linux-aarch64
           path: target/aarch64-unknown-linux-gnu/release/feagi
-          retention-days: 30
+          retention-days: 1
 
   # ============================================================================
   # macOS Intel Build Job
@@ -520,20 +522,27 @@ jobs:
         with:
           targets: x86_64-apple-darwin
       
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      
-      - name: Configure sccache
+      - name: Setup sccache
         shell: bash
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          sccache --start-server || true
-          sleep 1
-          if ! sccache --show-stats > /dev/null 2>&1; then
-            echo "❌ ERROR: sccache server failed to start"
-            exit 1
+          echo "📦 Installing sccache to speed up Rust builds..."
+          SCCACHE_VERSION="0.12.0"
+          ARCH=$(uname -m)
+          if [[ "${ARCH}" == "arm64" ]]; then
+            SCCACHE_ARCH="aarch64-apple-darwin"
+          else
+            SCCACHE_ARCH="x86_64-apple-darwin"
           fi
+          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}.tar.gz" | tar xz
+          sudo mv sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}/sccache /usr/local/bin/
+          chmod +x /usr/local/bin/sccache
+          
+          # Configure cargo to use sccache
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+          
+          echo "✅ sccache installed and configured"
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -547,7 +556,7 @@ jobs:
           restore-keys: |
             darwin-x86_64-cargo-deps-
       
-      - name: Cache sccache
+      - name: Cache sccache storage
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
@@ -574,7 +583,7 @@ jobs:
         with:
           name: feagi-darwin-x86_64
           path: target/x86_64-apple-darwin/release/feagi
-          retention-days: 30
+          retention-days: 1
 
   # ============================================================================
   # macOS Apple Silicon Build Job
@@ -650,20 +659,27 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      
-      - name: Configure sccache
+      - name: Setup sccache
         shell: bash
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          sccache --start-server || true
-          sleep 1
-          if ! sccache --show-stats > /dev/null 2>&1; then
-            echo "❌ ERROR: sccache server failed to start"
-            exit 1
+          echo "📦 Installing sccache to speed up Rust builds..."
+          SCCACHE_VERSION="0.12.0"
+          ARCH=$(uname -m)
+          if [[ "${ARCH}" == "arm64" ]]; then
+            SCCACHE_ARCH="aarch64-apple-darwin"
+          else
+            SCCACHE_ARCH="x86_64-apple-darwin"
           fi
+          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}.tar.gz" | tar xz
+          sudo mv sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}/sccache /usr/local/bin/
+          chmod +x /usr/local/bin/sccache
+          
+          # Configure cargo to use sccache
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+          
+          echo "✅ sccache installed and configured"
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -677,7 +693,7 @@ jobs:
           restore-keys: |
             darwin-aarch64-cargo-deps-
       
-      - name: Cache sccache
+      - name: Cache sccache storage
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
@@ -704,7 +720,7 @@ jobs:
         with:
           name: feagi-darwin-aarch64
           path: target/aarch64-apple-darwin/release/feagi
-          retention-days: 30
+          retention-days: 1
 
   # ============================================================================
   # Windows Build Job
@@ -780,20 +796,30 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      
-      - name: Configure sccache
+      - name: Setup sccache
         shell: bash
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          sccache --start-server || true
-          sleep 1
-          if ! sccache --show-stats > /dev/null 2>&1; then
-            echo "❌ ERROR: sccache server failed to start"
-            exit 1
+          echo "📦 Installing sccache to speed up Rust builds..."
+          SCCACHE_VERSION="0.12.0"
+          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc.zip" -o sccache.zip
+          unzip -q sccache.zip
+          mkdir -p /usr/local/bin 2>/dev/null || mkdir -p "$HOME/.local/bin"
+          if [ -d "/usr/local/bin" ]; then
+            sudo cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe /usr/local/bin/sccache.exe || cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe "$HOME/.local/bin/sccache.exe"
+            export PATH="$HOME/.local/bin:$PATH"
+          else
+            cp sccache-v${SCCACHE_VERSION}-x86_64-pc-windows-msvc/sccache.exe "$HOME/.local/bin/sccache.exe"
+            export PATH="$HOME/.local/bin:$PATH"
           fi
+          chmod +x "$HOME/.local/bin/sccache.exe" 2>/dev/null || true
+          
+          # Configure cargo to use sccache
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          
+          echo "✅ sccache installed and configured"
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -807,7 +833,7 @@ jobs:
           restore-keys: |
             windows-x86_64-cargo-deps-
       
-      - name: Cache sccache
+      - name: Cache sccache storage
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
@@ -834,7 +860,7 @@ jobs:
         with:
           name: feagi-windows-x86_64
           path: target/x86_64-pc-windows-msvc/release/feagi.exe
-          retention-days: 30
+          retention-days: 1
 
   # ============================================================================
   # Collect all binaries and create PR (for dev builds) or Release (for production/beta/alpha)
