@@ -254,21 +254,27 @@ jobs:
     
     steps:
       - name: Check if platform is enabled
+        id: platform_check
         run: |
           BUILD_FLAG="${{ needs.determine-config.outputs[matrix.build_flag_output] }}"
+          echo "Platform ${{ matrix.platform }} build flag: ${BUILD_FLAG}"
           if [[ "${BUILD_FLAG}" != "true" ]]; then
-            echo "⏭️ Platform ${{ matrix.platform }} is disabled, skipping build"
-            exit 0
+            echo "Platform ${{ matrix.platform }} is disabled, skipping"
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          else
+            echo "Platform ${{ matrix.platform }} is enabled"
+            echo "enabled=true" >> $GITHUB_OUTPUT
           fi
-          echo "✅ Platform ${{ matrix.platform }} is enabled, proceeding with build"
       
       - name: Checkout feagi-rust (source repo)
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
       
       - name: Checkout feagi-core (dependency repo)
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
           repository: Neuraville/feagi-core
@@ -281,6 +287,7 @@ jobs:
           fetch-depth: 0
       
       - name: Update Cargo.toml paths for CI
+        if: steps.platform_check.outputs.enabled == 'true'
         shell: bash
         run: |
           # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
@@ -339,16 +346,19 @@ jobs:
           grep -E "(feagi-core|feagi-)" Cargo.toml | head -10 || echo "Could not display paths"
       
       - name: Setup Rust
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       
       - name: Install sccache
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: mozilla-actions/sccache-action@v0.0.3
         with:
           version: "latest"
       
       - name: Cache Rust dependencies
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/cache@v4
         id: cache-deps
         with:
@@ -363,6 +373,7 @@ jobs:
             ${{ runner.os }}-cargo-deps-
       
       - name: Cache sccache
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/cache@v4
         id: cache-sccache
         with:
@@ -373,6 +384,7 @@ jobs:
             ${{ runner.os }}-sccache-
       
       - name: Cache Rust build artifacts
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/cache@v4
         id: cache-build
         with:
@@ -387,7 +399,7 @@ jobs:
             ${{ runner.os }}-rust-${{ matrix.target }}-
       
       - name: Setup cross-compilation for Linux aarch64
-        if: matrix.target == 'aarch64-unknown-linux-gnu' && matrix.os == 'ubuntu-latest'
+        if: steps.platform_check.outputs.enabled == 'true' && matrix.target == 'aarch64-unknown-linux-gnu' && matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           echo "Setting up cross-compilation for aarch64..."
@@ -410,6 +422,7 @@ jobs:
           echo "Cross-compilation setup complete"
       
       - name: Verify directory structure
+        if: steps.platform_check.outputs.enabled == 'true'
         shell: bash
         run: |
           echo "Current directory: $(pwd)"
@@ -431,6 +444,7 @@ jobs:
           fi
       
       - name: Build FEAGI
+        if: steps.platform_check.outputs.enabled == 'true'
         shell: bash
         env:
           RUSTC_WRAPPER: sccache
@@ -475,6 +489,7 @@ jobs:
           fi
       
       - name: Upload binary
+        if: steps.platform_check.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: feagi-${{ matrix.platform }}
