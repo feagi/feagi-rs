@@ -110,20 +110,22 @@ jobs:
         run: |
           # Determine release type and version
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            RELEASE_TYPE="${{ inputs.release_type }}"
-            VERSION="${{ inputs.version }}"
+            RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+            VERSION="${{ github.event.inputs.version }}"
             # Strip 'v' prefix if present
             VERSION="${VERSION#v}"
-            SOURCE_BRANCH="${{ inputs.source_branch || 'main' }}"
-            SOURCE_SHA="${{ inputs.source_sha }}"
-            FEAGI_CORE_BRANCH="${{ inputs.feagi_core_branch || 'main' }}"
+            SOURCE_BRANCH="${{ github.event.inputs.source_branch }}"
+            SOURCE_BRANCH="${SOURCE_BRANCH:-main}"
+            SOURCE_SHA="${{ github.event.inputs.source_sha }}"
+            FEAGI_CORE_BRANCH="${{ github.event.inputs.feagi_core_branch }}"
+            FEAGI_CORE_BRANCH="${FEAGI_CORE_BRANCH:-main}"
             
             # Platform selection flags
-            BUILD_LINUX_X86_64="${{ inputs.build_linux_x86_64 }}"
-            BUILD_LINUX_AARCH64="${{ inputs.build_linux_aarch64 }}"
-            BUILD_MACOS_INTEL="${{ inputs.build_macos_intel }}"
-            BUILD_MACOS_SILICON="${{ inputs.build_macos_silicon }}"
-            BUILD_WINDOWS="${{ inputs.build_windows }}"
+            BUILD_LINUX_X86_64="${{ github.event.inputs.build_linux_x86_64 }}"
+            BUILD_LINUX_AARCH64="${{ github.event.inputs.build_linux_aarch64 }}"
+            BUILD_MACOS_INTEL="${{ github.event.inputs.build_macos_intel }}"
+            BUILD_MACOS_SILICON="${{ github.event.inputs.build_macos_silicon }}"
+            BUILD_WINDOWS="${{ github.event.inputs.build_windows }}"
             
             # Debug: show what we received
             echo "Platform flags received:"
