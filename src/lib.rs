@@ -51,7 +51,10 @@ pub use feagi_pns::PNS;
 
 // Internal modules (reused from main.rs initialization logic)
 pub mod components;
+pub mod version;
+
 pub use components::FeagiComponents;
+pub use version::collect_version_info;
 
 /// Visualization callback type
 /// 

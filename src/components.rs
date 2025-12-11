@@ -14,7 +14,7 @@ use feagi_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU};
 use feagi_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
-use feagi_services::impls::AgentServiceImpl;
+use feagi_services::impls::{AgentServiceImpl, SystemServiceImpl};
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_pns::PNS;
 
@@ -225,6 +225,15 @@ pub async fn start_http_server(
         Arc::clone(&components.connectome_manager)
     ));
     
+    // Collect version information for all crates in this binary
+    let version_info = crate::version::collect_version_info();
+    
+    let system_service = Arc::new(SystemServiceImpl::new(
+        Arc::clone(&components.connectome_manager),
+        Some(Arc::clone(&components.burst_runner)),
+        version_info,
+    ));
+    
     let agent_registry = components.pns.get_agent_registry();
     let registration_handler = components.pns.get_registration_handler();
     
@@ -276,6 +285,7 @@ pub async fn start_http_server(
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
         runtime_service: components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
         neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
+        system_service: system_service as Arc<dyn feagi_services::traits::SystemService + Send + Sync>,
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
         feagi_session_timestamp,
     };

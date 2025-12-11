@@ -1,0 +1,348 @@
+name: Release FEAGI Binary
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on any version tag (v1.2.3, v1.2.3-beta.1, etc.)
+  
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g., v1.2.3)'
+        required: true
+      feagi_core_ref:
+        description: 'feagi-core branch/tag (default: version-via-api)'
+        required: false
+        default: 'version-via-api'
+
+jobs:
+  release-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout feagi-rust
+        uses: actions/checkout@v4
+      
+      - name: Clone feagi-core (dependency)
+        run: |
+          cd ..
+          git clone --depth 1 --branch ${{ github.event.inputs.feagi_core_ref || 'fdp-merge-mnt' }} https://github.com/feagi/feagi-core.git
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      
+      - name: Install Rust Cache
+        uses: Swatinem/rust-cache@v2
+      
+      - name: Build FEAGI (Intel x86_64)
+        run: |
+          cargo build --release --bin feagi --target x86_64-apple-darwin
+          echo "✅ Built x86_64 binary"
+      
+      - name: Build FEAGI (Apple Silicon arm64)
+        run: |
+          cargo build --release --bin feagi --target aarch64-apple-darwin
+          echo "✅ Built arm64 binary"
+      
+      - name: Create universal binary
+        run: |
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create \
+            target/x86_64-apple-darwin/release/feagi \
+            target/aarch64-apple-darwin/release/feagi \
+            -output target/universal-apple-darwin/release/feagi
+          chmod +x target/universal-apple-darwin/release/feagi
+          
+          # Verify it's universal
+          file target/universal-apple-darwin/release/feagi
+          lipo -info target/universal-apple-darwin/release/feagi
+          echo "✅ Created universal binary"
+      
+      - name: Package release
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${{ inputs.tag_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          
+          mkdir -p release-package
+          
+          # Copy universal binary
+          cp target/universal-apple-darwin/release/feagi release-package/
+          
+          # Copy config
+          cp feagi_configuration.toml release-package/
+          
+          # Create README
+          cat > release-package/README.txt <<'EOF'
+          FEAGI v${VERSION} for macOS (Universal Binary)
+          
+          This package contains:
+          - feagi: Universal binary (Intel x86_64 + Apple Silicon arm64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi' to desired location (e.g., /usr/local/bin/)
+          3. Ensure it's executable: chmod +x feagi
+          4. Run: ./feagi --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+          
+          # Create tarball
+          cd release-package
+          tar -czf ../feagi-macos-v${VERSION}.tar.gz *
+          cd ..
+          
+          # Also create separate x86_64 package (for specific needs)
+          mkdir -p release-x86_64
+          cp target/x86_64-apple-darwin/release/feagi release-x86_64/
+          cp feagi_configuration.toml release-x86_64/
+          cd release-x86_64
+          tar -czf ../feagi-macos-x86_64-v${VERSION}.tar.gz *
+          cd ..
+          
+          # Also create separate arm64 package
+          mkdir -p release-arm64
+          cp target/aarch64-apple-darwin/release/feagi release-arm64/
+          cp feagi_configuration.toml release-arm64/
+          cd release-arm64
+          tar -czf ../feagi-macos-arm64-v${VERSION}.tar.gz *
+          cd ..
+          
+          echo "✅ Created release packages"
+          ls -lh *.tar.gz
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries
+          path: |
+            feagi-macos-*.tar.gz
+  
+  release-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feagi-rust
+        uses: actions/checkout@v4
+      
+      - name: Clone feagi-core (dependency)
+        run: |
+          cd ..
+          git clone --depth 1 --branch ${{ github.event.inputs.feagi_core_ref || 'fdp-merge-mnt' }} https://github.com/feagi/feagi-core.git
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install Rust Cache
+        uses: Swatinem/rust-cache@v2
+      
+      - name: Build FEAGI
+        run: |
+          cargo build --release --bin feagi
+          echo "✅ Built Linux binary"
+      
+      - name: Package release
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${{ inputs.tag_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          
+          mkdir -p release-package
+          cp target/release/feagi release-package/
+          cp feagi_configuration.toml release-package/
+          
+          cat > release-package/README.txt <<'EOF'
+          FEAGI v${VERSION} for Linux (x86_64)
+          
+          This package contains:
+          - feagi: Linux binary (x86_64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi' to desired location (e.g., /usr/local/bin/)
+          3. Ensure it's executable: chmod +x feagi
+          4. Run: ./feagi --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          EOF
+          
+          cd release-package
+          tar -czf ../feagi-linux-x86_64-v${VERSION}.tar.gz *
+          cd ..
+          
+          echo "✅ Created Linux release package"
+          ls -lh *.tar.gz
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            feagi-linux-*.tar.gz
+  
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout feagi-rust
+        uses: actions/checkout@v4
+      
+      - name: Clone feagi-core (dependency)
+        run: |
+          cd ..
+          git clone --depth 1 --branch ${{ github.event.inputs.feagi_core_ref || 'fdp-merge-mnt' }} https://github.com/feagi/feagi-core.git
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install Rust Cache
+        uses: Swatinem/rust-cache@v2
+      
+      - name: Build FEAGI
+        run: |
+          cargo build --release --bin feagi
+          echo "✅ Built Windows binary"
+      
+      - name: Package release
+        shell: pwsh
+        run: |
+          $version = "$env:GITHUB_REF" -replace 'refs/tags/v', ''
+          if ([string]::IsNullOrEmpty($version)) {
+            $version = "${{ inputs.tag_name }}" -replace '^v', ''
+          }
+          
+          New-Item -ItemType Directory -Force -Path release-package
+          Copy-Item target/release/feagi.exe release-package/
+          Copy-Item feagi_configuration.toml release-package/
+          
+          @"
+          FEAGI v$version for Windows (x86_64)
+          
+          This package contains:
+          - feagi.exe: Windows binary (x86_64)
+          - feagi_configuration.toml: Configuration file
+          
+          Installation:
+          1. Extract this archive
+          2. Move 'feagi.exe' to desired location
+          3. Run: feagi.exe --config feagi_configuration.toml
+          
+          For more information, visit: https://github.com/neuraville/feagi-rust
+          "@ | Out-File -FilePath release-package/README.txt -Encoding ASCII
+          
+          Compress-Archive -Path release-package/* -DestinationPath "feagi-windows-x86_64-v$version.zip" -Force
+          
+          echo "✅ Created Windows release package"
+          Get-ChildItem *.zip
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            feagi-windows-*.zip
+
+  create-release:
+    needs: [release-macos, release-linux, release-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+      
+      - name: Determine release type
+        id: release_type
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${{ inputs.tag_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          
+          if [[ "$VERSION" =~ -beta\. ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "Release type: Beta (pre-release)"
+          elif [[ "$VERSION" =~ -alpha\. ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "Release type: Alpha (pre-release)"
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "Release type: Stable"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+      
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION="${{ steps.release_type.outputs.version }}"
+          
+          cat > release-notes.md <<'EOF'
+          # FEAGI v${VERSION}
+          
+          ## Platform Support
+          - ✅ macOS (Universal: Intel x86_64 + Apple Silicon arm64)
+          - ✅ Linux (x86_64)
+          - ✅ Windows (x86_64)
+          
+          ## Downloads
+          - **macOS Universal**: \`feagi-macos-v${VERSION}.tar.gz\` (recommended for macOS)
+          - **macOS Intel only**: \`feagi-macos-x86_64-v${VERSION}.tar.gz\`
+          - **macOS ARM only**: \`feagi-macos-arm64-v${VERSION}.tar.gz\`
+          - **Linux**: \`feagi-linux-x86_64-v${VERSION}.tar.gz\`
+          - **Windows**: \`feagi-windows-x86_64-v${VERSION}.zip\`
+          
+          ## Installation
+          
+          ### macOS / Linux
+          \`\`\`bash
+          tar -xzf feagi-macos-v${VERSION}.tar.gz
+          cd feagi-macos-v${VERSION}
+          chmod +x feagi
+          ./feagi --config feagi_configuration.toml
+          \`\`\`
+          
+          ### Windows
+          \`\`\`powershell
+          Expand-Archive feagi-windows-x86_64-v${VERSION}.zip
+          cd feagi-windows-x86_64-v${VERSION}
+          .\\feagi.exe --config feagi_configuration.toml
+          \`\`\`
+          
+          ## What's Changed
+          <!-- Add changelog here -->
+          
+          **Full Changelog**: https://github.com/neuraville/feagi-rust/compare/v${VERSION}...v${VERSION}
+          EOF
+          
+          echo "Generated release notes"
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag_name }}
+          name: FEAGI v${{ steps.release_type.outputs.version }}
+          body_path: release-notes.md
+          prerelease: ${{ steps.release_type.outputs.prerelease }}
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
