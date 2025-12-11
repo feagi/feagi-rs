@@ -174,7 +174,7 @@ jobs:
   build-linux-x86_64:
     needs: determine-config
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_linux_x86_64 == true
+    if: github.event_name != 'workflow_dispatch' || inputs.build_linux_x86_64 == true
     steps:
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
@@ -304,7 +304,7 @@ jobs:
   build-linux-aarch64:
     needs: determine-config
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_linux_aarch64 == true
+    if: github.event_name != 'workflow_dispatch' || inputs.build_linux_aarch64 == true
     steps:
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
@@ -452,7 +452,7 @@ jobs:
   build-darwin-x86_64:
     needs: determine-config
     runs-on: macos-15
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_macos_intel == true
+    if: github.event_name != 'workflow_dispatch' || inputs.build_macos_intel == true
     steps:
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
@@ -582,7 +582,7 @@ jobs:
   build-darwin-aarch64:
     needs: determine-config
     runs-on: macos-latest
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_macos_silicon == true
+    if: github.event_name != 'workflow_dispatch' || inputs.build_macos_silicon == true
     steps:
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
@@ -712,7 +712,7 @@ jobs:
   build-windows-x86_64:
     needs: determine-config
     runs-on: windows-latest
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_windows == true
+    if: github.event_name != 'workflow_dispatch' || inputs.build_windows == true
     steps:
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
