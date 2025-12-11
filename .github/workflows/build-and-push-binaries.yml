@@ -296,7 +296,7 @@ jobs:
         with:
           name: feagi-linux-x86_64
           path: target/x86_64-unknown-linux-gnu/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # Linux aarch64 Build Job
@@ -444,7 +444,7 @@ jobs:
         with:
           name: feagi-linux-aarch64
           path: target/aarch64-unknown-linux-gnu/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # macOS Intel Build Job
@@ -574,7 +574,7 @@ jobs:
         with:
           name: feagi-darwin-x86_64
           path: target/x86_64-apple-darwin/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # macOS Apple Silicon Build Job
@@ -704,7 +704,7 @@ jobs:
         with:
           name: feagi-darwin-aarch64
           path: target/aarch64-apple-darwin/release/feagi
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # Windows Build Job
@@ -834,7 +834,7 @@ jobs:
         with:
           name: feagi-windows-x86_64
           path: target/x86_64-pc-windows-msvc/release/feagi.exe
-          retention-days: 1
+          retention-days: 30
 
   # ============================================================================
   # Collect all binaries and create PR (for dev builds) or Release (for production/beta/alpha)
@@ -1053,7 +1053,7 @@ jobs:
     name: Push Binaries to feagi/feagi Repo
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    if: always() && needs.determine-config.outputs.create_release == 'true'
+    if: always()
     
     steps:
       - name: Download all binaries
@@ -1129,12 +1129,23 @@ jobs:
             [ -f "feagi/bin/windows-x86_64/feagi.exe" ] && PLATFORMS+=("windows-x86_64")
             PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS[*]}")
             
-            git commit -m "chore: update FEAGI binaries for ${RELEASE_TYPE} release v${VERSION}
+            if [[ "${RELEASE_TYPE}" == "dev" ]]; then
+              COMMIT_MSG="chore: update FEAGI binaries for ${RELEASE_TYPE} build ${VERSION}
+
+          - Built from: ${{ github.repository }}@${{ needs.determine-config.outputs.source_branch }}
+          - Version: ${VERSION}
+          - Build Type: ${RELEASE_TYPE}
+          - Platforms: ${PLATFORMS_STR}"
+            else
+              COMMIT_MSG="chore: update FEAGI binaries for ${RELEASE_TYPE} release v${VERSION}
 
           - Built from: ${{ github.repository }}@${{ needs.determine-config.outputs.source_branch }}
           - Version: v${VERSION}
           - Release Type: ${RELEASE_TYPE}
           - Platforms: ${PLATFORMS_STR}"
+            fi
+            
+            git commit -m "${COMMIT_MSG}"
             
             git push origin staging
             echo "✅ Binaries pushed to staging branch"
