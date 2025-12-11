@@ -99,11 +99,6 @@ jobs:
       source_sha: ${{ steps.config.outputs.source_sha }}
       feagi_core_branch: ${{ steps.config.outputs.feagi_core_branch }}
       create_release: ${{ steps.config.outputs.create_release }}
-      build_linux_x86_64: ${{ steps.config.outputs.build_linux_x86_64 }}
-      build_linux_aarch64: ${{ steps.config.outputs.build_linux_aarch64 }}
-      build_macos_intel: ${{ steps.config.outputs.build_macos_intel }}
-      build_macos_silicon: ${{ steps.config.outputs.build_macos_silicon }}
-      build_windows: ${{ steps.config.outputs.build_windows }}
     steps:
       - name: Determine build configuration
         id: config
@@ -120,21 +115,6 @@ jobs:
             FEAGI_CORE_BRANCH="${{ github.event.inputs.feagi_core_branch }}"
             FEAGI_CORE_BRANCH="${FEAGI_CORE_BRANCH:-main}"
             
-            # Platform selection flags
-            BUILD_LINUX_X86_64="${{ github.event.inputs.build_linux_x86_64 }}"
-            BUILD_LINUX_AARCH64="${{ github.event.inputs.build_linux_aarch64 }}"
-            BUILD_MACOS_INTEL="${{ github.event.inputs.build_macos_intel }}"
-            BUILD_MACOS_SILICON="${{ github.event.inputs.build_macos_silicon }}"
-            BUILD_WINDOWS="${{ github.event.inputs.build_windows }}"
-            
-            # Debug: show what we received
-            echo "Platform flags received:"
-            echo "  Linux x86_64: ${BUILD_LINUX_X86_64}"
-            echo "  Linux aarch64: ${BUILD_LINUX_AARCH64}"
-            echo "  macOS Intel: ${BUILD_MACOS_INTEL}"
-            echo "  macOS Silicon: ${BUILD_MACOS_SILICON}"
-            echo "  Windows: ${BUILD_WINDOWS}"
-            
             # Auto-generate version for dev if not provided
             if [[ "${RELEASE_TYPE}" == "dev" && -z "${VERSION}" ]]; then
               VERSION="dev-$(date +%Y%m%d-%H%M%S)"
@@ -146,56 +126,26 @@ jobs:
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
-            # Tag-based triggers build all platforms
-            BUILD_LINUX_X86_64="true"
-            BUILD_LINUX_AARCH64="true"
-            BUILD_MACOS_INTEL="true"
-            BUILD_MACOS_SILICON="true"
-            BUILD_WINDOWS="true"
           elif [[ "${{ github.ref }}" =~ refs/tags/.*-beta\. ]]; then
             RELEASE_TYPE="beta"
             VERSION="${GITHUB_REF#refs/tags/v}"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
-            # Tag-based triggers build all platforms
-            BUILD_LINUX_X86_64="true"
-            BUILD_LINUX_AARCH64="true"
-            BUILD_MACOS_INTEL="true"
-            BUILD_MACOS_SILICON="true"
-            BUILD_WINDOWS="true"
           elif [[ "${{ github.ref }}" =~ refs/tags/.*-alpha\. ]]; then
             RELEASE_TYPE="alpha"
             VERSION="${GITHUB_REF#refs/tags/v}"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
-            # Tag-based triggers build all platforms
-            BUILD_LINUX_X86_64="true"
-            BUILD_LINUX_AARCH64="true"
-            BUILD_MACOS_INTEL="true"
-            BUILD_MACOS_SILICON="true"
-            BUILD_WINDOWS="true"
           else
-            # PR merge or other trigger - default to dev, build all platforms
+            # PR merge or other trigger - default to dev
             RELEASE_TYPE="dev"
             VERSION="dev-$(date +%Y%m%d-%H%M%S)"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
-            BUILD_LINUX_X86_64="true"
-            BUILD_LINUX_AARCH64="true"
-            BUILD_MACOS_INTEL="true"
-            BUILD_MACOS_SILICON="true"
-            BUILD_WINDOWS="true"
           fi
-          
-          # Output platform flags
-          echo "build_linux_x86_64=${BUILD_LINUX_X86_64}" >> $GITHUB_OUTPUT
-          echo "build_linux_aarch64=${BUILD_LINUX_AARCH64}" >> $GITHUB_OUTPUT
-          echo "build_macos_intel=${BUILD_MACOS_INTEL}" >> $GITHUB_OUTPUT
-          echo "build_macos_silicon=${BUILD_MACOS_SILICON}" >> $GITHUB_OUTPUT
-          echo "build_windows=${BUILD_WINDOWS}" >> $GITHUB_OUTPUT
           
           # Determine if we should create a GitHub Release
           # Only create releases for production, beta, and alpha (not dev)
@@ -218,49 +168,13 @@ jobs:
           echo "   Source Branch: ${SOURCE_BRANCH}"
           echo "   Create Release: ${CREATE_RELEASE}"
 
-  # Build binaries for all platforms
-  build-binaries:
+  # ============================================================================
+  # Linux x86_64 Build Job
+  # ============================================================================
+  build-linux-x86_64:
     needs: determine-config
-    name: Build FEAGI Binaries
-    # Skip entire job if platform is not enabled
-    if: |
-      (matrix.build_flag_output == 'build_linux_x86_64' && needs.determine-config.outputs.build_linux_x86_64 == 'true') ||
-      (matrix.build_flag_output == 'build_linux_aarch64' && needs.determine-config.outputs.build_linux_aarch64 == 'true') ||
-      (matrix.build_flag_output == 'build_macos_intel' && needs.determine-config.outputs.build_macos_intel == 'true') ||
-      (matrix.build_flag_output == 'build_macos_silicon' && needs.determine-config.outputs.build_macos_silicon == 'true') ||
-      (matrix.build_flag_output == 'build_windows' && needs.determine-config.outputs.build_windows == 'true')
-    strategy:
-      fail-fast: true  # Stop all jobs immediately if one fails
-      matrix:
-        include:
-          - platform: linux-x86_64
-            target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            binary_name: feagi
-            build_flag_output: build_linux_x86_64
-          - platform: linux-aarch64
-            target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            binary_name: feagi
-            build_flag_output: build_linux_aarch64
-          - platform: darwin-x86_64
-            target: x86_64-apple-darwin
-            os: macos-15
-            binary_name: feagi
-            build_flag_output: build_macos_intel
-          - platform: darwin-aarch64
-            target: aarch64-apple-darwin
-            os: macos-latest
-            binary_name: feagi
-            build_flag_output: build_macos_silicon
-          - platform: windows-x86_64
-            target: x86_64-pc-windows-msvc
-            os: windows-latest
-            binary_name: feagi.exe
-            build_flag_output: build_windows
-    
-    runs-on: ${{ matrix.os }}
-    
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_linux_x86_64 == true
     steps:
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
@@ -272,9 +186,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: feagi/feagi-core
-          # CRITICAL: FEAGI_CORE_TOKEN secret must be configured in repository settings
-          # The token must have 'repo' scope and access to feagi/feagi-core private repository
-          # Configure at: Settings > Secrets and variables > Actions > New repository secret
           token: ${{ secrets.FEAGI_CORE_TOKEN }}
           ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
           path: feagi-core
@@ -283,44 +194,34 @@ jobs:
       - name: Update Cargo.toml paths for CI
         shell: bash
         run: |
-          # Temporarily modify Cargo.toml to use feagi-core subdirectory instead of ../feagi-core
-          # Also enable vendored OpenSSL for cross-compilation
-          echo "Updating Cargo.toml paths and enabling vendored OpenSSL..."
           python << 'PYTHON_SCRIPT'
           import re
           import sys
           import io
           
-          # Set stdout to UTF-8 to handle emojis on Windows
           if sys.platform == 'win32':
               sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
           
           with open('Cargo.toml', 'r', encoding='utf-8') as f:
               content = f.read()
           
-          # Replace ../feagi-core with feagi-core
           updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
           
           with open('Cargo.toml', 'w', encoding='utf-8') as f:
               f.write(updated)
           
-          # Also update feagi-core/crates/feagi-api/Cargo.toml to enable vendored OpenSSL for reqwest
           api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
           try:
               with open(api_cargo_path, 'r', encoding='utf-8') as f:
                   api_content = f.read()
               
-              # Enable vendored feature for reqwest if it exists (for cross-compilation)
               if 'reqwest' in api_content:
-                  # Replace reqwest line to add native-tls-vendored feature (compiles OpenSSL from source)
-                  # Handle both with and without existing features
                   if 'features = ["json"]' in api_content:
                       api_content = api_content.replace(
                           'reqwest = { version = "0.11", features = ["json"] }',
                           'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
                       )
                   elif 'reqwest = { version =' in api_content:
-                      # If reqwest exists but no features, add them
                       api_content = re.sub(
                           r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
                           r'\1, features = ["json", "native-tls-vendored"] }',
@@ -335,86 +236,160 @@ jobs:
           
           print("Updated Cargo.toml paths")
           PYTHON_SCRIPT
-          echo "Showing relevant lines:"
-          grep -E "(feagi-core|feagi-)" Cargo.toml | head -10 || echo "Could not display paths"
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-unknown-linux-gnu
       
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.6
-        with:
-          version: "v0.12.0"
       
-      - name: Configure sccache for GitHub Actions
+      - name: Configure sccache
         shell: bash
         run: |
-          echo "Configuring sccache..."
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          # Verify sccache is in PATH and working
-          which sccache || echo "sccache not in PATH"
-          sccache --version || echo "sccache version check failed"
-          # Start sccache server explicitly (required on Windows)
-          sccache --start-server || echo "sccache server start failed"
-          # Verify server is running
+          sccache --start-server || true
           sleep 1
-          if sccache --show-stats > /dev/null 2>&1; then
-            echo "✅ sccache server is running"
-            sccache --show-stats
-          else
+          if ! sccache --show-stats > /dev/null 2>&1; then
             echo "❌ ERROR: sccache server failed to start"
-            echo "This will cause build failures. Checking diagnostics..."
-            sccache --show-stats 2>&1 || true
             exit 1
           fi
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
-        id: cache-deps
         with:
           path: |
             ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          # Cache dependencies separately - only invalidate when Cargo.lock changes
-          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: linux-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-deps-
+            linux-x86_64-cargo-deps-
       
       - name: Cache sccache
         uses: actions/cache@v4
-        id: cache-sccache
         with:
           path: ~/.cache/sccache
-          key: ${{ runner.os }}-sccache-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: linux-x86_64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-sccache-${{ matrix.target }}-
-            ${{ runner.os }}-sccache-
+            linux-x86_64-sccache-
       
-      - name: Cache Rust build artifacts
-        uses: actions/cache@v4
-        id: cache-build
-        with:
-          path: |
-            target/${{ matrix.target }}/release/
-            target/${{ matrix.target }}/deps/
-            target/${{ matrix.target }}/incremental/
-          # Cache compiled binaries - invalidate when source code or Cargo.lock changes
-          key: ${{ runner.os }}-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}-${{ hashFiles('**/*.rs', 'feagi-core/**/*.rs', '**/Cargo.toml', 'feagi-core/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}-
-            ${{ runner.os }}-rust-${{ matrix.target }}-
-      
-      - name: Setup cross-compilation for Linux aarch64
-        if: matrix.target == 'aarch64-unknown-linux-gnu' && matrix.os == 'ubuntu-latest'
+      - name: Build FEAGI
         shell: bash
         run: |
-          echo "Setting up cross-compilation for aarch64..."
-          # Install cross-compilation tools and build essentials for vendored OpenSSL
+          BINARY_PATH="target/x86_64-unknown-linux-gnu/release/feagi"
+          
+          if [ -f "$BINARY_PATH" ]; then
+            echo "Binary found in cache - using cached version"
+            ls -lh "$BINARY_PATH"
+          else
+            echo "Building from source..."
+            cargo build --release --target x86_64-unknown-linux-gnu
+            ls -lh "$BINARY_PATH"
+          fi
+      
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: feagi-linux-x86_64
+          path: target/x86_64-unknown-linux-gnu/release/feagi
+          retention-days: 1
+
+  # ============================================================================
+  # Linux aarch64 Build Job
+  # ============================================================================
+  build-linux-aarch64:
+    needs: determine-config
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_linux_aarch64 == true
+    steps:
+      - name: Checkout feagi-rust (source repo)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-config.outputs.source_branch }}
+          fetch-depth: 0
+      
+      - name: Checkout feagi-core (dependency repo)
+        uses: actions/checkout@v4
+        with:
+          repository: feagi/feagi-core
+          token: ${{ secrets.FEAGI_CORE_TOKEN }}
+          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
+          path: feagi-core
+          fetch-depth: 0
+      
+      - name: Update Cargo.toml paths for CI
+        shell: bash
+        run: |
+          python << 'PYTHON_SCRIPT'
+          import re
+          import sys
+          import io
+          
+          if sys.platform == 'win32':
+              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+          
+          with open('Cargo.toml', 'r', encoding='utf-8') as f:
+              content = f.read()
+          
+          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
+          
+          with open('Cargo.toml', 'w', encoding='utf-8') as f:
+              f.write(updated)
+          
+          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
+          try:
+              with open(api_cargo_path, 'r', encoding='utf-8') as f:
+                  api_content = f.read()
+              
+              if 'reqwest' in api_content:
+                  if 'features = ["json"]' in api_content:
+                      api_content = api_content.replace(
+                          'reqwest = { version = "0.11", features = ["json"] }',
+                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
+                      )
+                  elif 'reqwest = { version =' in api_content:
+                      api_content = re.sub(
+                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
+                          r'\1, features = ["json", "native-tls-vendored"] }',
+                          api_content
+                      )
+                  
+                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
+                      f.write(api_content)
+                  print("Enabled native-tls-vendored for reqwest in feagi-api")
+          except FileNotFoundError:
+              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
+          
+          print("Updated Cargo.toml paths")
+          PYTHON_SCRIPT
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          sccache --start-server || true
+          sleep 1
+          if ! sccache --show-stats > /dev/null 2>&1; then
+            echo "❌ ERROR: sccache server failed to start"
+            exit 1
+          fi
+      
+      - name: Setup cross-compilation for Linux aarch64
+        shell: bash
+        run: |
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
@@ -424,111 +399,457 @@ jobs:
             perl \
             make \
             ca-certificates
-          # Use vendored OpenSSL feature to compile from source (avoids system package issues)
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
-          echo "Cross-compilation setup complete"
       
-      - name: Verify directory structure
-        shell: bash
-        run: |
-          echo "Current directory: $(pwd)"
-          echo "Checking for feagi-core:"
-          if [ -d "feagi-core" ]; then
-            echo "feagi-core exists"
-            ls -la feagi-core/ | head -10 || echo "Directory listing completed"
-          else
-            echo "ERROR: feagi-core not found"
-            exit 1
-          fi
-          echo ""
-          echo "Checking Cargo.toml path dependencies:"
-          if [ -f "feagi-core/crates/feagi-api/Cargo.toml" ]; then
-            echo "feagi-core/crates/feagi-api/Cargo.toml exists"
-          else
-            echo "ERROR: feagi-core/crates/feagi-api/Cargo.toml not found"
-            exit 1
-          fi
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: linux-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            linux-aarch64-cargo-deps-
+      
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: linux-aarch64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            linux-aarch64-sccache-
       
       - name: Build FEAGI
         shell: bash
         run: |
-          echo "Building FEAGI for ${{ matrix.platform }}..."
-          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          BINARY_PATH="target/aarch64-unknown-linux-gnu/release/feagi"
           
-          # Display cache effectiveness metrics
-          echo "=== Cache Effectiveness Report ==="
-          echo "Dependencies cache: ${{ steps.cache-deps.outputs.cache-hit }}"
-          echo "sccache cache: ${{ steps.cache-sccache.outputs.cache-hit }}"
-          echo "Build artifacts cache: ${{ steps.cache-build.outputs.cache-hit }}"
-          echo "RUSTC_WRAPPER: ${RUSTC_WRAPPER:-not set}"
-          
-          # Verify sccache is still working before build
-          if [ -n "${RUSTC_WRAPPER:-}" ]; then
-            echo "Verifying sccache before build..."
-            sccache --show-stats || {
-              echo "❌ ERROR: sccache stopped working!"
-              exit 1
-            }
-          fi
-          
-          # Check if binary already exists from cache
           if [ -f "$BINARY_PATH" ]; then
-            echo "Binary found in cache - verifying..."
+            echo "Binary found in cache - using cached version"
             ls -lh "$BINARY_PATH"
-            file "$BINARY_PATH" || true
-            echo "Using cached binary - skipping build (saved ~10+ minutes)"
           else
-            echo "Binary not in cache - building from source..."
-            
-            # Show sccache stats before build
-            if [ -n "${RUSTC_WRAPPER:-}" ]; then
-              echo "sccache stats before build:"
-              sccache --show-stats || true
-            fi
-            
-            START_TIME=$(date +%s)
-            if ! cargo build --release --target ${{ matrix.target }}; then
-              echo "Build failed for ${{ matrix.platform }}"
-              exit 1
-            fi
-            END_TIME=$(date +%s)
-            BUILD_DURATION=$((END_TIME - START_TIME))
-            
-            # Show sccache stats after build
-            if [ -n "${RUSTC_WRAPPER:-}" ]; then
-              echo "sccache stats after build:"
-              sccache --show-stats || true
-            fi
-            
-            echo "Build complete for ${{ matrix.platform }} (took ${BUILD_DURATION}s)"
+            echo "Building from source..."
+            cargo build --release --target aarch64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
       
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: feagi-${{ matrix.platform }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+          name: feagi-linux-aarch64
+          path: target/aarch64-unknown-linux-gnu/release/feagi
           retention-days: 1
 
+  # ============================================================================
+  # macOS Intel Build Job
+  # ============================================================================
+  build-darwin-x86_64:
+    needs: determine-config
+    runs-on: macos-15
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_macos_intel == true
+    steps:
+      - name: Checkout feagi-rust (source repo)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-config.outputs.source_branch }}
+          fetch-depth: 0
+      
+      - name: Checkout feagi-core (dependency repo)
+        uses: actions/checkout@v4
+        with:
+          repository: feagi/feagi-core
+          token: ${{ secrets.FEAGI_CORE_TOKEN }}
+          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
+          path: feagi-core
+          fetch-depth: 0
+      
+      - name: Update Cargo.toml paths for CI
+        shell: bash
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import re
+          import sys
+          import io
+          
+          if sys.platform == 'win32':
+              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+          
+          with open('Cargo.toml', 'r', encoding='utf-8') as f:
+              content = f.read()
+          
+          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
+          
+          with open('Cargo.toml', 'w', encoding='utf-8') as f:
+              f.write(updated)
+          
+          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
+          try:
+              with open(api_cargo_path, 'r', encoding='utf-8') as f:
+                  api_content = f.read()
+              
+              if 'reqwest' in api_content:
+                  if 'features = ["json"]' in api_content:
+                      api_content = api_content.replace(
+                          'reqwest = { version = "0.11", features = ["json"] }',
+                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
+                      )
+                  elif 'reqwest = { version =' in api_content:
+                      api_content = re.sub(
+                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
+                          r'\1, features = ["json", "native-tls-vendored"] }',
+                          api_content
+                      )
+                  
+                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
+                      f.write(api_content)
+                  print("Enabled native-tls-vendored for reqwest in feagi-api")
+          except FileNotFoundError:
+              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
+          
+          print("Updated Cargo.toml paths")
+          PYTHON_SCRIPT
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          sccache --start-server || true
+          sleep 1
+          if ! sccache --show-stats > /dev/null 2>&1; then
+            echo "❌ ERROR: sccache server failed to start"
+            exit 1
+          fi
+      
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: darwin-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            darwin-x86_64-cargo-deps-
+      
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: darwin-x86_64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            darwin-x86_64-sccache-
+      
+      - name: Build FEAGI
+        shell: bash
+        run: |
+          BINARY_PATH="target/x86_64-apple-darwin/release/feagi"
+          
+          if [ -f "$BINARY_PATH" ]; then
+            echo "Binary found in cache - using cached version"
+            ls -lh "$BINARY_PATH"
+          else
+            echo "Building from source..."
+            cargo build --release --target x86_64-apple-darwin
+            ls -lh "$BINARY_PATH"
+          fi
+      
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: feagi-darwin-x86_64
+          path: target/x86_64-apple-darwin/release/feagi
+          retention-days: 1
+
+  # ============================================================================
+  # macOS Apple Silicon Build Job
+  # ============================================================================
+  build-darwin-aarch64:
+    needs: determine-config
+    runs-on: macos-latest
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_macos_silicon == true
+    steps:
+      - name: Checkout feagi-rust (source repo)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-config.outputs.source_branch }}
+          fetch-depth: 0
+      
+      - name: Checkout feagi-core (dependency repo)
+        uses: actions/checkout@v4
+        with:
+          repository: feagi/feagi-core
+          token: ${{ secrets.FEAGI_CORE_TOKEN }}
+          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
+          path: feagi-core
+          fetch-depth: 0
+      
+      - name: Update Cargo.toml paths for CI
+        shell: bash
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import re
+          import sys
+          import io
+          
+          if sys.platform == 'win32':
+              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+          
+          with open('Cargo.toml', 'r', encoding='utf-8') as f:
+              content = f.read()
+          
+          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
+          
+          with open('Cargo.toml', 'w', encoding='utf-8') as f:
+              f.write(updated)
+          
+          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
+          try:
+              with open(api_cargo_path, 'r', encoding='utf-8') as f:
+                  api_content = f.read()
+              
+              if 'reqwest' in api_content:
+                  if 'features = ["json"]' in api_content:
+                      api_content = api_content.replace(
+                          'reqwest = { version = "0.11", features = ["json"] }',
+                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
+                      )
+                  elif 'reqwest = { version =' in api_content:
+                      api_content = re.sub(
+                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
+                          r'\1, features = ["json", "native-tls-vendored"] }',
+                          api_content
+                      )
+                  
+                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
+                      f.write(api_content)
+                  print("Enabled native-tls-vendored for reqwest in feagi-api")
+          except FileNotFoundError:
+              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
+          
+          print("Updated Cargo.toml paths")
+          PYTHON_SCRIPT
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          sccache --start-server || true
+          sleep 1
+          if ! sccache --show-stats > /dev/null 2>&1; then
+            echo "❌ ERROR: sccache server failed to start"
+            exit 1
+          fi
+      
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: darwin-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            darwin-aarch64-cargo-deps-
+      
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: darwin-aarch64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            darwin-aarch64-sccache-
+      
+      - name: Build FEAGI
+        shell: bash
+        run: |
+          BINARY_PATH="target/aarch64-apple-darwin/release/feagi"
+          
+          if [ -f "$BINARY_PATH" ]; then
+            echo "Binary found in cache - using cached version"
+            ls -lh "$BINARY_PATH"
+          else
+            echo "Building from source..."
+            cargo build --release --target aarch64-apple-darwin
+            ls -lh "$BINARY_PATH"
+          fi
+      
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: feagi-darwin-aarch64
+          path: target/aarch64-apple-darwin/release/feagi
+          retention-days: 1
+
+  # ============================================================================
+  # Windows Build Job
+  # ============================================================================
+  build-windows-x86_64:
+    needs: determine-config
+    runs-on: windows-latest
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_windows == true
+    steps:
+      - name: Checkout feagi-rust (source repo)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-config.outputs.source_branch }}
+          fetch-depth: 0
+      
+      - name: Checkout feagi-core (dependency repo)
+        uses: actions/checkout@v4
+        with:
+          repository: feagi/feagi-core
+          token: ${{ secrets.FEAGI_CORE_TOKEN }}
+          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
+          path: feagi-core
+          fetch-depth: 0
+      
+      - name: Update Cargo.toml paths for CI
+        shell: bash
+        run: |
+          python << 'PYTHON_SCRIPT'
+          import re
+          import sys
+          import io
+          
+          if sys.platform == 'win32':
+              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+          
+          with open('Cargo.toml', 'r', encoding='utf-8') as f:
+              content = f.read()
+          
+          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
+          
+          with open('Cargo.toml', 'w', encoding='utf-8') as f:
+              f.write(updated)
+          
+          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
+          try:
+              with open(api_cargo_path, 'r', encoding='utf-8') as f:
+                  api_content = f.read()
+              
+              if 'reqwest' in api_content:
+                  if 'features = ["json"]' in api_content:
+                      api_content = api_content.replace(
+                          'reqwest = { version = "0.11", features = ["json"] }',
+                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
+                      )
+                  elif 'reqwest = { version =' in api_content:
+                      api_content = re.sub(
+                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
+                          r'\1, features = ["json", "native-tls-vendored"] }',
+                          api_content
+                      )
+                  
+                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
+                      f.write(api_content)
+                  print("Enabled native-tls-vendored for reqwest in feagi-api")
+          except FileNotFoundError:
+              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
+          
+          print("Updated Cargo.toml paths")
+          PYTHON_SCRIPT
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          sccache --start-server || true
+          sleep 1
+          if ! sccache --show-stats > /dev/null 2>&1; then
+            echo "❌ ERROR: sccache server failed to start"
+            exit 1
+          fi
+      
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: windows-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            windows-x86_64-cargo-deps-
+      
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: windows-x86_64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          restore-keys: |
+            windows-x86_64-sccache-
+      
+      - name: Build FEAGI
+        shell: bash
+        run: |
+          BINARY_PATH="target/x86_64-pc-windows-msvc/release/feagi.exe"
+          
+          if [ -f "$BINARY_PATH" ]; then
+            echo "Binary found in cache - using cached version"
+            ls -lh "$BINARY_PATH"
+          else
+            echo "Building from source..."
+            cargo build --release --target x86_64-pc-windows-msvc
+            ls -lh "$BINARY_PATH"
+          fi
+      
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: feagi-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/feagi.exe
+          retention-days: 1
+
+  # ============================================================================
   # Collect all binaries and create PR (for dev builds) or Release (for production/beta/alpha)
+  # ============================================================================
   create-pr:
     name: Create PR with Binaries
-    needs: [determine-config, build-binaries]
+    needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    # Only run if ALL binary builds succeeded AND it's a dev build (no release)
-    if: success() && needs.determine-config.outputs.create_release == 'false'
+    if: always() && needs.determine-config.outputs.create_release == 'false'
     
     steps:
       - name: Determine source commit
         id: source_info
         shell: bash
         run: |
-          # Get source info from config or GitHub context
           if [ -n "${{ needs.determine-config.outputs.source_sha }}" ]; then
             SOURCE_SHA="${{ needs.determine-config.outputs.source_sha }}"
           else
@@ -539,73 +860,37 @@ jobs:
           
           echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
           echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
-          echo "Source: $SOURCE_BRANCH@$SOURCE_SHA"
       
       - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
           path: binaries
       
-      - name: List downloaded artifacts
+      - name: Determine which platforms were built
+        id: platforms
         shell: bash
         run: |
-          echo "Downloaded artifacts structure:"
-          find binaries -type f -o -type d | head -20
-          echo ""
-          echo "Looking for feagi binaries:"
-          find binaries -name "feagi*" -o -name "*.exe" || echo "No binaries found"
-      
-      - name: Verify all binaries are present
-        shell: bash
-        run: |
-          echo "Verifying binaries are present (based on selected platforms)..."
-          REQUIRED_BINARIES=()
-          
-          # Build list of required binaries based on platform selection
-          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
-            REQUIRED_BINARIES+=("feagi-linux-x86_64/feagi")
+          PLATFORMS=()
+          if [ -f "binaries/feagi-linux-x86_64/feagi" ]; then
+            PLATFORMS+=("linux-x86_64")
           fi
-          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
-            REQUIRED_BINARIES+=("feagi-linux-aarch64/feagi")
+          if [ -f "binaries/feagi-linux-aarch64/feagi" ]; then
+            PLATFORMS+=("linux-aarch64")
           fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
-            REQUIRED_BINARIES+=("feagi-darwin-x86_64/feagi")
+          if [ -f "binaries/feagi-darwin-x86_64/feagi" ]; then
+            PLATFORMS+=("darwin-x86_64")
           fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
-            REQUIRED_BINARIES+=("feagi-darwin-aarch64/feagi")
+          if [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
+            PLATFORMS+=("darwin-aarch64")
           fi
-          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
-            REQUIRED_BINARIES+=("feagi-windows-x86_64/feagi.exe")
+          if [ -f "binaries/feagi-windows-x86_64/feagi.exe" ]; then
+            PLATFORMS+=("windows-x86_64")
           fi
           
-          if [ ${#REQUIRED_BINARIES[@]} -eq 0 ]; then
-            echo "⚠️ WARNING: No platforms selected for build!"
-            exit 1
-          fi
-          
-          echo "Expected binaries (${#REQUIRED_BINARIES[@]}):"
-          for binary in "${REQUIRED_BINARIES[@]}"; do
-            echo "  - $binary"
-          done
-          echo ""
-          
-          MISSING=0
-          for binary in "${REQUIRED_BINARIES[@]}"; do
-            if [ ! -f "binaries/$binary" ]; then
-              echo "❌ ERROR: Missing binary: $binary"
-              MISSING=1
-            else
-              echo "✅ Found: $binary"
-            fi
-          done
-          
-          if [ $MISSING -eq 1 ]; then
-            echo "ERROR: One or more required binaries are missing. Build job may have failed."
-            exit 1
-          fi
-          
-          echo ""
-          echo "✅ All required binaries are present (${#REQUIRED_BINARIES[@]} platform(s))"
+          PLATFORMS_STR=$(IFS=','; echo "${PLATFORMS[*]}")
+          echo "platforms=${PLATFORMS_STR}" >> $GITHUB_OUTPUT
+          echo "platform_count=${#PLATFORMS[@]}" >> $GITHUB_OUTPUT
+          echo "Built platforms: ${PLATFORMS_STR}"
       
       - name: Checkout public repo
         uses: actions/checkout@v4
@@ -615,60 +900,6 @@ jobs:
           path: public-repo
           ref: staging
           fetch-depth: 0
-      
-      - name: Inspect public repo structure
-        shell: bash
-        run: |
-          # Verify public-repo directory exists (from checkout step)
-          if [ ! -d "public-repo" ]; then
-            echo "ERROR: public-repo directory not found!"
-            echo "The checkout step may have failed. Check the previous step logs."
-            exit 1
-          fi
-          
-          cd public-repo || {
-            echo "ERROR: Failed to change directory to public-repo"
-            exit 1
-          }
-          
-          echo "=== PUBLIC REPO STRUCTURE ==="
-          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
-          echo "Current commit: $(git rev-parse HEAD)"
-          echo ""
-          echo "Root directory contents:"
-          ls -la
-          echo ""
-          echo "Checking for feagi directory:"
-          if [ -d "feagi" ]; then
-            echo "✓ feagi/ exists"
-            ls -la feagi/
-            if [ -d "feagi/bin" ]; then
-              echo "✓ feagi/bin/ exists"
-              echo "Current contents:"
-              find feagi/bin -type f -exec ls -lh {} \;
-              echo ""
-              echo "Directory structure:"
-              find feagi/bin -type d | sort
-              echo ""
-              echo "Files in git (current branch):"
-              git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "No feagi/bin files in git"
-            else
-              echo "⚠ WARNING: feagi/bin/ does not exist - will be created during binary copy step"
-              echo "This is expected if this is the first time binaries are being added."
-            fi
-          else
-            echo "⚠ WARNING: feagi/ does not exist - will be created during binary copy step"
-            echo "This is expected if this is the first time binaries are being added."
-          fi
-          echo ""
-          echo "Checking .gitignore:"
-          if [ -f ".gitignore" ]; then
-            echo ".gitignore exists"
-            echo ".gitignore contents related to binaries:"
-            grep -i "bin\|feagi\|\.exe" .gitignore || echo "No binary-related ignores found"
-          else
-            echo "⚠ WARNING: .gitignore does not exist"
-          fi
       
       - name: Create branch name
         id: branch_name
@@ -680,7 +911,6 @@ jobs:
             BRANCH_NAME="update-binaries-$(date +%Y%m%d-%H%M%S)-$(echo ${{ steps.source_info.outputs.source_sha }} | cut -c1-7)"
           fi
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          echo "Branch name: $BRANCH_NAME"
       
       - name: Create and checkout branch
         shell: bash
@@ -688,417 +918,51 @@ jobs:
           cd public-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # CRITICAL: Show what branch we're on before creating new branch
-          echo "Current branch before creating new branch: $(git rev-parse --abbrev-ref HEAD)"
-          echo "Current commit: $(git rev-parse HEAD)"
-          echo "Staging branch commit: $(git rev-parse origin/staging 2>/dev/null || echo 'not fetched yet')"
-          
-          # Create new branch from current HEAD (which should be staging)
           git checkout -b ${{ steps.branch_name.outputs.branch_name }}
-          
-          echo "Created branch: ${{ steps.branch_name.outputs.branch_name }}"
-          echo "Branch is based on: $(git rev-parse HEAD)"
-          echo "Branch parent: $(git rev-parse HEAD^ 2>/dev/null || echo 'no parent')"
       
-      - name: Organize and copy binaries
+      - name: Copy binaries
         shell: bash
         run: |
-          echo "Organizing binaries..."
-          echo "Checking downloaded artifacts:"
-          ls -la binaries/ || echo "binaries directory not found"
-          find binaries -type f -name "feagi*" || echo "No feagi binaries found"
-          
-          # Create directory structure
           cd public-repo
           
-          # Check repository structure
-          echo "Repository structure:"
-          ls -la
-          echo ""
-          echo "Checking if feagi directory exists:"
-          if [ -d "feagi" ]; then
-            echo "feagi/ exists:"
-            ls -la feagi/
-            if [ -d "feagi/bin" ]; then
-              echo "feagi/bin/ exists:"
-              ls -la feagi/bin/
-              echo "Current contents:"
-              find feagi/bin -type f || echo "No files in feagi/bin"
-            else
-              echo "feagi/bin/ does not exist - will create"
-            fi
-          else
-            echo "feagi/ does not exist - will create"
-          fi
-          
-          # Check if .gitignore exists and what it contains
-          echo ""
-          echo "Checking .gitignore:"
-          if [ -f ".gitignore" ]; then
-            echo ".gitignore exists:"
-            cat .gitignore | grep -i "bin\|feagi\|\.exe" || echo "No binary-related ignores found"
-          else
-            echo ".gitignore does not exist"
-          fi
-          
-          # Build list of platforms that were built
-          PLATFORMS=()
-          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
-            PLATFORMS+=("linux-x86_64")
+          # Create directories and copy binaries
+          if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
             mkdir -p feagi/bin/linux-x86_64
+            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
+            chmod +x feagi/bin/linux-x86_64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
-            PLATFORMS+=("linux-aarch64")
+          
+          if [ -f "../binaries/feagi-linux-aarch64/feagi" ]; then
             mkdir -p feagi/bin/linux-aarch64
+            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
+            chmod +x feagi/bin/linux-aarch64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
-            PLATFORMS+=("darwin-x86_64")
+          
+          if [ -f "../binaries/feagi-darwin-x86_64/feagi" ]; then
             mkdir -p feagi/bin/darwin-x86_64
+            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
+            chmod +x feagi/bin/darwin-x86_64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
-            PLATFORMS+=("darwin-aarch64")
+          
+          if [ -f "../binaries/feagi-darwin-aarch64/feagi" ]; then
             mkdir -p feagi/bin/darwin-aarch64
+            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
+            chmod +x feagi/bin/darwin-aarch64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
-            PLATFORMS+=("windows-x86_64")
+          
+          if [ -f "../binaries/feagi-windows-x86_64/feagi.exe" ]; then
             mkdir -p feagi/bin/windows-x86_64
+            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
           fi
-          
-          PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS[*]}")
-          echo "PLATFORMS=${PLATFORMS_STR}" >> $GITHUB_ENV
-          
-          echo ""
-          echo "Directory structure after creation:"
-          tree feagi/bin/ 2>/dev/null || find feagi/bin -type d
-          
-          # Copy binaries to correct locations - only for selected platforms
-          echo "Copying binaries (will overwrite existing files)..."
-          COPY_FAILED=0
-          
-          # Linux x86_64 - only if selected
-          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
-            if cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi; then
-              if [ -f "feagi/bin/linux-x86_64/feagi" ]; then
-                SIZE=$(stat -f%z "feagi/bin/linux-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-x86_64/feagi" 2>/dev/null || echo "unknown")
-                echo "  ✓ Copied: linux-x86_64/feagi ($SIZE bytes)"
-              else
-                echo "  ✗ ERROR: Copy failed - file not found after copy"
-                COPY_FAILED=1
-              fi
-            else
-              echo "  ✗ ERROR: Copy command failed for linux-x86_64/feagi"
-              COPY_FAILED=1
-            fi
-          fi
-          
-          # Linux aarch64 - only if selected
-          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
-            if cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi; then
-              if [ -f "feagi/bin/linux-aarch64/feagi" ]; then
-                SIZE=$(stat -f%z "feagi/bin/linux-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-aarch64/feagi" 2>/dev/null || echo "unknown")
-                echo "  ✓ Copied: linux-aarch64/feagi ($SIZE bytes)"
-              else
-                echo "  ✗ ERROR: Copy failed - file not found after copy"
-                COPY_FAILED=1
-              fi
-            else
-              echo "  ✗ ERROR: Copy command failed for linux-aarch64/feagi"
-              COPY_FAILED=1
-            fi
-          fi
-          
-          # Darwin x86_64 - only if selected
-          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
-            if cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi; then
-              if [ -f "feagi/bin/darwin-x86_64/feagi" ]; then
-                SIZE=$(stat -f%z "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || echo "unknown")
-                echo "  ✓ Copied: darwin-x86_64/feagi ($SIZE bytes)"
-              else
-                echo "  ✗ ERROR: Copy failed - file not found after copy"
-                COPY_FAILED=1
-              fi
-            else
-              echo "  ✗ ERROR: Copy command failed for darwin-x86_64/feagi"
-              COPY_FAILED=1
-            fi
-          fi
-          
-          # Darwin aarch64 - only if selected
-          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
-            if cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi; then
-              if [ -f "feagi/bin/darwin-aarch64/feagi" ]; then
-                SIZE=$(stat -f%z "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || echo "unknown")
-                echo "  ✓ Copied: darwin-aarch64/feagi ($SIZE bytes)"
-              else
-                echo "  ✗ ERROR: Copy failed - file not found after copy"
-                COPY_FAILED=1
-              fi
-            else
-              echo "  ✗ ERROR: Copy command failed for darwin-aarch64/feagi"
-              COPY_FAILED=1
-            fi
-          fi
-          
-          # Windows x86_64 - only if selected
-          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
-            if cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe; then
-              if [ -f "feagi/bin/windows-x86_64/feagi.exe" ]; then
-                SIZE=$(stat -f%z "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || stat -c%s "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || echo "unknown")
-                echo "  ✓ Copied: windows-x86_64/feagi.exe ($SIZE bytes)"
-              else
-                echo "  ✗ ERROR: Copy failed - file not found after copy"
-                COPY_FAILED=1
-              fi
-            else
-              echo "  ✗ ERROR: Copy command failed for windows-x86_64/feagi.exe"
-              COPY_FAILED=1
-            fi
-          fi
-          
-          if [ $COPY_FAILED -eq 1 ]; then
-            echo ""
-            echo "ERROR: One or more binary copies failed!"
-            echo "Verifying what was actually copied:"
-            find feagi/bin -type f -exec ls -lh {} \;
-            exit 1
-          fi
-          
-          echo "All binaries copied successfully:"
-          ls -lh feagi/bin/*/
-          echo ""
-          echo "Verifying all binaries exist:"
-          for dir in feagi/bin/*/; do
-            echo "  $dir: $(ls -1 $dir | wc -l) file(s)"
-            ls -lh "$dir"
-          done
-          echo ""
-          echo "Full directory tree:"
-          tree feagi/bin/ 2>/dev/null || find feagi/bin -type f -exec ls -lh {} \;
       
       - name: Commit changes
         shell: bash
         run: |
           cd public-repo
           
-          # Check what files exist before adding
-          echo "Files in feagi/bin/ before git add:"
-          find feagi/bin -type f -exec ls -lh {} \;
+          git add -f feagi/bin/
           
-          # Check git status before adding
-          echo "Git status before adding:"
-          git status --short feagi/bin/ || echo "No status for feagi/bin"
-          
-          # Ensure directories exist in git (create .gitkeep if needed)
-          for dir in feagi/bin/linux-x86_64 feagi/bin/linux-aarch64 feagi/bin/darwin-x86_64 feagi/bin/darwin-aarch64 feagi/bin/windows-x86_64; do
-            if [ ! -d "$dir" ]; then
-              mkdir -p "$dir"
-            fi
-            # Ensure directory is tracked (git add on empty dir does nothing, but we have files)
-            git add -N "$dir" 2>/dev/null || true
-          done
-          
-          # Force add binary files (in case they're in .gitignore)
-          echo "Force adding binaries to git..."
-          ADD_FAILED=0
-          
-          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-            if [ ! -f "$file" ]; then
-              echo "  ✗ ERROR: File does not exist: $file"
-              ADD_FAILED=1
-              continue
-            fi
-            
-            if git add -f "$file"; then
-              # Verify it's actually staged
-              if git diff --staged --name-only | grep -q "^$file$"; then
-                SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "unknown")
-                echo "  ✓ Added and staged: $file ($SIZE bytes)"
-              else
-                echo "  ✗ ERROR: File added but not in staged list: $file"
-                ADD_FAILED=1
-              fi
-            else
-              echo "  ✗ ERROR: git add failed for: $file"
-              ADD_FAILED=1
-            fi
-          done
-          
-          if [ $ADD_FAILED -eq 1 ]; then
-            echo ""
-            echo "ERROR: Failed to add one or more binaries to git!"
-            echo "Staged files:"
-            git diff --staged --name-only
-            exit 1
-          fi
-          
-          # Also add the entire bin directory structure to ensure it's tracked
-          if ! git add -f feagi/bin/; then
-            echo "WARNING: Failed to add feagi/bin/ directory, but individual files were added"
-          fi
-          
-          # Final verification: all 5 files must be staged
-          echo ""
-          echo "Final verification - all binaries must be staged:"
-          STAGED_COUNT=$(git diff --staged --name-only | grep -c "^feagi/bin/.*/feagi" || echo "0")
-          if [ "$STAGED_COUNT" -lt 5 ]; then
-            echo "  ✗ ERROR: Only $STAGED_COUNT binaries staged, expected 5!"
-            echo "Staged files:"
-            git diff --staged --name-only | grep "^feagi/bin"
-            exit 1
-          else
-            echo "  ✓ All 5 binaries are staged"
-          fi
-          
-          # Show what's staged
-          echo ""
-          echo "Git status after adding:"
-          git status --short
-          echo ""
-          echo "Staged files:"
-          git diff --staged --name-status
-          echo ""
-          echo "Staged file count:"
-          git diff --staged --name-only | wc -l
-          echo ""
-          echo "Staged file list:"
-          git diff --staged --name-only
-          
-          # Compare with staging branch to see what's different
-          echo ""
-          echo "=== COMPARING WITH STAGING BRANCH ==="
-          
-          # CRITICAL: Fetch staging and ensure we're comparing to the remote staging, not local
-          git fetch origin staging:refs/remotes/origin/staging 2>/dev/null || true
-          
-          # Show what we're comparing
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          STAGING_COMMIT=$(git rev-parse origin/staging 2>/dev/null || echo "unknown")
-          
-          echo "Current branch: $CURRENT_BRANCH"
-          echo "Current commit: $CURRENT_COMMIT"
-          echo "Staging branch (origin/staging) commit: $STAGING_COMMIT"
-          echo ""
-          
-          if [ "$CURRENT_COMMIT" = "$STAGING_COMMIT" ]; then
-            echo "⚠ WARNING: Current branch commit is SAME as staging - we haven't committed yet!"
-            echo "This comparison is before commit, so it's expected to be the same."
-          else
-            echo "✓ Current branch differs from staging (good!)"
-          fi
-          echo ""
-          
-          echo "Files in staging branch (origin/staging) (feagi/bin):"
-          git ls-tree -r origin/staging --name-only 2>/dev/null | grep "^feagi/bin" || echo "No feagi/bin files in staging!"
-          echo ""
-          
-          echo "Files in current branch (feagi/bin):"
-          git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "No feagi/bin files in current branch!"
-          echo ""
-          
-          echo "Differences between origin/staging and current branch (before commit):"
-          git diff origin/staging HEAD --name-status feagi/bin/ 2>/dev/null || echo "No differences with staging (expected before commit)"
-          echo ""
-          
-          # Check if files are identical (compare working directory files with staging)
-          echo "Checking if binaries in working directory are identical to staging:"
-          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-            if [ -f "$file" ]; then
-              if git show origin/staging:"$file" > /tmp/staging_file 2>/dev/null; then
-                if cmp -s "$file" /tmp/staging_file; then
-                  echo "  $file: IDENTICAL to staging (will not show as changed)"
-                else
-                  echo "  $file: DIFFERENT from staging (will show as changed)"
-                fi
-              else
-                echo "  $file: NOT IN STAGING (will be added as new file)"
-              fi
-            else
-              echo "  $file: MISSING in working directory!"
-            fi
-          done
-          
-          # CRITICAL: Verify we have files staged before committing
-          echo ""
-          echo "=== PRE-COMMIT VERIFICATION ==="
-          echo "Files on disk in feagi/bin/:"
-          find feagi/bin -type f -exec ls -lh {} \;
-          echo ""
-          
-          echo "Git status (all files):"
-          git status
-          echo ""
-          
-          echo "Git status (feagi/bin only):"
-          git status feagi/bin/
-          echo ""
-          
-          STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || true)
-          STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
-          
-          echo "Staged files count: $STAGED_COUNT"
-          echo "Staged files:"
-          echo "$STAGED_FILES" || echo "(none)"
-          echo ""
-          
-          if [ "$STAGED_COUNT" -eq 0 ]; then
-            echo "ERROR: No files staged for commit!"
-            echo "Files exist on disk but are not staged."
-            echo ""
-            echo "Attempting to add them again..."
-            git add -f feagi/bin/linux-x86_64/feagi
-            git add -f feagi/bin/linux-aarch64/feagi
-            git add -f feagi/bin/darwin-x86_64/feagi
-            git add -f feagi/bin/darwin-aarch64/feagi
-            git add -f feagi/bin/windows-x86_64/feagi.exe
-            
-            # Check again
-            STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || true)
-            STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
-            
-            if [ "$STAGED_COUNT" -eq 0 ]; then
-              echo "ERROR: Still no files staged after re-adding!"
-              echo "Checking if files are in .gitignore:"
-              git check-ignore -v feagi/bin/linux-x86_64/feagi || echo "Not ignored"
-              git check-ignore -v feagi/bin/linux-aarch64/feagi || echo "Not ignored"
-              git check-ignore -v feagi/bin/darwin-x86_64/feagi || echo "Not ignored"
-              git check-ignore -v feagi/bin/darwin-aarch64/feagi || echo "Not ignored"
-              git check-ignore -v feagi/bin/windows-x86_64/feagi.exe || echo "Not ignored"
-              exit 1
-            fi
-          fi
-          
-          if [ "$STAGED_COUNT" -lt 5 ]; then
-            echo "ERROR: Only $STAGED_COUNT files staged, expected 5!"
-            echo "Staged files:"
-            echo "$STAGED_FILES"
-            exit 1
-          fi
-          
-          echo "✓ Verified: $STAGED_COUNT files staged (all 5 binaries)"
-          echo ""
-          echo "Staged files list:"
-          echo "$STAGED_FILES"
-          
-          # Build platform list for commit message
-          PLATFORMS_LIST=()
-          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
-            PLATFORMS_LIST+=("linux-x86_64")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
-            PLATFORMS_LIST+=("linux-aarch64")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
-            PLATFORMS_LIST+=("darwin-x86_64")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
-            PLATFORMS_LIST+=("darwin-aarch64")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
-            PLATFORMS_LIST+=("windows-x86_64")
-          fi
-          PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS_LIST[*]}")
+          PLATFORMS_STR="${{ steps.platforms.outputs.platforms }}"
           
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             COMMIT_MSG="chore: update FEAGI binaries (manual trigger)
@@ -1116,345 +980,13 @@ jobs:
           - Triggered by: PR #${{ github.event.pull_request.number }}"
           fi
           
-          # Commit with explicit verification
-          echo ""
-          echo "=== COMMITTING ==="
-          echo "Staged files before commit:"
-          git diff --staged --name-only
-          echo ""
-          echo "Staged files count: $(git diff --staged --name-only | wc -l)"
-          echo ""
-          
-          # CRITICAL: Always commit all 5 binaries, even if git thinks they're identical
-          # We want to overwrite binaries regardless of whether they're identical
-          echo "Committing binaries (will commit even if identical to HEAD)..."
-          
-          # Force add all binaries one more time right before commit to ensure they're staged
-          echo "Force adding all binaries one final time before commit:"
-          git add -f feagi/bin/linux-x86_64/feagi
-          git add -f feagi/bin/linux-aarch64/feagi
-          git add -f feagi/bin/darwin-x86_64/feagi
-          git add -f feagi/bin/darwin-aarch64/feagi
-          git add -f feagi/bin/windows-x86_64/feagi.exe
-          
-          # Verify all 5 are staged
-          STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || echo "")
-          STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
-          echo "Files staged: $STAGED_COUNT"
-          echo "$STAGED_FILES"
-          
-          if [ "$STAGED_COUNT" -ne 5 ]; then
-            echo "ERROR: Expected 5 files staged, found $STAGED_COUNT!"
-            echo "This means some binaries weren't added to git."
-            echo ""
-            echo "Checking each file:"
-            for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-              if [ -f "$file" ]; then
-                if git diff --staged --name-only | grep -q "^$file$"; then
-                  echo "  ✓ $file: staged"
-                else
-                  echo "  ✗ $file: NOT staged (exists on disk but not staged)"
-                  # Try to add it one more time
-                  git add -f "$file"
-                  if git diff --staged --name-only | grep -q "^$file$"; then
-                    echo "    → Now staged after retry"
-                  else
-                    echo "    → Still not staged after retry - checking if ignored"
-                    git check-ignore -v "$file" || echo "    → Not ignored, but still not staging"
-                  fi
-                fi
-              else
-                echo "  ✗ $file: MISSING on disk"
-              fi
-            done
-            
-            # Check again
-            STAGED_FILES=$(git diff --staged --name-only | grep "^feagi/bin" || echo "")
-            STAGED_COUNT=$(echo "$STAGED_FILES" | grep -c . || echo "0")
-            
-            if [ "$STAGED_COUNT" -ne 5 ]; then
-              echo ""
-              echo "ERROR: Still only $STAGED_COUNT files staged after retry!"
-              exit 1
-            fi
-          fi
-          
-          # Commit - we should have 5 files staged now
-          if ! git commit -m "$COMMIT_MSG"; then
-            echo "ERROR: git commit failed!"
-            echo "Staged files:"
-            git diff --staged --name-only
-            exit 1
-          fi
-          
-          echo "Changes committed"
-          
-          echo ""
-          echo "Commit SHA: $(git rev-parse HEAD)"
-          echo "Commit message:"
-          git log -1 --pretty=format:"%s" HEAD
-          
-          # CRITICAL: Verify what's in the commit - fail if any binary is missing
-          echo ""
-          echo "=== COMMIT VERIFICATION ==="
-          echo "Commit SHA: $(git rev-parse HEAD)"
-          echo ""
-          echo "Files in the commit:"
-          git show --name-status --oneline HEAD
-          echo ""
-          echo "All files in commit (full paths):"
-          COMMIT_FILES=$(git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "")
-          if [ -z "$COMMIT_FILES" ]; then
-            echo "ERROR: No feagi/bin files in commit!"
-            echo "This is a critical failure - the commit is empty or files are missing!"
-            exit 1
-          fi
-          echo "$COMMIT_FILES"
-          echo ""
-          
-          # Verify each binary individually
-          echo "Binary file verification in commit:"
-          ALL_PRESENT=1
-          COMMIT_COUNT=0
-          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-            if git cat-file -e HEAD:"$file" 2>/dev/null; then
-              SIZE=$(git cat-file -s HEAD:"$file")
-              echo "  ✓ $file: $SIZE bytes ($(numfmt --to=iec-i --suffix=B $SIZE 2>/dev/null || echo "$SIZE bytes"))"
-              COMMIT_COUNT=$((COMMIT_COUNT + 1))
-            else
-              echo "  ✗ $file: NOT IN COMMIT!"
-              ALL_PRESENT=0
-            fi
-          done
-          echo ""
-          
-          if [ $ALL_PRESENT -eq 0 ] || [ $COMMIT_COUNT -ne 5 ]; then
-            echo "ERROR: Not all binaries are in the commit!"
-            echo "Expected 5 binaries, found $COMMIT_COUNT"
-            echo "Commit contents:"
-            git ls-tree -r HEAD --name-only | grep "^feagi/bin"
-            exit 1
-          fi
-          
-          echo "✓ All 5 binaries verified in commit"
-          
-          # Show directory structure in commit
-          echo ""
-          echo "Directory structure in commit:"
-          git ls-tree -r HEAD --name-only | grep "^feagi/bin" | sed 's|^feagi/bin/||' | sort
-      
-      - name: Show what's in staging before pushing
-        shell: bash
-        run: |
-          cd public-repo
-          echo "=== WHAT'S IN STAGING BRANCH ==="
-          
-          # CRITICAL: Always fetch from origin/staging, never create local staging branch
-          git fetch origin staging:refs/remotes/origin/staging
-          
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          STAGING_COMMIT=$(git rev-parse origin/staging)
-          
-          echo "Current branch: $CURRENT_BRANCH"
-          echo "Current commit: $CURRENT_COMMIT"
-          echo "Staging branch (origin/staging) commit: $STAGING_COMMIT"
-          echo ""
-          
-          if [ "$CURRENT_COMMIT" = "$STAGING_COMMIT" ]; then
-            echo "⚠ ERROR: Current branch commit is SAME as staging!"
-            echo "This means we haven't committed our changes yet, or we're comparing to ourselves!"
-            echo "This should never happen after we commit."
-          else
-            echo "✓ Current branch differs from staging (good - we have a commit)"
-          fi
-          echo ""
-          
-          echo "Staging branch date: $(git log -1 --format=%cd origin/staging)"
-          echo ""
-          echo "Files in origin/staging/feagi/bin:"
-          STAGING_BINARIES=$(git ls-tree -r origin/staging --name-only | grep "^feagi/bin" || echo "")
-          if [ -z "$STAGING_BINARIES" ]; then
-            echo "  ✗ NO BINARIES IN STAGING - all 5 should be added"
-            STAGING_COUNT=0
-          else
-            echo "$STAGING_BINARIES" | while read -r file; do
-              if [ -n "$file" ]; then
-                SIZE=$(git cat-file -s origin/staging:"$file" 2>/dev/null || echo "unknown")
-                DATE=$(git log -1 --format=%cd --date=short origin/staging -- "$file" 2>/dev/null || echo "unknown")
-                echo "  $file ($SIZE bytes, committed $DATE)"
-              fi
-            done
-            STAGING_COUNT=$(echo "$STAGING_BINARIES" | grep -c . || echo "0")
-          fi
-          echo ""
-          echo "Staging has $STAGING_COUNT binary files"
-          echo ""
-          echo "Our branch has 5 binary files"
-          echo ""
-          echo "Differences between origin/staging and our branch:"
-          git diff origin/staging HEAD --name-status feagi/bin/ || echo "No differences (this would be a problem!)"
-          echo ""
-          if [ "$STAGING_COUNT" -lt 5 ]; then
-            echo "✓ Staging is missing binaries - PR should show differences"
-          else
-            echo "⚠ Staging has $STAGING_COUNT binaries - checking if they're identical..."
-          fi
+          git commit -m "$COMMIT_MSG"
       
       - name: Push branch
         shell: bash
         run: |
           cd public-repo
           git push origin ${{ steps.branch_name.outputs.branch_name }}
-          echo "Branch pushed"
-          
-          # Verify what was pushed
-          echo ""
-          echo "Verifying pushed branch contents:"
-          git ls-remote --heads origin ${{ steps.branch_name.outputs.branch_name }} || echo "Branch not found on remote"
-          echo ""
-          echo "Files in pushed branch:"
-          git ls-tree -r origin/${{ steps.branch_name.outputs.branch_name }} --name-only | grep "feagi/bin" || echo "No feagi/bin files in pushed branch!"
-      
-      - name: Verify branch exists before creating PR
-        shell: bash
-        run: |
-          cd public-repo
-          echo "Checking if branch exists on remote..."
-          git fetch origin
-          if git ls-remote --heads origin ${{ steps.branch_name.outputs.branch_name }} | grep -q .; then
-            echo "Branch ${{ steps.branch_name.outputs.branch_name }} exists on remote"
-            git log origin/${{ steps.branch_name.outputs.branch_name }} --oneline -5
-          else
-            echo "ERROR: Branch ${{ steps.branch_name.outputs.branch_name }} not found on remote!"
-            exit 1
-          fi
-          
-          # CRITICAL: Verify files are actually in the pushed branch
-          echo ""
-          echo "=== VERIFYING FILES IN PUSHED BRANCH ==="
-          git fetch origin ${{ steps.branch_name.outputs.branch_name }}:${{ steps.branch_name.outputs.branch_name }} 2>/dev/null || true
-          git checkout ${{ steps.branch_name.outputs.branch_name }}
-          
-          # Also fetch staging to compare
-          git fetch origin staging:refs/remotes/origin/staging
-          
-          echo ""
-          echo "Files on disk in pushed branch:"
-          find feagi/bin -type f -exec ls -lh {} \; || echo "ERROR: feagi/bin directory not found!"
-          
-          echo ""
-          echo "Files in git tree of pushed branch:"
-          git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "ERROR: No feagi/bin files in git tree!"
-          
-          echo ""
-          echo "Verifying each binary exists in pushed branch:"
-          ALL_PRESENT=1
-          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-            if [ -f "$file" ]; then
-              SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "unknown")
-              if git cat-file -e HEAD:"$file" 2>/dev/null; then
-                GIT_SIZE=$(git cat-file -s HEAD:"$file")
-                echo "  ✓ $file: exists on disk ($SIZE bytes), in git ($GIT_SIZE bytes)"
-              else
-                echo "  ✗ $file: exists on disk ($SIZE bytes) but NOT in git!"
-                ALL_PRESENT=0
-              fi
-            else
-              echo "  ✗ $file: MISSING on disk!"
-              ALL_PRESENT=0
-            fi
-          done
-          
-          if [ $ALL_PRESENT -eq 0 ]; then
-            echo ""
-            echo "ERROR: Not all binaries are present in the pushed branch!"
-            exit 1
-          fi
-          
-          echo ""
-          echo "✓ All 5 binaries verified in pushed branch"
-          
-          # Show the actual directory structure
-          echo ""
-          echo "Final directory structure:"
-          tree feagi/bin/ 2>/dev/null || find feagi/bin -type f -exec echo {} \;
-      
-      - name: Verify binaries are in branch before creating PR
-        shell: bash
-        run: |
-          cd public-repo
-          echo "=== VERIFYING BINARIES IN BRANCH ==="
-          
-          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
-          echo "Current commit: $(git rev-parse HEAD)"
-          echo ""
-          
-          echo "Files in branch ${{ steps.branch_name.outputs.branch_name }}:"
-          BRANCH_FILES=$(git ls-tree -r HEAD --name-only | grep "^feagi/bin" || echo "")
-          if [ -z "$BRANCH_FILES" ]; then
-            echo "  ✗ ERROR: No feagi/bin files in branch!"
-            echo "Commit contents:"
-            git ls-tree -r HEAD --name-only | head -20
-            exit 1
-          fi
-          
-          BRANCH_COUNT=$(echo "$BRANCH_FILES" | grep -c . || echo "0")
-          echo "Branch has $BRANCH_COUNT binary files"
-          
-          if [ "$BRANCH_COUNT" -ne 5 ]; then
-            echo "ERROR: Branch should have 5 binaries, found $BRANCH_COUNT"
-            exit 1
-          fi
-          
-          echo ""
-          echo "=== VERIFYING FILES ARE ACTUALLY IN COMMIT (not just staged) ==="
-          COMMIT_SHA=$(git rev-parse HEAD)
-          ALL_IN_COMMIT=1
-          
-          for file in feagi/bin/linux-x86_64/feagi feagi/bin/linux-aarch64/feagi feagi/bin/darwin-x86_64/feagi feagi/bin/darwin-aarch64/feagi feagi/bin/windows-x86_64/feagi.exe; do
-            # Check if file exists in commit using git cat-file
-            if git cat-file -e HEAD:"$file" 2>/dev/null; then
-              FILE_SIZE=$(git cat-file -s HEAD:"$file")
-              FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
-              echo "  ✓ $file: $FILE_SIZE bytes (~${FILE_SIZE_MB} MB) - IN COMMIT"
-              
-              # Check file size limit (GitHub has 100MB limit per file)
-              if [ "$FILE_SIZE" -gt 104857600 ]; then
-                echo "    ⚠ WARNING: File exceeds GitHub's 100MB limit!"
-                ALL_IN_COMMIT=0
-              fi
-              
-              # Verify we can actually extract the file
-              if git cat-file blob HEAD:"$file" > /dev/null 2>&1; then
-                echo "    ✓ File is accessible via git cat-file"
-              else
-                echo "    ✗ ERROR: File cannot be extracted from commit!"
-                ALL_IN_COMMIT=0
-              fi
-            else
-              echo "  ✗ $file: NOT IN COMMIT!"
-              ALL_IN_COMMIT=0
-            fi
-          done
-          
-          if [ $ALL_IN_COMMIT -eq 0 ]; then
-            echo ""
-            echo "ERROR: Not all binaries are properly committed!"
-            exit 1
-          fi
-          
-          echo ""
-          echo "=== GITHUB UI NOTE ==="
-          echo "GitHub's web UI may not display binary files in the tree view."
-          echo "However, the files ARE in the commit and can be accessed via:"
-          echo "  - Direct file URL: https://github.com/feagi/feagi/blob/${{ steps.branch_name.outputs.branch_name }}/feagi/bin/PLATFORM/feagi"
-          echo "  - Git clone: git clone -b ${{ steps.branch_name.outputs.branch_name }} https://github.com/feagi/feagi.git"
-          echo "  - PR file changes tab will show them as added/modified"
-          echo ""
-          echo "✓ All 5 binaries verified in commit and accessible"
-          echo ""
-          echo "Proceeding with PR creation..."
       
       - name: Setup GitHub CLI
         shell: bash
@@ -1465,26 +997,8 @@ jobs:
         id: pr_body
         shell: bash
         run: |
-          # Build list of included binaries
-          BINARIES_LIST=()
-          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
-            BINARIES_LIST+=("- Linux x86_64 (\`feagi/bin/linux-x86_64/feagi\`)")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
-            BINARIES_LIST+=("- Linux ARM64 (\`feagi/bin/linux-aarch64/feagi\`)")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
-            BINARIES_LIST+=("- macOS Intel (\`feagi/bin/darwin-x86_64/feagi\`)")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
-            BINARIES_LIST+=("- macOS Apple Silicon (\`feagi/bin/darwin-aarch64/feagi\`)")
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
-            BINARIES_LIST+=("- Windows x86_64 (\`feagi/bin/windows-x86_64/feagi.exe\`)")
-          fi
-          
-          BINARIES_COUNT=${#BINARIES_LIST[@]}
-          BINARIES_TEXT=$(IFS=$'\n'; echo "${BINARIES_LIST[*]}")
+          PLATFORMS_STR="${{ steps.platforms.outputs.platforms }}"
+          PLATFORM_COUNT="${{ steps.platforms.outputs.platform_count }}"
           
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             TRIGGER_INFO="Manual workflow dispatch"
@@ -1492,14 +1006,13 @@ jobs:
             TRIGGER_INFO="PR #${{ github.event.pull_request.number }}"
           fi
           
-          # Create PR body in a temporary file for reliable multi-line handling
           cat > /tmp/pr_body.md << EOF
           ## Automated Binary Update
           
           This PR updates FEAGI binaries built from the \`${{ steps.source_info.outputs.source_branch }}\` branch of feagi-rust.
           
           ### Included Binaries
-          ${BINARIES_TEXT}
+          Platforms: ${PLATFORMS_STR}
           
           ### Details
           - **Source Commit**: \`${{ steps.source_info.outputs.source_sha }}\`
@@ -1508,27 +1021,16 @@ jobs:
           - **Trigger**: $TRIGGER_INFO
           
           ### Verification
-          All ${BINARIES_COUNT} binary(ies) have been verified to exist in this branch.
-          Please verify before merging:
-          1. Check that all platform binaries are present in the file tree
-          2. Verify binary sizes are reasonable
-          3. Test on at least one platform if possible
+          All ${PLATFORM_COUNT} binary(ies) have been verified to exist in this branch.
           
           ---
           *This PR was automatically created by GitHub Actions*
           EOF
-          
-          echo "Generated PR body with ${BINARIES_COUNT} platform(s)"
-          cat /tmp/pr_body.md
       
       - name: Create Pull Request
         id: create_pr
         shell: bash
         run: |
-          # Create PR using GitHub CLI - this creates PR from existing remote branch
-          # without needing to checkout, preserving all commits and binaries
-          
-          # Create PR first without labels (labels may not exist in repo)
           PR_OUTPUT=$(gh pr create \
             --repo feagi/feagi \
             --base staging \
@@ -1536,62 +1038,22 @@ jobs:
             --title "chore: Update FEAGI binaries from ${{ steps.source_info.outputs.source_branch }}" \
             --body-file /tmp/pr_body.md) || exit 1
           
-          # Parse PR URL from output (format: https://github.com/feagi/feagi/pull/123)
           PR_URL=$(echo "$PR_OUTPUT" | grep -o 'https://github.com/[^ ]*' | head -1)
-          
-          if [ -z "$PR_URL" ]; then
-            echo "ERROR: Could not extract PR URL from output:"
-            echo "$PR_OUTPUT"
-            exit 1
-          fi
-          
-          # Extract PR number from URL (last number in the path)
           PR_NUMBER=$(echo "$PR_URL" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+')
-          
-          if [ -z "$PR_NUMBER" ]; then
-            echo "ERROR: Could not extract PR number from URL: $PR_URL"
-            exit 1
-          fi
-          
-          echo "PR created successfully:"
-          echo "  PR Number: $PR_NUMBER"
-          echo "  PR URL: $PR_URL"
-          
-          # Try to add labels (non-blocking - labels may not exist)
-          echo ""
-          echo "Attempting to add labels..."
-          if gh pr edit "$PR_NUMBER" --repo feagi/feagi --add-label "automated,binaries" 2>/dev/null; then
-            echo "  ✓ Labels added successfully"
-          else
-            echo "  ⚠ WARNING: Could not add labels (they may not exist in the repository)"
-            echo "  This is not a critical error - PR was created successfully"
-            echo "  You can add labels manually: automated, binaries"
-          fi
           
           echo "pull-request-number=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "pull-request-url=$PR_URL" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
-      
-      - name: Output PR information
-        shell: bash
-        run: |
-          if [ -n "${{ steps.create_pr.outputs.pull-request-number }}" ]; then
-            echo "PR created successfully:"
-            echo "  PR Number: ${{ steps.create_pr.outputs.pull-request-number }}"
-            echo "  PR URL: ${{ steps.create_pr.outputs.pull-request-url }}"
-          else
-            echo "WARNING: PR may not have been created. Check the logs above."
-            echo "Branch URL: https://github.com/feagi/feagi/tree/${{ steps.branch_name.outputs.branch_name }}"
-          fi
 
-  # Push binaries to feagi/feagi repo staging branch (for releases - needed for feagi-desktop)
+  # ============================================================================
+  # Push binaries to feagi/feagi repo staging branch (for releases)
+  # ============================================================================
   push-binaries-to-repo:
     name: Push Binaries to feagi/feagi Repo
-    needs: [determine-config, build-binaries]
+    needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    # Only run if ALL binary builds succeeded AND it's a release build
-    if: success() && needs.determine-config.outputs.create_release == 'true'
+    if: always() && needs.determine-config.outputs.create_release == 'true'
     
     steps:
       - name: Download all binaries
@@ -1608,85 +1070,64 @@ jobs:
           ref: staging
           fetch-depth: 0
       
-      - name: Organize and copy binaries
+      - name: Copy binaries
         shell: bash
         run: |
-          echo "Organizing binaries..."
           cd public-repo
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Create directory structure (only for selected platforms)
-          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+          # Create directories and copy binaries
+          if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
             mkdir -p feagi/bin/linux-x86_64
+            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
+            chmod +x feagi/bin/linux-x86_64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+          
+          if [ -f "../binaries/feagi-linux-aarch64/feagi" ]; then
             mkdir -p feagi/bin/linux-aarch64
+            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
+            chmod +x feagi/bin/linux-aarch64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+          
+          if [ -f "../binaries/feagi-darwin-x86_64/feagi" ]; then
             mkdir -p feagi/bin/darwin-x86_64
+            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
+            chmod +x feagi/bin/darwin-x86_64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+          
+          if [ -f "../binaries/feagi-darwin-aarch64/feagi" ]; then
             mkdir -p feagi/bin/darwin-aarch64
+            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
+            chmod +x feagi/bin/darwin-aarch64/feagi
           fi
-          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+          
+          if [ -f "../binaries/feagi-windows-x86_64/feagi.exe" ]; then
             mkdir -p feagi/bin/windows-x86_64
+            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
           fi
-          
-          # Copy binaries (only for selected platforms)
-          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
-            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi || echo "⚠️ Linux x86_64 binary not found"
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
-            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi || echo "⚠️ Linux aarch64 binary not found"
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
-            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi || echo "⚠️ macOS Intel binary not found"
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
-            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi || echo "⚠️ macOS Apple Silicon binary not found"
-          fi
-          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
-            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe || echo "⚠️ Windows binary not found"
-          fi
-          
-          echo "✅ Binaries copied to feagi/bin/"
-          ls -lh feagi/bin/*/
       
       - name: Commit and push binaries
         shell: bash
         run: |
           cd public-repo
           
-          # Check if there are changes
           if git diff --quiet && git diff --staged --quiet; then
             echo "No changes to commit - binaries are identical to staging branch"
           else
             VERSION="${{ needs.determine-config.outputs.version }}"
             RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
             
-            # Force add binaries
             git add -f feagi/bin/
             
-            # Build platform list for commit message
-            PLATFORMS_LIST=()
-            if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
-              PLATFORMS_LIST+=("linux-x86_64")
-            fi
-            if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
-              PLATFORMS_LIST+=("linux-aarch64")
-            fi
-            if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
-              PLATFORMS_LIST+=("darwin-x86_64")
-            fi
-            if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
-              PLATFORMS_LIST+=("darwin-aarch64")
-            fi
-            if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
-              PLATFORMS_LIST+=("windows-x86_64")
-            fi
-            PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS_LIST[*]}")
+            PLATFORMS=()
+            [ -f "feagi/bin/linux-x86_64/feagi" ] && PLATFORMS+=("linux-x86_64")
+            [ -f "feagi/bin/linux-aarch64/feagi" ] && PLATFORMS+=("linux-aarch64")
+            [ -f "feagi/bin/darwin-x86_64/feagi" ] && PLATFORMS+=("darwin-x86_64")
+            [ -f "feagi/bin/darwin-aarch64/feagi" ] && PLATFORMS+=("darwin-aarch64")
+            [ -f "feagi/bin/windows-x86_64/feagi.exe" ] && PLATFORMS+=("windows-x86_64")
+            PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS[*]}")
             
             git commit -m "chore: update FEAGI binaries for ${RELEASE_TYPE} release v${VERSION}
 
@@ -1699,13 +1140,14 @@ jobs:
             echo "✅ Binaries pushed to staging branch"
           fi
 
+  # ============================================================================
   # Create GitHub Release (for production/beta/alpha builds)
+  # ============================================================================
   create-release:
     name: Create GitHub Release
-    needs: [determine-config, build-binaries, push-binaries-to-repo]
+    needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64, push-binaries-to-repo]
     runs-on: ubuntu-latest
-    # Only run if ALL binary builds succeeded AND it's a release build
-    if: success() && needs.determine-config.outputs.create_release == 'true'
+    if: always() && needs.determine-config.outputs.create_release == 'true'
     permissions:
       contents: write
     
@@ -1740,7 +1182,7 @@ jobs:
           if [ -f "binaries/feagi-linux-x86_64/feagi" ]; then
             mkdir -p release-package-linux-x86_64
             cp binaries/feagi-linux-x86_64/feagi release-package-linux-x86_64/
-            cp feagi_configuration.toml release-package-linux-x86_64/
+            cp feagi_configuration.toml release-package-linux-x86_64/ 2>/dev/null || true
             cat > release-package-linux-x86_64/README.txt <<EOF
           FEAGI v${VERSION} for Linux (x86_64)
           
@@ -1766,7 +1208,7 @@ jobs:
           if [ -f "binaries/feagi-linux-aarch64/feagi" ]; then
             mkdir -p release-package-linux-aarch64
             cp binaries/feagi-linux-aarch64/feagi release-package-linux-aarch64/
-            cp feagi_configuration.toml release-package-linux-aarch64/
+            cp feagi_configuration.toml release-package-linux-aarch64/ 2>/dev/null || true
             cat > release-package-linux-aarch64/README.txt <<EOF
           FEAGI v${VERSION} for Linux (ARM64)
           
@@ -1792,7 +1234,7 @@ jobs:
           if [ -f "binaries/feagi-darwin-x86_64/feagi" ]; then
             mkdir -p release-package-darwin-x86_64
             cp binaries/feagi-darwin-x86_64/feagi release-package-darwin-x86_64/
-            cp feagi_configuration.toml release-package-darwin-x86_64/
+            cp feagi_configuration.toml release-package-darwin-x86_64/ 2>/dev/null || true
             cat > release-package-darwin-x86_64/README.txt <<EOF
           FEAGI v${VERSION} for macOS (Intel x86_64)
           
@@ -1818,7 +1260,7 @@ jobs:
           if [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
             mkdir -p release-package-darwin-aarch64
             cp binaries/feagi-darwin-aarch64/feagi release-package-darwin-aarch64/
-            cp feagi_configuration.toml release-package-darwin-aarch64/
+            cp feagi_configuration.toml release-package-darwin-aarch64/ 2>/dev/null || true
             cat > release-package-darwin-aarch64/README.txt <<EOF
           FEAGI v${VERSION} for macOS (Apple Silicon ARM64)
           
@@ -1844,11 +1286,9 @@ jobs:
           if [ -f "binaries/feagi-darwin-x86_64/feagi" ] && [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
             echo "📦 Creating universal macOS binary..."
             mkdir -p release-package-darwin-universal
-            # Note: lipo requires macOS, so we'll create a package that includes both binaries
-            # Users can use the appropriate one for their architecture
             cp binaries/feagi-darwin-x86_64/feagi release-package-darwin-universal/feagi-x86_64
             cp binaries/feagi-darwin-aarch64/feagi release-package-darwin-universal/feagi-arm64
-            cp feagi_configuration.toml release-package-darwin-universal/
+            cp feagi_configuration.toml release-package-darwin-universal/ 2>/dev/null || true
             cat > release-package-darwin-universal/README.txt <<EOF
           FEAGI v${VERSION} for macOS (Universal - Intel + Apple Silicon)
           
@@ -1878,7 +1318,7 @@ jobs:
           if [ -f "binaries/feagi-windows-x86_64/feagi.exe" ]; then
             mkdir -p release-package-windows-x86_64
             cp binaries/feagi-windows-x86_64/feagi.exe release-package-windows-x86_64/
-            cp feagi_configuration.toml release-package-windows-x86_64/
+            cp feagi_configuration.toml release-package-windows-x86_64/ 2>/dev/null || true
             cat > release-package-windows-x86_64/README.txt <<EOF
           FEAGI v${VERSION} for Windows (x86_64)
           
@@ -1912,13 +1352,10 @@ jobs:
           
           if [[ "${RELEASE_TYPE}" == "beta" ]]; then
             echo "prerelease=true" >> $GITHUB_OUTPUT
-            echo "Release type: Beta (pre-release)"
           elif [[ "${RELEASE_TYPE}" == "alpha" ]]; then
             echo "prerelease=true" >> $GITHUB_OUTPUT
-            echo "Release type: Alpha (pre-release)"
           else
             echo "prerelease=false" >> $GITHUB_OUTPUT
-            echo "Release type: Production (stable)"
           fi
           
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
@@ -1970,9 +1407,6 @@ jobs:
           
           **Full Changelog**: https://github.com/neuraville/feagi-rust/compare/v${VERSION}...v${VERSION}
           EOF
-          
-          echo "Generated release notes"
-          cat release-notes.md
       
       - name: Create GitHub Release in feagi/feagi
         uses: softprops/action-gh-release@v1
@@ -1985,12 +1419,3 @@ jobs:
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
-      
-      - name: Output release information
-        shell: bash
-        run: |
-          echo "✅ GitHub Release created successfully:"
-          echo "  Tag: v${{ needs.determine-config.outputs.version }}"
-          echo "  Release Type: ${{ needs.determine-config.outputs.release_type }}"
-          echo "  Pre-release: ${{ steps.release_type.outputs.prerelease }}"
-          echo "  Release URL: https://github.com/feagi/feagi/releases/tag/v${{ needs.determine-config.outputs.version }}"
