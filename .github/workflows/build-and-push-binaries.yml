@@ -354,9 +354,7 @@ jobs:
       
       - name: Install sccache
         if: steps.platform_check.outputs.enabled == 'true'
-        uses: mozilla-actions/sccache-action@v0.0.3
-        with:
-          version: "latest"
+        uses: mozilla-actions/sccache-action@v0.0.6
       
       - name: Cache Rust dependencies
         if: steps.platform_check.outputs.enabled == 'true'
