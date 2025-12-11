@@ -41,6 +41,37 @@ on:
         required: false
         type: string
         default: 'main'
+      
+      # Platform selection (save resources)
+      build_linux_x86_64:
+        description: 'Build Linux x86_64'
+        required: false
+        type: boolean
+        default: true
+      
+      build_linux_aarch64:
+        description: 'Build Linux ARM64'
+        required: false
+        type: boolean
+        default: true
+      
+      build_macos_intel:
+        description: 'Build macOS Intel (x86_64)'
+        required: false
+        type: boolean
+        default: true
+      
+      build_macos_silicon:
+        description: 'Build macOS Apple Silicon (ARM64)'
+        required: false
+        type: boolean
+        default: true
+      
+      build_windows:
+        description: 'Build Windows x86_64'
+        required: false
+        type: boolean
+        default: true
   
   # Automatic trigger on PR merge to main
   pull_request:
@@ -68,6 +99,11 @@ jobs:
       source_sha: ${{ steps.config.outputs.source_sha }}
       feagi_core_branch: ${{ steps.config.outputs.feagi_core_branch }}
       create_release: ${{ steps.config.outputs.create_release }}
+      build_linux_x86_64: ${{ steps.config.outputs.build_linux_x86_64 }}
+      build_linux_aarch64: ${{ steps.config.outputs.build_linux_aarch64 }}
+      build_macos_intel: ${{ steps.config.outputs.build_macos_intel }}
+      build_macos_silicon: ${{ steps.config.outputs.build_macos_silicon }}
+      build_windows: ${{ steps.config.outputs.build_windows }}
     steps:
       - name: Determine build configuration
         id: config
@@ -82,6 +118,13 @@ jobs:
             SOURCE_SHA="${{ inputs.source_sha }}"
             FEAGI_CORE_BRANCH="${{ inputs.feagi_core_branch || 'main' }}"
             
+            # Platform selection flags
+            BUILD_LINUX_X86_64="${{ inputs.build_linux_x86_64 }}"
+            BUILD_LINUX_AARCH64="${{ inputs.build_linux_aarch64 }}"
+            BUILD_MACOS_INTEL="${{ inputs.build_macos_intel }}"
+            BUILD_MACOS_SILICON="${{ inputs.build_macos_silicon }}"
+            BUILD_WINDOWS="${{ inputs.build_windows }}"
+            
             # Auto-generate version for dev if not provided
             if [[ "${RELEASE_TYPE}" == "dev" && -z "${VERSION}" ]]; then
               VERSION="dev-$(date +%Y%m%d-%H%M%S)"
@@ -93,26 +136,56 @@ jobs:
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
+            # Tag-based triggers build all platforms
+            BUILD_LINUX_X86_64="true"
+            BUILD_LINUX_AARCH64="true"
+            BUILD_MACOS_INTEL="true"
+            BUILD_MACOS_SILICON="true"
+            BUILD_WINDOWS="true"
           elif [[ "${{ github.ref }}" =~ refs/tags/.*-beta\. ]]; then
             RELEASE_TYPE="beta"
             VERSION="${GITHUB_REF#refs/tags/v}"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
+            # Tag-based triggers build all platforms
+            BUILD_LINUX_X86_64="true"
+            BUILD_LINUX_AARCH64="true"
+            BUILD_MACOS_INTEL="true"
+            BUILD_MACOS_SILICON="true"
+            BUILD_WINDOWS="true"
           elif [[ "${{ github.ref }}" =~ refs/tags/.*-alpha\. ]]; then
             RELEASE_TYPE="alpha"
             VERSION="${GITHUB_REF#refs/tags/v}"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
+            # Tag-based triggers build all platforms
+            BUILD_LINUX_X86_64="true"
+            BUILD_LINUX_AARCH64="true"
+            BUILD_MACOS_INTEL="true"
+            BUILD_MACOS_SILICON="true"
+            BUILD_WINDOWS="true"
           else
-            # PR merge or other trigger - default to dev
+            # PR merge or other trigger - default to dev, build all platforms
             RELEASE_TYPE="dev"
             VERSION="dev-$(date +%Y%m%d-%H%M%S)"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
             FEAGI_CORE_BRANCH="main"
+            BUILD_LINUX_X86_64="true"
+            BUILD_LINUX_AARCH64="true"
+            BUILD_MACOS_INTEL="true"
+            BUILD_MACOS_SILICON="true"
+            BUILD_WINDOWS="true"
           fi
+          
+          # Output platform flags
+          echo "build_linux_x86_64=${BUILD_LINUX_X86_64}" >> $GITHUB_OUTPUT
+          echo "build_linux_aarch64=${BUILD_LINUX_AARCH64}" >> $GITHUB_OUTPUT
+          echo "build_macos_intel=${BUILD_MACOS_INTEL}" >> $GITHUB_OUTPUT
+          echo "build_macos_silicon=${BUILD_MACOS_SILICON}" >> $GITHUB_OUTPUT
+          echo "build_windows=${BUILD_WINDOWS}" >> $GITHUB_OUTPUT
           
           # Determine if we should create a GitHub Release
           # Only create releases for production, beta, and alpha (not dev)
@@ -147,26 +220,40 @@ jobs:
             target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             binary_name: feagi
+            build_flag_output: build_linux_x86_64
           - platform: linux-aarch64
             target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             binary_name: feagi
+            build_flag_output: build_linux_aarch64
           - platform: darwin-x86_64
             target: x86_64-apple-darwin
             os: macos-13
             binary_name: feagi
+            build_flag_output: build_macos_intel
           - platform: darwin-aarch64
             target: aarch64-apple-darwin
             os: macos-latest
             binary_name: feagi
+            build_flag_output: build_macos_silicon
           - platform: windows-x86_64
             target: x86_64-pc-windows-msvc
             os: windows-latest
             binary_name: feagi.exe
+            build_flag_output: build_windows
     
     runs-on: ${{ matrix.os }}
     
     steps:
+      - name: Check if platform is enabled
+        run: |
+          BUILD_FLAG="${{ needs.determine-config.outputs[matrix.build_flag_output] }}"
+          if [[ "${BUILD_FLAG}" != "true" ]]; then
+            echo "⏭️ Platform ${{ matrix.platform }} is disabled, skipping build"
+            exit 0
+          fi
+          echo "✅ Platform ${{ matrix.platform }} is enabled, proceeding with build"
+      
       - name: Checkout feagi-rust (source repo)
         uses: actions/checkout@v4
         with:
@@ -395,22 +482,44 @@ jobs:
       - name: Verify all binaries are present
         shell: bash
         run: |
-          echo "Verifying all required binaries are present..."
-          REQUIRED_BINARIES=(
-            "feagi-linux-x86_64/feagi"
-            "feagi-linux-aarch64/feagi"
-            "feagi-darwin-x86_64/feagi"
-            "feagi-darwin-aarch64/feagi"
-            "feagi-windows-x86_64/feagi.exe"
-          )
+          echo "Verifying binaries are present (based on selected platforms)..."
+          REQUIRED_BINARIES=()
+          
+          # Build list of required binaries based on platform selection
+          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+            REQUIRED_BINARIES+=("feagi-linux-x86_64/feagi")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+            REQUIRED_BINARIES+=("feagi-linux-aarch64/feagi")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+            REQUIRED_BINARIES+=("feagi-darwin-x86_64/feagi")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+            REQUIRED_BINARIES+=("feagi-darwin-aarch64/feagi")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+            REQUIRED_BINARIES+=("feagi-windows-x86_64/feagi.exe")
+          fi
+          
+          if [ ${#REQUIRED_BINARIES[@]} -eq 0 ]; then
+            echo "⚠️ WARNING: No platforms selected for build!"
+            exit 1
+          fi
+          
+          echo "Expected binaries (${#REQUIRED_BINARIES[@]}):"
+          for binary in "${REQUIRED_BINARIES[@]}"; do
+            echo "  - $binary"
+          done
+          echo ""
           
           MISSING=0
           for binary in "${REQUIRED_BINARIES[@]}"; do
             if [ ! -f "binaries/$binary" ]; then
-              echo "ERROR: Missing binary: $binary"
+              echo "❌ ERROR: Missing binary: $binary"
               MISSING=1
             else
-              echo "Found: $binary"
+              echo "✅ Found: $binary"
             fi
           done
           
@@ -419,7 +528,8 @@ jobs:
             exit 1
           fi
           
-          echo "All required binaries are present"
+          echo ""
+          echo "✅ All required binaries are present (${#REQUIRED_BINARIES[@]} platform(s))"
       
       - name: Checkout public repo
         uses: actions/checkout@v4
@@ -556,90 +666,118 @@ jobs:
             echo ".gitignore does not exist"
           fi
           
-          # Create directory structure
-          mkdir -p feagi/bin/linux-x86_64
-          mkdir -p feagi/bin/linux-aarch64
-          mkdir -p feagi/bin/darwin-x86_64
-          mkdir -p feagi/bin/darwin-aarch64
-          mkdir -p feagi/bin/windows-x86_64
+          # Build list of platforms that were built
+          PLATFORMS=()
+          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+            PLATFORMS+=("linux-x86_64")
+            mkdir -p feagi/bin/linux-x86_64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+            PLATFORMS+=("linux-aarch64")
+            mkdir -p feagi/bin/linux-aarch64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+            PLATFORMS+=("darwin-x86_64")
+            mkdir -p feagi/bin/darwin-x86_64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+            PLATFORMS+=("darwin-aarch64")
+            mkdir -p feagi/bin/darwin-aarch64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+            PLATFORMS+=("windows-x86_64")
+            mkdir -p feagi/bin/windows-x86_64
+          fi
+          
+          PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS[*]}")
+          echo "PLATFORMS=${PLATFORMS_STR}" >> $GITHUB_ENV
           
           echo ""
           echo "Directory structure after creation:"
           tree feagi/bin/ 2>/dev/null || find feagi/bin -type d
           
-          # Copy binaries to correct locations - always copy and overwrite
-          # We don't check if source exists first - we try to copy and fail if copy fails
+          # Copy binaries to correct locations - only for selected platforms
           echo "Copying binaries (will overwrite existing files)..."
           COPY_FAILED=0
           
-          # Linux x86_64 - always copy, overwrite if exists
-          if cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi; then
-            if [ -f "feagi/bin/linux-x86_64/feagi" ]; then
-              SIZE=$(stat -f%z "feagi/bin/linux-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-x86_64/feagi" 2>/dev/null || echo "unknown")
-              echo "  ✓ Copied: linux-x86_64/feagi ($SIZE bytes)"
+          # Linux x86_64 - only if selected
+          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+            if cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi; then
+              if [ -f "feagi/bin/linux-x86_64/feagi" ]; then
+                SIZE=$(stat -f%z "feagi/bin/linux-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-x86_64/feagi" 2>/dev/null || echo "unknown")
+                echo "  ✓ Copied: linux-x86_64/feagi ($SIZE bytes)"
+              else
+                echo "  ✗ ERROR: Copy failed - file not found after copy"
+                COPY_FAILED=1
+              fi
             else
-              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              echo "  ✗ ERROR: Copy command failed for linux-x86_64/feagi"
               COPY_FAILED=1
             fi
-          else
-            echo "  ✗ ERROR: Copy command failed for linux-x86_64/feagi"
-            COPY_FAILED=1
           fi
           
-          # Linux aarch64 - always copy, overwrite if exists
-          if cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi; then
-            if [ -f "feagi/bin/linux-aarch64/feagi" ]; then
-              SIZE=$(stat -f%z "feagi/bin/linux-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-aarch64/feagi" 2>/dev/null || echo "unknown")
-              echo "  ✓ Copied: linux-aarch64/feagi ($SIZE bytes)"
+          # Linux aarch64 - only if selected
+          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+            if cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi; then
+              if [ -f "feagi/bin/linux-aarch64/feagi" ]; then
+                SIZE=$(stat -f%z "feagi/bin/linux-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/linux-aarch64/feagi" 2>/dev/null || echo "unknown")
+                echo "  ✓ Copied: linux-aarch64/feagi ($SIZE bytes)"
+              else
+                echo "  ✗ ERROR: Copy failed - file not found after copy"
+                COPY_FAILED=1
+              fi
             else
-              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              echo "  ✗ ERROR: Copy command failed for linux-aarch64/feagi"
               COPY_FAILED=1
             fi
-          else
-            echo "  ✗ ERROR: Copy command failed for linux-aarch64/feagi"
-            COPY_FAILED=1
           fi
           
-          # Darwin x86_64 - always copy, overwrite if exists
-          if cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi; then
-            if [ -f "feagi/bin/darwin-x86_64/feagi" ]; then
-              SIZE=$(stat -f%z "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || echo "unknown")
-              echo "  ✓ Copied: darwin-x86_64/feagi ($SIZE bytes)"
+          # Darwin x86_64 - only if selected
+          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+            if cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi; then
+              if [ -f "feagi/bin/darwin-x86_64/feagi" ]; then
+                SIZE=$(stat -f%z "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-x86_64/feagi" 2>/dev/null || echo "unknown")
+                echo "  ✓ Copied: darwin-x86_64/feagi ($SIZE bytes)"
+              else
+                echo "  ✗ ERROR: Copy failed - file not found after copy"
+                COPY_FAILED=1
+              fi
             else
-              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              echo "  ✗ ERROR: Copy command failed for darwin-x86_64/feagi"
               COPY_FAILED=1
             fi
-          else
-            echo "  ✗ ERROR: Copy command failed for darwin-x86_64/feagi"
-            COPY_FAILED=1
           fi
           
-          # Darwin aarch64 - always copy, overwrite if exists
-          if cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi; then
-            if [ -f "feagi/bin/darwin-aarch64/feagi" ]; then
-              SIZE=$(stat -f%z "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || echo "unknown")
-              echo "  ✓ Copied: darwin-aarch64/feagi ($SIZE bytes)"
+          # Darwin aarch64 - only if selected
+          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+            if cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi; then
+              if [ -f "feagi/bin/darwin-aarch64/feagi" ]; then
+                SIZE=$(stat -f%z "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || stat -c%s "feagi/bin/darwin-aarch64/feagi" 2>/dev/null || echo "unknown")
+                echo "  ✓ Copied: darwin-aarch64/feagi ($SIZE bytes)"
+              else
+                echo "  ✗ ERROR: Copy failed - file not found after copy"
+                COPY_FAILED=1
+              fi
             else
-              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              echo "  ✗ ERROR: Copy command failed for darwin-aarch64/feagi"
               COPY_FAILED=1
             fi
-          else
-            echo "  ✗ ERROR: Copy command failed for darwin-aarch64/feagi"
-            COPY_FAILED=1
           fi
           
-          # Windows x86_64 - always copy, overwrite if exists
-          if cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe; then
-            if [ -f "feagi/bin/windows-x86_64/feagi.exe" ]; then
-              SIZE=$(stat -f%z "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || stat -c%s "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || echo "unknown")
-              echo "  ✓ Copied: windows-x86_64/feagi.exe ($SIZE bytes)"
+          # Windows x86_64 - only if selected
+          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+            if cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe; then
+              if [ -f "feagi/bin/windows-x86_64/feagi.exe" ]; then
+                SIZE=$(stat -f%z "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || stat -c%s "feagi/bin/windows-x86_64/feagi.exe" 2>/dev/null || echo "unknown")
+                echo "  ✓ Copied: windows-x86_64/feagi.exe ($SIZE bytes)"
+              else
+                echo "  ✗ ERROR: Copy failed - file not found after copy"
+                COPY_FAILED=1
+              fi
             else
-              echo "  ✗ ERROR: Copy failed - file not found after copy"
+              echo "  ✗ ERROR: Copy command failed for windows-x86_64/feagi.exe"
               COPY_FAILED=1
             fi
-          else
-            echo "  ✗ ERROR: Copy command failed for windows-x86_64/feagi.exe"
-            COPY_FAILED=1
           fi
           
           if [ $COPY_FAILED -eq 1 ]; then
@@ -867,19 +1005,38 @@ jobs:
           echo "Staged files list:"
           echo "$STAGED_FILES"
           
+          # Build platform list for commit message
+          PLATFORMS_LIST=()
+          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+            PLATFORMS_LIST+=("linux-x86_64")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+            PLATFORMS_LIST+=("linux-aarch64")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+            PLATFORMS_LIST+=("darwin-x86_64")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+            PLATFORMS_LIST+=("darwin-aarch64")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+            PLATFORMS_LIST+=("windows-x86_64")
+          fi
+          PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS_LIST[*]}")
+          
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             COMMIT_MSG="chore: update FEAGI binaries (manual trigger)
 
           - Built from commit: ${{ steps.source_info.outputs.source_sha }}
           - Source: ${{ github.repository }}@${{ steps.source_info.outputs.source_branch }}
-          - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64
+          - Platforms: ${PLATFORMS_STR}
           - Triggered by: Manual workflow dispatch"
           else
             COMMIT_MSG="chore: update FEAGI binaries from main
 
           - Built from commit: ${{ steps.source_info.outputs.source_sha }}
           - Source: ${{ github.repository }}@${{ steps.source_info.outputs.source_branch }}
-          - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64
+          - Platforms: ${PLATFORMS_STR}
           - Triggered by: PR #${{ github.event.pull_request.number }}"
           fi
           
@@ -1228,12 +1385,31 @@ jobs:
         run: |
           gh auth login --with-token <<< "${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}"
       
-      - name: Create Pull Request
-        id: create_pr
+      - name: Generate PR body
+        id: pr_body
         shell: bash
         run: |
-          # Create PR using GitHub CLI - this creates PR from existing remote branch
-          # without needing to checkout, preserving all commits and binaries
+          # Build list of included binaries
+          BINARIES_LIST=()
+          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+            BINARIES_LIST+=("- Linux x86_64 (\`feagi/bin/linux-x86_64/feagi\`)")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+            BINARIES_LIST+=("- Linux ARM64 (\`feagi/bin/linux-aarch64/feagi\`)")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+            BINARIES_LIST+=("- macOS Intel (\`feagi/bin/darwin-x86_64/feagi\`)")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+            BINARIES_LIST+=("- macOS Apple Silicon (\`feagi/bin/darwin-aarch64/feagi\`)")
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+            BINARIES_LIST+=("- Windows x86_64 (\`feagi/bin/windows-x86_64/feagi.exe\`)")
+          fi
+          
+          BINARIES_COUNT=${#BINARIES_LIST[@]}
+          BINARIES_TEXT=$(IFS=$'\n'; echo "${BINARIES_LIST[*]}")
+          
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             TRIGGER_INFO="Manual workflow dispatch"
           else
@@ -1244,14 +1420,10 @@ jobs:
           cat > /tmp/pr_body.md << EOF
           ## Automated Binary Update
           
-          This PR updates FEAGI binaries built from the \`main\` branch of feagi-rust.
+          This PR updates FEAGI binaries built from the \`${{ steps.source_info.outputs.source_branch }}\` branch of feagi-rust.
           
           ### Included Binaries
-          - Linux x86_64 (\`feagi/bin/linux-x86_64/feagi\`)
-          - Linux ARM64 (\`feagi/bin/linux-aarch64/feagi\`)
-          - macOS Intel (\`feagi/bin/darwin-x86_64/feagi\`)
-          - macOS Apple Silicon (\`feagi/bin/darwin-aarch64/feagi\`)
-          - Windows x86_64 (\`feagi/bin/windows-x86_64/feagi.exe\`)
+          ${BINARIES_TEXT}
           
           ### Details
           - **Source Commit**: \`${{ steps.source_info.outputs.source_sha }}\`
@@ -1260,7 +1432,7 @@ jobs:
           - **Trigger**: $TRIGGER_INFO
           
           ### Verification
-          All 5 binaries have been verified to exist in this branch.
+          All ${BINARIES_COUNT} binary(ies) have been verified to exist in this branch.
           Please verify before merging:
           1. Check that all platform binaries are present in the file tree
           2. Verify binary sizes are reasonable
@@ -1269,6 +1441,16 @@ jobs:
           ---
           *This PR was automatically created by GitHub Actions*
           EOF
+          
+          echo "Generated PR body with ${BINARIES_COUNT} platform(s)"
+          cat /tmp/pr_body.md
+      
+      - name: Create Pull Request
+        id: create_pr
+        shell: bash
+        run: |
+          # Create PR using GitHub CLI - this creates PR from existing remote branch
+          # without needing to checkout, preserving all commits and binaries
           
           # Create PR first without labels (labels may not exist in repo)
           PR_OUTPUT=$(gh pr create \
@@ -1359,19 +1541,39 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Create directory structure
-          mkdir -p feagi/bin/linux-x86_64
-          mkdir -p feagi/bin/linux-aarch64
-          mkdir -p feagi/bin/darwin-x86_64
-          mkdir -p feagi/bin/darwin-aarch64
-          mkdir -p feagi/bin/windows-x86_64
+          # Create directory structure (only for selected platforms)
+          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+            mkdir -p feagi/bin/linux-x86_64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+            mkdir -p feagi/bin/linux-aarch64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+            mkdir -p feagi/bin/darwin-x86_64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+            mkdir -p feagi/bin/darwin-aarch64
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+            mkdir -p feagi/bin/windows-x86_64
+          fi
           
-          # Copy binaries
-          cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi || echo "⚠️ Linux x86_64 binary not found"
-          cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi || echo "⚠️ Linux aarch64 binary not found"
-          cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi || echo "⚠️ macOS Intel binary not found"
-          cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi || echo "⚠️ macOS Apple Silicon binary not found"
-          cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe || echo "⚠️ Windows binary not found"
+          # Copy binaries (only for selected platforms)
+          if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi && chmod +x feagi/bin/linux-x86_64/feagi || echo "⚠️ Linux x86_64 binary not found"
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi && chmod +x feagi/bin/linux-aarch64/feagi || echo "⚠️ Linux aarch64 binary not found"
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi && chmod +x feagi/bin/darwin-x86_64/feagi || echo "⚠️ macOS Intel binary not found"
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi && chmod +x feagi/bin/darwin-aarch64/feagi || echo "⚠️ macOS Apple Silicon binary not found"
+          fi
+          if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe || echo "⚠️ Windows binary not found"
+          fi
           
           echo "✅ Binaries copied to feagi/bin/"
           ls -lh feagi/bin/*/
@@ -1391,16 +1593,31 @@ jobs:
             # Force add binaries
             git add -f feagi/bin/
             
-            # For releases, commit directly to staging branch
-            VERSION="${{ needs.determine-config.outputs.version }}"
-            RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
+            # Build platform list for commit message
+            PLATFORMS_LIST=()
+            if [[ "${{ needs.determine-config.outputs.build_linux_x86_64 }}" == "true" ]]; then
+              PLATFORMS_LIST+=("linux-x86_64")
+            fi
+            if [[ "${{ needs.determine-config.outputs.build_linux_aarch64 }}" == "true" ]]; then
+              PLATFORMS_LIST+=("linux-aarch64")
+            fi
+            if [[ "${{ needs.determine-config.outputs.build_macos_intel }}" == "true" ]]; then
+              PLATFORMS_LIST+=("darwin-x86_64")
+            fi
+            if [[ "${{ needs.determine-config.outputs.build_macos_silicon }}" == "true" ]]; then
+              PLATFORMS_LIST+=("darwin-aarch64")
+            fi
+            if [[ "${{ needs.determine-config.outputs.build_windows }}" == "true" ]]; then
+              PLATFORMS_LIST+=("windows-x86_64")
+            fi
+            PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS_LIST[*]}")
             
             git commit -m "chore: update FEAGI binaries for ${RELEASE_TYPE} release v${VERSION}
 
           - Built from: ${{ github.repository }}@${{ needs.determine-config.outputs.source_branch }}
           - Version: v${VERSION}
           - Release Type: ${RELEASE_TYPE}
-          - Platforms: linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64"
+          - Platforms: ${PLATFORMS_STR}"
             
             git push origin staging
             echo "✅ Binaries pushed to staging branch"
