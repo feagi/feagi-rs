@@ -26,7 +26,7 @@ pub fn collect_version_info() -> VersionInfo {
     // Service & API layer
     crates.insert("feagi_api".to_string(), feagi_api::VERSION.to_string());
     crates.insert("feagi_services".to_string(), feagi_services::VERSION.to_string());
-    crates.insert("feagi_pns".to_string(), feagi_pns::VERSION.to_string());
+    crates.insert("feagi_io".to_string(), feagi_io::VERSION.to_string());
     
     // Infrastructure
     crates.insert("feagi_state_manager".to_string(), feagi_state_manager::VERSION.to_string());

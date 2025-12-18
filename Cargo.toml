@@ -24,7 +24,7 @@ required-features = ["cli"]
 # FEAGI Core Components (from feagi-core workspace)
 # Note: feagi-types removed - functionality split into feagi-neural and feagi_data_structures
 feagi-neural = { path = "../feagi-core/crates/feagi-neural" }
-feagi_data_structures = { path = "../feagi-core/crates/feagi_data_structures" }
+feagi-data-structures = { path = "../feagi-core/crates/feagi-data-structures" }
 feagi-runtime = { path = "../feagi-core/crates/feagi-runtime" }
 feagi-runtime-std = { path = "../feagi-core/crates/feagi-runtime-std" }
 feagi-config = { path = "../feagi-core/crates/feagi-config" }
@@ -34,7 +34,7 @@ feagi-bdu = { path = "../feagi-core/crates/feagi-bdu" }
 feagi-evo = { path = "../feagi-core/crates/feagi-evo" }
 feagi-services = { path = "../feagi-core/crates/feagi-services" }
 feagi-api = { path = "../feagi-core/crates/feagi-api" }
-feagi-pns = { path = "../feagi-core/crates/feagi-pns", features = ["websocket-transport"] }
+feagi-io = { path = "../feagi-core/crates/feagi-io", features = ["websocket-transport"] }
 feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
 feagi-plasticity = { path = "../feagi-core/crates/feagi-plasticity" }
 feagi-connectome-serialization = { path = "../feagi-core/crates/feagi-connectome-serialization" }

@@ -47,7 +47,7 @@ pub use feagi_burst_engine::backend::GpuConfig;
 pub use feagi_bdu::ConnectomeManager;
 pub use feagi_burst_engine::BurstLoopRunner;
 pub use feagi_services::*;
-pub use feagi_pns::PNS;
+pub use feagi_io::IOSystem;
 
 // Internal modules (reused from main.rs initialization logic)
 pub mod components;
@@ -155,7 +155,7 @@ impl FeagiInstance {
                  feagi={},\
                  feagi_api=trace,\
                  feagi_services=debug,\
-                 feagi_pns=debug,\
+                 feagi_io=debug,\
                  feagi_burst_engine=debug,\
                  feagi_bdu=debug,\
                  feagi_evo=debug,\
@@ -171,7 +171,7 @@ impl FeagiInstance {
                  feagi={},\
                  feagi_api={},\
                  feagi_services={},\
-                 feagi_pns={},\
+                 feagi_io={},\
                  axum=warn,\
                  tower_http=warn",
                 base_level, base_level, base_level, base_level, base_level

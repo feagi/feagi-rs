@@ -16,7 +16,7 @@ use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::impls::AgentServiceImpl;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
-use feagi_pns::PNS;
+use feagi_io::IOSystem;
 
 /// Core FEAGI components
 /// 
@@ -62,7 +62,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     // Initialize PNS
     info!("  Creating PNS (Agent Management)...");
     
-    use feagi_pns::PNSConfig;
+    use feagi_io::PNSConfig;
     
     let mut pns_config = PNSConfig::default();
     pns_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);

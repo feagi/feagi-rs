@@ -163,7 +163,7 @@ feagi (application)
 ├── feagi-evo          (Genome I/O)
 ├── feagi-services     (Service layer)
 ├── feagi-api          (REST API)
-├── feagi-pns          (ZMQ streams)
+├── feagi-io          (ZMQ streams)
 └── ...
 ```
 
