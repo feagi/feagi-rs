@@ -9,9 +9,9 @@ use anyhow::{Context, Result};
 use tracing::{info, warn, error};
 
 use feagi_config::FeagiConfig;
-use feagi_bdu::ConnectomeManager;
-use feagi_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU};
-use feagi_burst_engine::backend::GpuConfig;
+use feagi_brain_development::ConnectomeManager;
+use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU};
+use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::impls::{AgentServiceImpl, SystemServiceImpl};
@@ -33,9 +33,9 @@ pub struct FeagiComponents {
 /// 
 /// This function is adapted from main.rs initialization logic.
 pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> {
-    use feagi_neural::types::FeagiError;
-    use feagi_runtime_std::StdRuntime;
-    use feagi_burst_engine::backend::CPUBackend;
+    use feagi_npu_neural::types::FeagiError;
+    use feagi_npu_runtime::StdRuntime;
+    use feagi_npu_burst_engine::backend::CPUBackend;
     
     info!("  Initializing NPU...");
     
@@ -114,8 +114,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
-        fn publish_raw_fire_queue(&self, fire_data: feagi_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
+    impl feagi_npu_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
+        fn publish_raw_fire_queue(&self, fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
             self.pns.publish_raw_fire_queue(fire_data)
                 .map_err(|e| format!("PNS viz publish failed: {}", e))
         }
@@ -126,7 +126,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::MotorPublisher for PnsMotorPublisher {
+    impl feagi_npu_burst_engine::MotorPublisher for PnsMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
             self.pns.publish_motor(agent_id, data)
                 .map_err(|e| format!("PNS motor publish failed: {}", e))
@@ -337,7 +337,7 @@ pub async fn load_genome_with_pns(
     pns: &Arc<IOSystem>,
     genome_path: &std::path::Path,
 ) -> Result<()> {
-    use feagi_evo::{load_genome_from_file, validate_genome};
+    use feagi_evolutionary::{load_genome_from_file, validate_genome};
     
     info!("    [GENOME-LOAD] Step 1: Loading genome file...");
     
@@ -383,7 +383,7 @@ pub async fn load_genome_with_pns(
         drop(mgr);
         
         // Now develop genome (will acquire its own fine-grained locks)
-        use feagi_bdu::neuroembryogenesis::Neuroembryogenesis;
+        use feagi_brain_development::neuroembryogenesis::Neuroembryogenesis;
         let mut neuro = Neuroembryogenesis::new(manager.clone());
         neuro.develop_from_genome(&genome)
             .context("Failed to develop brain from genome")?;

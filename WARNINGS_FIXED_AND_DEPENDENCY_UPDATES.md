@@ -118,7 +118,7 @@ for (i, neuron_id) in neuron_ids.iter().enumerate() {
 - ✅ `src/genomic/sensory_cortical_unit.rs`: Removed unused `FeagiDataError` import
 - ✅ `src/genomic/motor_cortical_unit.rs`: Removed unused `FeagiDataError` import
 
-### feagi-evo (2 warnings)
+### feagi-evolutionary (2 warnings)
 - ✅ `src/genome/saver.rs`: Removed unused `RegionType`, `CorticalAreaDimensions`, and `AreaType` imports
 
 ### feagi-burst-engine (6 warnings)
@@ -127,7 +127,7 @@ for (i, neuron_id) in neuron_ids.iter().enumerate() {
 - ✅ `src/dynamic_npu.rs`: Prefixed unused `neuron_id` parameters with underscores
 - ✅ `src/npu.rs`: Added `#[allow(dead_code)]` to `runtime` and `backend` fields (used via type system)
 
-### feagi-bdu (6 warnings)
+### feagi-brain-development (6 warnings)
 - ✅ `src/connectome_manager.rs`: Removed unused `AreaType` import
 - ✅ `src/neuroembryogenesis.rs`: Removed unused `CorticalAreaDimensions` import and prefixed `_quantization_precision`
 - ✅ `src/cortical_type_utils.rs`: Removed unused imports and prefixed `_area` parameter
@@ -173,14 +173,14 @@ not yet implemented
 - `crates/feagi-neural/src/types/brain.rs`
 - `crates/feagi-runtime-std/src/synapse_array.rs`
 - `crates/feagi-runtime-std/src/runtime.rs`
-- `crates/feagi-evo/src/genome/saver.rs`
+- `crates/feagi-evolutionary/src/genome/saver.rs`
 - `crates/feagi-burst-engine/src/backend/mod.rs`
 - `crates/feagi-burst-engine/src/burst_loop_runner.rs`
 - `crates/feagi-burst-engine/src/dynamic_npu.rs`
 - `crates/feagi-burst-engine/src/npu.rs`
-- `crates/feagi-bdu/src/connectome_manager.rs`
-- `crates/feagi-bdu/src/neuroembryogenesis.rs`
-- `crates/feagi-bdu/src/cortical_type_utils.rs`
+- `crates/feagi-brain-development/src/connectome_manager.rs`
+- `crates/feagi-brain-development/src/neuroembryogenesis.rs`
+- `crates/feagi-brain-development/src/cortical_type_utils.rs`
 - `crates/feagi-io/src/core/type_validation.rs`
 
 ### feagi-data-processing
@@ -191,7 +191,7 @@ not yet implemented
 
 ### feagi-core (burst-engine & bdu)
 - `crates/feagi-burst-engine/src/npu.rs` (fixed CorticalID conversion from numeric index)
-- `crates/feagi-bdu/src/connectome_manager.rs` (moved cortical area registration BEFORE neuron creation)
+- `crates/feagi-brain-development/src/connectome_manager.rs` (moved cortical area registration BEFORE neuron creation)
 
 ---
 
@@ -201,7 +201,7 @@ The system automatically handles genome format migration:
 
 - **Genome v2.x**: Old 6-character format (e.g., `iic100`, `omot00`, `_power`)
   - Automatically migrated to v3.x format during load
-  - Migration handled by `feagi-evo/src/genome/migrator.rs`
+  - Migration handled by `feagi-evolutionary/src/genome/migrator.rs`
   - Logs migration statistics: `"Migrated N cortical IDs from old format to new format"`
 
 - **Genome v3.x+**: New base64 format (e.g., `Y1RHTTRfX18=` → `cTGM4___` when decoded)

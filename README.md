@@ -158,9 +158,9 @@ FEAGI is built from modular Rust crates:
 ```
 feagi (application)
 ├── feagi-config       (Configuration loading)
-├── feagi-bdu          (Brain Development Unit)
+├── feagi-brain-development          (Brain Development Unit)
 ├── feagi-burst-engine (NPU/Neural Processing)
-├── feagi-evo          (Genome I/O)
+├── feagi-evolutionary          (Genome I/O)
 ├── feagi-services     (Service layer)
 ├── feagi-api          (REST API)
 ├── feagi-io          (ZMQ streams)

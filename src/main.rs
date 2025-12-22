@@ -23,9 +23,9 @@ use std::sync::{Arc, Mutex};
 use parking_lot::RwLock;
 
 use feagi_config::{load_config, validate_config, FeagiConfig};
-use feagi_bdu::ConnectomeManager;
-use feagi_burst_engine::BurstLoopRunner;
-use feagi_burst_engine::backend::GpuConfig;
+use feagi_brain_development::ConnectomeManager;
+use feagi_npu_burst_engine::BurstLoopRunner;
+use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::impls::SystemServiceImpl;
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
 /// Core FEAGI components
 struct FeagiComponents {
     #[allow(dead_code)]  // In development - will be exposed via additional services
-    npu: Arc<Mutex<feagi_burst_engine::DynamicNPU>>,
+    npu: Arc<Mutex<feagi_npu_burst_engine::DynamicNPU>>,
     connectome_manager: Arc<RwLock<ConnectomeManager>>,
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
@@ -153,7 +153,7 @@ struct FeagiComponents {
 async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
     // Peek at genome to determine quantization precision (if genome provided)
     let precision = if let Some(genome_path) = &args.genome {
-        match feagi_evo::peek_quantization_precision(genome_path) {
+        match feagi_evolutionary::peek_quantization_precision(genome_path) {
             Ok(p) => {
                 info!("  Genome specifies quantization precision: {}", p);
                 p
@@ -180,8 +180,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     };
     
     // Create NPU based on quantization precision
-    use feagi_runtime_std::StdRuntime;
-    use feagi_burst_engine::backend::CPUBackend;
+    use feagi_npu_runtime::StdRuntime;
+    use feagi_npu_burst_engine::backend::CPUBackend;
     
     let runtime = StdRuntime;
     let backend = CPUBackend::new();
@@ -189,7 +189,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let npu = Arc::new(Mutex::new(match precision.as_str() {
         "fp32" | "f32" => {
             info!("    Creating FP32 NPU (32-bit floating point, highest precision)");
-            feagi_burst_engine::DynamicNPU::F32(feagi_burst_engine::RustNPU::new(
+            feagi_npu_burst_engine::DynamicNPU::F32(feagi_npu_burst_engine::RustNPU::new(
                 runtime,
                 backend,
                 config.connectome.neuron_space,
@@ -199,7 +199,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         },
         "int8" => {
             info!("    Creating INT8 NPU (8-bit integer, 42% memory reduction)");
-            feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+            feagi_npu_burst_engine::DynamicNPU::INT8(feagi_npu_burst_engine::RustNPU::new(
                 runtime,
                 backend,
                 config.connectome.neuron_space,
@@ -209,7 +209,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         },
         _ => {
             warn!("    Unknown precision '{}', defaulting to INT8", precision);
-            feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+            feagi_npu_burst_engine::DynamicNPU::INT8(feagi_npu_burst_engine::RustNPU::new(
                 runtime,
                 backend,
                 config.connectome.neuron_space,
@@ -221,8 +221,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     
     info!("    ✓ NPU initialized with {} precision (capacity: {} neurons, {} synapses)",
           match &*npu.lock().unwrap() {
-            feagi_burst_engine::DynamicNPU::F32(_) => "fp32",
-            feagi_burst_engine::DynamicNPU::INT8(_) => "int8",
+            feagi_npu_burst_engine::DynamicNPU::F32(_) => "fp32",
+            feagi_npu_burst_engine::DynamicNPU::INT8(_) => "int8",
         },
           config.connectome.neuron_space,
           config.connectome.synapse_space);
@@ -289,8 +289,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
-        fn publish_raw_fire_queue(&self, fire_data: feagi_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
+    impl feagi_npu_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
+        fn publish_raw_fire_queue(&self, fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
             self.pns.publish_raw_fire_queue(fire_data)
                 .map_err(|e| format!("PNS viz publish failed: {}", e))
         }
@@ -301,7 +301,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::MotorPublisher for PnsMotorPublisher {
+    impl feagi_npu_burst_engine::MotorPublisher for PnsMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
             self.pns.publish_motor(agent_id, data)
                 .map_err(|e| format!("PNS motor publish failed: {}", e))
