@@ -894,7 +894,6 @@ dependencies = [
  "feagi-api",
  "feagi-brain-development",
  "feagi-config",
- "feagi-data-structures",
  "feagi-evolutionary",
  "feagi-io",
  "feagi-npu-burst-engine",
@@ -904,6 +903,7 @@ dependencies = [
  "feagi-observability",
  "feagi-services",
  "feagi-state-manager",
+ "feagi-structures",
  "log",
  "parking_lot",
  "serde_json",
@@ -924,13 +924,13 @@ dependencies = [
  "base64 0.21.7",
  "chrono",
  "feagi-brain-development",
- "feagi-data-structures",
  "feagi-evolutionary",
  "feagi-io",
  "feagi-npu-burst-engine",
  "feagi-npu-neural",
  "feagi-observability",
  "feagi-services",
+ "feagi-structures",
  "http-body-util",
  "hyper 1.8.1",
  "parking_lot",
@@ -955,11 +955,11 @@ version = "0.0.1-beta.1"
 dependencies = [
  "ahash",
  "chrono",
- "feagi-data-structures",
  "feagi-evolutionary",
  "feagi-npu-burst-engine",
  "feagi-npu-neural",
  "feagi-observability",
+ "feagi-structures",
  "getrandom 0.2.16",
  "ndarray",
  "once_cell",
@@ -983,42 +983,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "feagi-data-serialization"
-version = "0.0.1-beta.1"
-dependencies = [
- "byteorder",
- "feagi-data-structures",
- "serde_json",
-]
-
-[[package]]
-name = "feagi-data-structures"
-version = "0.0.1-beta.1"
-dependencies = [
- "base64 0.22.1",
- "futures-channel",
- "futures-util",
- "js-sys",
- "ndarray",
- "paste",
- "rayon",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "feagi-evolutionary"
 version = "0.0.1-beta.1"
 dependencies = [
  "chrono",
- "feagi-data-structures",
  "feagi-npu-neural",
  "feagi-observability",
+ "feagi-structures",
  "js-sys",
  "rand",
  "serde",
@@ -1040,11 +1011,11 @@ dependencies = [
  "base64 0.22.1",
  "crossbeam",
  "feagi-brain-development",
- "feagi-data-serialization",
- "feagi-data-structures",
  "feagi-npu-burst-engine",
  "feagi-npu-neural",
+ "feagi-serialization",
  "feagi-services",
+ "feagi-structures",
  "futures-util",
  "lz4",
  "num_cpus",
@@ -1065,12 +1036,12 @@ dependencies = [
  "ahash",
  "bytemuck",
  "chrono",
- "feagi-data-serialization",
- "feagi-data-structures",
  "feagi-npu-neural",
  "feagi-npu-runtime",
  "feagi-observability",
+ "feagi-serialization",
  "feagi-state-manager",
+ "feagi-structures",
  "memmap2",
  "ndarray",
  "parking_lot",
@@ -1126,17 +1097,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "feagi-serialization"
+version = "0.0.1-beta.1"
+dependencies = [
+ "byteorder",
+ "feagi-structures",
+ "serde_json",
+]
+
+[[package]]
 name = "feagi-services"
 version = "0.0.1-beta.1"
 dependencies = [
  "async-trait",
  "chrono",
  "feagi-brain-development",
- "feagi-data-structures",
  "feagi-evolutionary",
  "feagi-npu-burst-engine",
  "feagi-npu-neural",
  "feagi-observability",
+ "feagi-structures",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1157,6 +1137,26 @@ dependencies = [
  "memmap2",
  "parking_lot",
  "serde",
+]
+
+[[package]]
+name = "feagi-structures"
+version = "0.0.1-beta.1"
+dependencies = [
+ "base64 0.22.1",
+ "futures-channel",
+ "futures-util",
+ "js-sys",
+ "ndarray",
+ "paste",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

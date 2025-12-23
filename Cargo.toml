@@ -23,7 +23,7 @@ required-features = ["cli"]
 [dependencies]
 # FEAGI Core Components (from feagi-core workspace)
 feagi-npu-neural = { path = "../feagi-core/crates/feagi-npu/neural" }
-feagi-data-structures = { path = "../feagi-core/crates/feagi-data-structures" }
+feagi-structures = { path = "../feagi-core/crates/feagi-structures" }
 feagi-npu-runtime = { path = "../feagi-core/crates/feagi-npu/runtime", features = ["std"] }
 feagi-config = { path = "../feagi-core/crates/feagi-config" }
 # GPU acceleration enabled by default (disable with --no-default-features)
