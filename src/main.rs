@@ -23,9 +23,9 @@ use std::sync::{Arc, Mutex};
 use parking_lot::RwLock;
 
 use feagi_config::{load_config, validate_config, FeagiConfig};
-use feagi_bdu::ConnectomeManager;
-use feagi_burst_engine::BurstLoopRunner;
-use feagi_burst_engine::backend::GpuConfig;
+use feagi_brain_development::ConnectomeManager;
+use feagi_npu_burst_engine::BurstLoopRunner;
+use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::impls::SystemServiceImpl;
@@ -33,7 +33,7 @@ use feagi_services::impls::AgentServiceImpl;
 use feagi_services::types::LoadGenomeParams;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_observability::{parse_debug_flags, init_logging_default};
-use feagi_pns::PNS;
+use feagi_io::IOSystem;
 
 /// FEAGI Server - Full-featured neural processing and brain management
 #[derive(Parser, Debug)]
@@ -142,18 +142,18 @@ async fn main() -> Result<()> {
 /// Core FEAGI components
 struct FeagiComponents {
     #[allow(dead_code)]  // In development - will be exposed via additional services
-    npu: Arc<Mutex<feagi_burst_engine::DynamicNPU>>,
+    npu: Arc<Mutex<feagi_npu_burst_engine::DynamicNPU>>,
     connectome_manager: Arc<RwLock<ConnectomeManager>>,
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
-    pns: Arc<PNS>,
+    pns: Arc<IOSystem>,
 }
 
 /// Initialize all core FEAGI components
 async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
     // Peek at genome to determine quantization precision (if genome provided)
     let precision = if let Some(genome_path) = &args.genome {
-        match feagi_evo::peek_quantization_precision(genome_path) {
+        match feagi_evolutionary::peek_quantization_precision(genome_path) {
             Ok(p) => {
                 info!("  Genome specifies quantization precision: {}", p);
                 p
@@ -180,8 +180,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     };
     
     // Create NPU based on quantization precision
-    use feagi_runtime_std::StdRuntime;
-    use feagi_burst_engine::backend::CPUBackend;
+    use feagi_npu_runtime::StdRuntime;
+    use feagi_npu_burst_engine::backend::CPUBackend;
     
     let runtime = StdRuntime;
     let backend = CPUBackend::new();
@@ -189,7 +189,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let npu = Arc::new(Mutex::new(match precision.as_str() {
         "fp32" | "f32" => {
             info!("    Creating FP32 NPU (32-bit floating point, highest precision)");
-            feagi_burst_engine::DynamicNPU::F32(feagi_burst_engine::RustNPU::new(
+            feagi_npu_burst_engine::DynamicNPU::F32(feagi_npu_burst_engine::RustNPU::new(
                 runtime,
                 backend,
                 config.connectome.neuron_space,
@@ -199,7 +199,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         },
         "int8" => {
             info!("    Creating INT8 NPU (8-bit integer, 42% memory reduction)");
-            feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+            feagi_npu_burst_engine::DynamicNPU::INT8(feagi_npu_burst_engine::RustNPU::new(
                 runtime,
                 backend,
                 config.connectome.neuron_space,
@@ -209,7 +209,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         },
         _ => {
             warn!("    Unknown precision '{}', defaulting to INT8", precision);
-            feagi_burst_engine::DynamicNPU::INT8(feagi_burst_engine::RustNPU::new(
+            feagi_npu_burst_engine::DynamicNPU::INT8(feagi_npu_burst_engine::RustNPU::new(
                 runtime,
                 backend,
                 config.connectome.neuron_space,
@@ -221,8 +221,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     
     info!("    ✓ NPU initialized with {} precision (capacity: {} neurons, {} synapses)",
           match &*npu.lock().unwrap() {
-            feagi_burst_engine::DynamicNPU::F32(_) => "fp32",
-            feagi_burst_engine::DynamicNPU::INT8(_) => "int8",
+            feagi_npu_burst_engine::DynamicNPU::F32(_) => "fp32",
+            feagi_npu_burst_engine::DynamicNPU::INT8(_) => "int8",
         },
           config.connectome.neuron_space,
           config.connectome.synapse_space);
@@ -241,42 +241,42 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     info!("  Creating PNS (Agent Management)...");
     
     // Build PNS config from FEAGI config (NO HARDCODED DEFAULTS!)
-    use feagi_pns::PNSConfig;
+    use feagi_io::IOConfig;
     
-    let mut pns_config = PNSConfig::default();
+    let mut io_config = IOConfig::default();
     // Override with actual config values
-    pns_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
-    pns_config.zmq_motor_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port);
-    pns_config.zmq_viz_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_visualization_port);
-    pns_config.zmq_sensory_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_sensory_port);
+    io_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
+    io_config.zmq_motor_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port);
+    io_config.zmq_viz_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_visualization_port);
+    io_config.zmq_sensory_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_sensory_port);
     
     // Load WebSocket configuration from TOML
-    pns_config.websocket.enabled = config.websocket.enabled;
-    pns_config.websocket.host = config.websocket.host.clone();
-    pns_config.websocket.sensory_port = config.websocket.sensory_port;
-    pns_config.websocket.motor_port = config.websocket.motor_port;
-    pns_config.websocket.visualization_port = config.websocket.visualization_port;
-    pns_config.websocket.registration_port = config.websocket.registration_port;
-    pns_config.websocket.rest_api_port = config.websocket.rest_api_port;
-    pns_config.websocket.connection_timeout_ms = config.websocket.connection_timeout_ms;
-    pns_config.websocket.ping_interval_ms = config.websocket.ping_interval_ms;
-    pns_config.websocket.ping_timeout_ms = config.websocket.ping_timeout_ms;
-    pns_config.websocket.close_timeout_ms = config.websocket.close_timeout_ms;
-    pns_config.websocket.max_message_size = config.websocket.max_message_size;
-    pns_config.websocket.max_connections = config.websocket.max_connections;
+    io_config.websocket.enabled = config.websocket.enabled;
+    io_config.websocket.host = config.websocket.host.clone();
+    io_config.websocket.sensory_port = config.websocket.sensory_port;
+    io_config.websocket.motor_port = config.websocket.motor_port;
+    io_config.websocket.visualization_port = config.websocket.visualization_port;
+    io_config.websocket.registration_port = config.websocket.registration_port;
+    io_config.websocket.rest_api_port = config.websocket.rest_api_port;
+    io_config.websocket.connection_timeout_ms = config.websocket.connection_timeout_ms;
+    io_config.websocket.ping_interval_ms = config.websocket.ping_interval_ms;
+    io_config.websocket.ping_timeout_ms = config.websocket.ping_timeout_ms;
+    io_config.websocket.close_timeout_ms = config.websocket.close_timeout_ms;
+    io_config.websocket.max_message_size = config.websocket.max_message_size;
+    io_config.websocket.max_connections = config.websocket.max_connections;
     info!("    ✓ WebSocket config loaded: enabled={}, ports={}/{}/{}/{}", 
-        pns_config.websocket.enabled,
-        pns_config.websocket.sensory_port,
-        pns_config.websocket.motor_port,
-        pns_config.websocket.visualization_port,
-        pns_config.websocket.registration_port
+        io_config.websocket.enabled,
+        io_config.websocket.sensory_port,
+        io_config.websocket.motor_port,
+        io_config.websocket.visualization_port,
+        io_config.websocket.registration_port
     );
     
-    let pns = Arc::new(PNS::with_config(pns_config)
+    let pns = Arc::new(IOSystem::with_config(io_config)
         .context("Failed to create PNS")?);
     
     // Wire dynamic gating callbacks (must be done after Arc wrapping)
-    PNS::wire_dynamic_gating_callbacks(&pns);
+    IOSystem::wire_dynamic_gating_callbacks(&pns);
     
     info!("    ✓ PNS created");
     
@@ -286,11 +286,11 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     
     // Create PNS-backed visualization publisher
     struct PnsVisualizationPublisher {
-        pns: Arc<PNS>,
+        pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
-        fn publish_raw_fire_queue(&self, fire_data: feagi_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
+    impl feagi_npu_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
+        fn publish_raw_fire_queue(&self, fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
             self.pns.publish_raw_fire_queue(fire_data)
                 .map_err(|e| format!("PNS viz publish failed: {}", e))
         }
@@ -298,10 +298,10 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     
     // Create PNS-backed motor publisher
     struct PnsMotorPublisher {
-        pns: Arc<PNS>,
+        pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::MotorPublisher for PnsMotorPublisher {
+    impl feagi_npu_burst_engine::MotorPublisher for PnsMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
             self.pns.publish_motor(agent_id, data)
                 .map_err(|e| format!("PNS motor publish failed: {}", e))
@@ -363,7 +363,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 /// Returns the genome's simulation_timestep (in seconds) if available
 async fn load_genome_with_pns(
     genome_service: &Arc<GenomeServiceImpl>,
-    pns: &Arc<PNS>,
+    pns: &Arc<IOSystem>,
     genome_path: &PathBuf,
 ) -> Result<Option<f64>> {
     info!("    [GENOME-LOAD] Step 1: Reading genome file...");
@@ -508,7 +508,7 @@ async fn start_services(
     use feagi_services::traits::registration_handler::RegistrationHandlerTrait;
     
     // Wrapper to convert Arc<Mutex<RegistrationHandler>> to trait object
-    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_pns::RegistrationHandler>>);
+    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_io::RegistrationHandler>>);
     impl RegistrationHandlerTrait for RegistrationHandlerWrapper {
         fn process_registration(&self, request: feagi_services::types::registration::RegistrationRequest) -> Result<feagi_services::types::registration::RegistrationResponse, String> {
             self.0.lock().process_registration(request)

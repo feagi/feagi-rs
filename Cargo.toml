@@ -21,23 +21,23 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-# FEAGI Core Components (from feagi-core workspace)
-# Note: feagi-types removed - functionality split into feagi-neural and feagi_data_structures
-feagi-neural = { path = "../feagi-core/crates/feagi-neural" }
-feagi_data_structures = { path = "../feagi-core/crates/feagi_data_structures" }
-feagi-runtime = { path = "../feagi-core/crates/feagi-runtime" }
-feagi-runtime-std = { path = "../feagi-core/crates/feagi-runtime-std" }
-feagi-config = { path = "../feagi-core/crates/feagi-config" }
+# FEAGI Core Components (crates.io)
+# - Local development can override these with `feagi-rs/.cargo/config.toml` via `[patch.crates-io]`.
+# - Staging should pin exact beta builds via Cargo.lock + `cargo build --locked`.
+# - Main should pin exact stable builds (no `-beta.*`) via Cargo.lock + `cargo build --locked`.
+feagi-npu-neural = { version = "0.0.1-beta.1" }
+feagi-structures = { version = "0.0.1-beta.1" }
+feagi-npu-runtime = { version = "0.0.1-beta.1", features = ["std"] }
+feagi-config = { version = "0.0.1-beta.1" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-burst-engine = { path = "../feagi-core/crates/feagi-burst-engine" }  # GPU backend needs runtime trait updates
-feagi-bdu = { path = "../feagi-core/crates/feagi-bdu" }
-feagi-evo = { path = "../feagi-core/crates/feagi-evo" }
-feagi-services = { path = "../feagi-core/crates/feagi-services" }
-feagi-api = { path = "../feagi-core/crates/feagi-api" }
-feagi-pns = { path = "../feagi-core/crates/feagi-pns", features = ["websocket-transport"] }
-feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
-feagi-plasticity = { path = "../feagi-core/crates/feagi-plasticity" }
-feagi-connectome-serialization = { path = "../feagi-core/crates/feagi-connectome-serialization" }
+feagi-npu-burst-engine = { version = "0.0.1-beta.1" }
+feagi-brain-development = { version = "0.0.1-beta.1" }
+feagi-evolutionary = { version = "0.0.1-beta.1" }
+feagi-services = { version = "0.0.1-beta.1" }
+feagi-api = { version = "0.0.1-beta.1" }
+feagi-io = { version = "0.0.1-beta.1", features = ["websocket-transport"] }
+feagi-state-manager = { version = "0.0.1-beta.1" }
+feagi-npu-plasticity = { version = "0.0.1-beta.1" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -47,7 +47,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
+feagi-observability = { version = "0.0.1-beta.1" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
@@ -117,7 +117,7 @@ path = "tests/profile_storage.rs"
 
 [features]
 default = ["cli"]
-# gpu = ["feagi-burst-engine/gpu"]  # Temporarily disabled - GPU backend needs runtime trait updates
+gpu = ["feagi-npu-burst-engine/gpu"]
 cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
 embedded = []                    # For library usage (no CLI)
 no-network = ["embedded"]        # Embedded + disable network servers (future use)

@@ -76,7 +76,7 @@ cargo run --release -- --genome brain.json
 ## Phase 2: FEAGI GDExtension (Pending)
 
 ### Tasks Remaining
-- [ ] Create `brain-visualizer/rust_extensions/feagi_embedded/` crate
+- [ ] Create `brain-visualizer/rust_extensions/feagi_hal/` crate
 - [ ] Implement GDExtension wrapper around `FeagiInstance`
 - [ ] Expose ~15 hot-path methods to GDScript
 - [ ] Add `visualization_data` signal

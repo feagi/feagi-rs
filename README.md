@@ -158,16 +158,16 @@ FEAGI is built from modular Rust crates:
 ```
 feagi (application)
 ├── feagi-config       (Configuration loading)
-├── feagi-bdu          (Brain Development Unit)
+├── feagi-brain-development          (Brain Development Unit)
 ├── feagi-burst-engine (NPU/Neural Processing)
-├── feagi-evo          (Genome I/O)
+├── feagi-evolutionary          (Genome I/O)
 ├── feagi-services     (Service layer)
 ├── feagi-api          (REST API)
-├── feagi-pns          (ZMQ streams)
+├── feagi-io          (ZMQ streams)
 └── ...
 ```
 
-All libraries are in `../feagi-core/crates/`
+The FEAGI core libraries live in `../feagi-core/crates/` in this monorepo and are published to crates.io.
 
 ## Development
 
@@ -175,6 +175,20 @@ All libraries are in `../feagi-core/crates/`
 
 ```bash
 cargo run -- --verbose --genome ../genomes/test_genome.json
+```
+
+### Use local `feagi-core` crates (rapid iteration)
+
+By default, `feagi-rs` depends on **crates.io** (CI/staging/main-friendly). For local development, you can override crates.io with local paths:
+
+```bash
+cp .cargo/config.toml.example .cargo/config.toml
+```
+
+To return to crates.io behavior (e.g., before pushing), remove the override:
+
+```bash
+rm .cargo/config.toml
 ```
 
 ### Run Tests

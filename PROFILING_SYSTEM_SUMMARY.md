@@ -92,7 +92,7 @@ The profiling tests I created were based on an assumed API, but the actual FEAGI
    cat feagi-core/crates/feagi-types/src/lib.rs
    cat feagi-core/crates/feagi-types/src/models/cortical_area.rs
    cat feagi-core/crates/feagi-burst-engine/src/npu.rs
-   cat feagi-core/crates/feagi-bdu/src/connectome_manager.rs
+   cat feagi-core/crates/feagi-brain-development/src/connectome_manager.rs
    ```
 
 2. **Update benches/feagi_benchmarks.rs**:

@@ -12,7 +12,7 @@ Fixed all 26 compilation warnings across feagi-rust and feagi-core crates, and u
 ## 1. Dependency Configuration Updates
 
 ### Issue
-The workspace was using published `feagi_data_serialization` from crates.io (v0.0.50-beta.59), which was missing critical updates including:
+The workspace was using published `feagi-data-serialization` from crates.io (v0.0.50-beta.59), which was missing critical updates including:
 - Implementation of `BrainInput` and `BrainOutput` cortical type conversion
 - Latest IOCorticalAreaDataFlag enhancements
 
@@ -21,10 +21,10 @@ Updated `/Users/nadji/code/FEAGI-2.0/feagi-core/Cargo.toml`:
 
 ```toml
 # Before:
-feagi_data_serialization = "0.0.50-beta.59"
+feagi-data-serialization = "0.0.50-beta.59"
 
 # After:
-feagi_data_serialization = { path = "../feagi-data-processing/feagi_data_serialization" }
+feagi-data-serialization = { path = "../feagi-data-processing/feagi-data-serialization" }
 ```
 
 **Impact**: All feagi-core crates now use local, up-to-date feagi-data-processing packages.
@@ -36,7 +36,7 @@ feagi_data_serialization = { path = "../feagi-data-processing/feagi_data_seriali
 ### Issue 1: Missing BrainInput/BrainOutput Implementation
 Runtime panic when loading genomes with IPU/OPU areas:
 ```
-thread 'tokio-runtime-worker' panicked at feagi_data_structures/src/genomic/cortical_area/cortical_id.rs:113:17:
+thread 'tokio-runtime-worker' panicked at feagi-data-structures/src/genomic/cortical_area/cortical_id.rs:113:17:
 not yet implemented
 ```
 
@@ -113,12 +113,12 @@ for (i, neuron_id) in neuron_ids.iter().enumerate() {
 - ✅ `src/synapse_array.rs`: Removed unused `RuntimeError` import
 - ✅ `src/runtime.rs`: Removed unused `NeuronStorage` and `SynapseStorage` imports
 
-### feagi_data_structures (3 warnings)
+### feagi-data-structures (3 warnings)
 - ✅ `src/genomic/cortical_area/io_cortical_area_data_type.rs`: Removed unused `std::fmt::write` import
 - ✅ `src/genomic/sensory_cortical_unit.rs`: Removed unused `FeagiDataError` import
 - ✅ `src/genomic/motor_cortical_unit.rs`: Removed unused `FeagiDataError` import
 
-### feagi-evo (2 warnings)
+### feagi-evolutionary (2 warnings)
 - ✅ `src/genome/saver.rs`: Removed unused `RegionType`, `CorticalAreaDimensions`, and `AreaType` imports
 
 ### feagi-burst-engine (6 warnings)
@@ -127,12 +127,12 @@ for (i, neuron_id) in neuron_ids.iter().enumerate() {
 - ✅ `src/dynamic_npu.rs`: Prefixed unused `neuron_id` parameters with underscores
 - ✅ `src/npu.rs`: Added `#[allow(dead_code)]` to `runtime` and `backend` fields (used via type system)
 
-### feagi-bdu (6 warnings)
+### feagi-brain-development (6 warnings)
 - ✅ `src/connectome_manager.rs`: Removed unused `AreaType` import
 - ✅ `src/neuroembryogenesis.rs`: Removed unused `CorticalAreaDimensions` import and prefixed `_quantization_precision`
 - ✅ `src/cortical_type_utils.rs`: Removed unused imports and prefixed `_area` parameter
 
-### feagi-pns (1 warning)
+### feagi-io (1 warning)
 - ✅ `src/core/type_validation.rs`: Removed unused `CorticalAreaType` import
 
 ---
@@ -173,25 +173,25 @@ not yet implemented
 - `crates/feagi-neural/src/types/brain.rs`
 - `crates/feagi-runtime-std/src/synapse_array.rs`
 - `crates/feagi-runtime-std/src/runtime.rs`
-- `crates/feagi-evo/src/genome/saver.rs`
+- `crates/feagi-evolutionary/src/genome/saver.rs`
 - `crates/feagi-burst-engine/src/backend/mod.rs`
 - `crates/feagi-burst-engine/src/burst_loop_runner.rs`
 - `crates/feagi-burst-engine/src/dynamic_npu.rs`
 - `crates/feagi-burst-engine/src/npu.rs`
-- `crates/feagi-bdu/src/connectome_manager.rs`
-- `crates/feagi-bdu/src/neuroembryogenesis.rs`
-- `crates/feagi-bdu/src/cortical_type_utils.rs`
-- `crates/feagi-pns/src/core/type_validation.rs`
+- `crates/feagi-brain-development/src/connectome_manager.rs`
+- `crates/feagi-brain-development/src/neuroembryogenesis.rs`
+- `crates/feagi-brain-development/src/cortical_type_utils.rs`
+- `crates/feagi-io/src/core/type_validation.rs`
 
 ### feagi-data-processing
-- `feagi_data_structures/src/genomic/cortical_area/cortical_id.rs` (implemented brain_input/brain_output)
-- `feagi_data_structures/src/genomic/cortical_area/io_cortical_area_data_type.rs` (cleaned imports)
-- `feagi_data_structures/src/genomic/sensory_cortical_unit.rs` (cleaned imports)
-- `feagi_data_structures/src/genomic/motor_cortical_unit.rs` (cleaned imports)
+- `feagi-data-structures/src/genomic/cortical_area/cortical_id.rs` (implemented brain_input/brain_output)
+- `feagi-data-structures/src/genomic/cortical_area/io_cortical_area_data_type.rs` (cleaned imports)
+- `feagi-data-structures/src/genomic/sensory_cortical_unit.rs` (cleaned imports)
+- `feagi-data-structures/src/genomic/motor_cortical_unit.rs` (cleaned imports)
 
 ### feagi-core (burst-engine & bdu)
 - `crates/feagi-burst-engine/src/npu.rs` (fixed CorticalID conversion from numeric index)
-- `crates/feagi-bdu/src/connectome_manager.rs` (moved cortical area registration BEFORE neuron creation)
+- `crates/feagi-brain-development/src/connectome_manager.rs` (moved cortical area registration BEFORE neuron creation)
 
 ---
 
@@ -201,7 +201,7 @@ The system automatically handles genome format migration:
 
 - **Genome v2.x**: Old 6-character format (e.g., `iic100`, `omot00`, `_power`)
   - Automatically migrated to v3.x format during load
-  - Migration handled by `feagi-evo/src/genome/migrator.rs`
+  - Migration handled by `feagi-evolutionary/src/genome/migrator.rs`
   - Logs migration statistics: `"Migrated N cortical IDs from old format to new format"`
 
 - **Genome v3.x+**: New base64 format (e.g., `Y1RHTTRfX18=` → `cTGM4___` when decoded)
@@ -218,7 +218,7 @@ The NPU now properly handles cortical area associations:
 1. ✅ Verify genome loading works with real genome files (both v2.x and v3.x)
 2. ✅ Test IPU/OPU cortical areas (vision, motor, etc.)
 3. ✅ Verify neurogenesis completes without panics
-4. Consider publishing updated `feagi_data_serialization` to crates.io once stable
+4. Consider publishing updated `feagi-data-serialization` to crates.io once stable
 
 ---
 

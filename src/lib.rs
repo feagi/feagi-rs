@@ -40,14 +40,14 @@ use tracing::{info, error};
 
 // Re-export public types
 pub use feagi_config::{FeagiConfig, load_config};
-pub use feagi_burst_engine::RawFireQueueSnapshot;
-pub use feagi_burst_engine::backend::GpuConfig;
+pub use feagi_npu_burst_engine::RawFireQueueSnapshot;
+pub use feagi_npu_burst_engine::backend::GpuConfig;
 
 // Re-export for embedders who need them
-pub use feagi_bdu::ConnectomeManager;
-pub use feagi_burst_engine::BurstLoopRunner;
+pub use feagi_brain_development::ConnectomeManager;
+pub use feagi_npu_burst_engine::BurstLoopRunner;
 pub use feagi_services::*;
-pub use feagi_pns::PNS;
+pub use feagi_io::IOSystem;
 
 // Internal modules (reused from main.rs initialization logic)
 pub mod components;
@@ -155,10 +155,10 @@ impl FeagiInstance {
                  feagi={},\
                  feagi_api=trace,\
                  feagi_services=debug,\
-                 feagi_pns=debug,\
-                 feagi_burst_engine=debug,\
-                 feagi_bdu=debug,\
-                 feagi_evo=debug,\
+                 feagi_io=debug,\
+                 feagi_npu_burst_engine=debug,\
+                 feagi_brain_development=debug,\
+                 feagi_evolutionary=debug,\
                  axum=debug,\
                  tower_http=debug,\
                  hyper=debug",
@@ -171,7 +171,7 @@ impl FeagiInstance {
                  feagi={},\
                  feagi_api={},\
                  feagi_services={},\
-                 feagi_pns={},\
+                 feagi_io={},\
                  axum=warn,\
                  tower_http=warn",
                 base_level, base_level, base_level, base_level, base_level

@@ -9,14 +9,14 @@ use anyhow::{Context, Result};
 use tracing::{info, warn, error};
 
 use feagi_config::FeagiConfig;
-use feagi_bdu::ConnectomeManager;
-use feagi_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU};
-use feagi_burst_engine::backend::GpuConfig;
+use feagi_brain_development::ConnectomeManager;
+use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU};
+use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::impls::{AgentServiceImpl, SystemServiceImpl};
 use feagi_api::transports::http::server::{create_http_server, ApiState};
-use feagi_pns::PNS;
+use feagi_io::IOSystem;
 
 /// Core FEAGI components
 /// 
@@ -26,16 +26,16 @@ pub struct FeagiComponents {
     pub connectome_manager: Arc<RwLock<ConnectomeManager>>,
     pub runtime_service: Arc<RuntimeServiceImpl>,
     pub burst_runner: Arc<RwLock<BurstLoopRunner>>,
-    pub pns: Arc<PNS>,
+    pub pns: Arc<IOSystem>,
 }
 
 /// Initialize all core FEAGI components
 /// 
 /// This function is adapted from main.rs initialization logic.
 pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> {
-    use feagi_neural::types::FeagiError;
-    use feagi_runtime_std::StdRuntime;
-    use feagi_burst_engine::backend::CPUBackend;
+    use feagi_npu_neural::types::FeagiError;
+    use feagi_npu_runtime::StdRuntime;
+    use feagi_npu_burst_engine::backend::CPUBackend;
     
     info!("  Initializing NPU...");
     
@@ -74,34 +74,34 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     // Initialize PNS
     info!("  Creating PNS (Agent Management)...");
     
-    use feagi_pns::PNSConfig;
+    use feagi_io::IOConfig;
     
-    let mut pns_config = PNSConfig::default();
-    pns_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
-    pns_config.zmq_motor_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port);
-    pns_config.zmq_viz_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_visualization_port);
-    pns_config.zmq_sensory_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_sensory_port);
+    let mut io_config = IOConfig::default();
+    io_config.zmq_rest_address = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
+    io_config.zmq_motor_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port);
+    io_config.zmq_viz_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_visualization_port);
+    io_config.zmq_sensory_address = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_sensory_port);
     
     // Load WebSocket configuration
-    pns_config.websocket.enabled = config.websocket.enabled;
-    pns_config.websocket.host = config.websocket.host.clone();
-    pns_config.websocket.sensory_port = config.websocket.sensory_port;
-    pns_config.websocket.motor_port = config.websocket.motor_port;
-    pns_config.websocket.visualization_port = config.websocket.visualization_port;
-    pns_config.websocket.registration_port = config.websocket.registration_port;
-    pns_config.websocket.rest_api_port = config.websocket.rest_api_port;
-    pns_config.websocket.connection_timeout_ms = config.websocket.connection_timeout_ms;
-    pns_config.websocket.ping_interval_ms = config.websocket.ping_interval_ms;
-    pns_config.websocket.ping_timeout_ms = config.websocket.ping_timeout_ms;
-    pns_config.websocket.close_timeout_ms = config.websocket.close_timeout_ms;
-    pns_config.websocket.max_message_size = config.websocket.max_message_size;
-    pns_config.websocket.max_connections = config.websocket.max_connections;
+    io_config.websocket.enabled = config.websocket.enabled;
+    io_config.websocket.host = config.websocket.host.clone();
+    io_config.websocket.sensory_port = config.websocket.sensory_port;
+    io_config.websocket.motor_port = config.websocket.motor_port;
+    io_config.websocket.visualization_port = config.websocket.visualization_port;
+    io_config.websocket.registration_port = config.websocket.registration_port;
+    io_config.websocket.rest_api_port = config.websocket.rest_api_port;
+    io_config.websocket.connection_timeout_ms = config.websocket.connection_timeout_ms;
+    io_config.websocket.ping_interval_ms = config.websocket.ping_interval_ms;
+    io_config.websocket.ping_timeout_ms = config.websocket.ping_timeout_ms;
+    io_config.websocket.close_timeout_ms = config.websocket.close_timeout_ms;
+    io_config.websocket.max_message_size = config.websocket.max_message_size;
+    io_config.websocket.max_connections = config.websocket.max_connections;
     
-    let pns = Arc::new(PNS::with_config(pns_config)
+    let pns = Arc::new(IOSystem::with_config(io_config)
         .context("Failed to create PNS")?);
     
     // Wire dynamic gating callbacks
-    PNS::wire_dynamic_gating_callbacks(&pns);
+    IOSystem::wire_dynamic_gating_callbacks(&pns);
     
     info!("    ✓ PNS created");
     
@@ -111,11 +111,11 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     
     // Create PNS-backed visualization publisher
     struct PnsVisualizationPublisher {
-        pns: Arc<PNS>,
+        pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
-        fn publish_raw_fire_queue(&self, fire_data: feagi_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
+    impl feagi_npu_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
+        fn publish_raw_fire_queue(&self, fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot) -> Result<(), String> {
             self.pns.publish_raw_fire_queue(fire_data)
                 .map_err(|e| format!("PNS viz publish failed: {}", e))
         }
@@ -123,10 +123,10 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     
     // Create PNS-backed motor publisher
     struct PnsMotorPublisher {
-        pns: Arc<PNS>,
+        pns: Arc<IOSystem>,
     }
     
-    impl feagi_burst_engine::MotorPublisher for PnsMotorPublisher {
+    impl feagi_npu_burst_engine::MotorPublisher for PnsMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
             self.pns.publish_motor(agent_id, data)
                 .map_err(|e| format!("PNS motor publish failed: {}", e))
@@ -186,7 +186,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
 /// * `connectome_service` - The connectome service instance  
 /// * `auto_create_enabled` - Whether to auto-create missing cortical areas (from config)
 pub fn wire_registration_handler_services(
-    registration_handler: &Arc<parking_lot::Mutex<feagi_pns::RegistrationHandler>>,
+    registration_handler: &Arc<parking_lot::Mutex<feagi_io::RegistrationHandler>>,
     genome_service: &Arc<dyn feagi_services::traits::GenomeService + Send + Sync>,
     connectome_service: &Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>,
     auto_create_enabled: bool,
@@ -254,7 +254,7 @@ pub async fn start_http_server(
     use feagi_services::traits::registration_handler::RegistrationHandlerTrait;
     
     // Wrapper to convert Arc<Mutex<RegistrationHandler>> to trait object
-    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_pns::RegistrationHandler>>);
+    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_io::RegistrationHandler>>);
     impl RegistrationHandlerTrait for RegistrationHandlerWrapper {
         fn process_registration(&self, request: feagi_services::types::registration::RegistrationRequest) -> Result<feagi_services::types::registration::RegistrationResponse, String> {
             self.0.lock().process_registration(request)
@@ -334,10 +334,10 @@ pub async fn start_http_server(
 /// Load genome and notify PNS for dynamic gating
 pub async fn load_genome_with_pns(
     manager: &Arc<RwLock<ConnectomeManager>>,
-    pns: &Arc<PNS>,
+    pns: &Arc<IOSystem>,
     genome_path: &std::path::Path,
 ) -> Result<()> {
-    use feagi_evo::{load_genome_from_file, validate_genome};
+    use feagi_evolutionary::{load_genome_from_file, validate_genome};
     
     info!("    [GENOME-LOAD] Step 1: Loading genome file...");
     
@@ -383,7 +383,7 @@ pub async fn load_genome_with_pns(
         drop(mgr);
         
         // Now develop genome (will acquire its own fine-grained locks)
-        use feagi_bdu::neuroembryogenesis::Neuroembryogenesis;
+        use feagi_brain_development::neuroembryogenesis::Neuroembryogenesis;
         let mut neuro = Neuroembryogenesis::new(manager.clone());
         neuro.develop_from_genome(&genome)
             .context("Failed to develop brain from genome")?;

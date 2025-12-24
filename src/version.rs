@@ -18,26 +18,26 @@ pub fn collect_version_info() -> VersionInfo {
     let mut crates = HashMap::new();
     
     // Core algorithms
-    crates.insert("feagi_bdu".to_string(), feagi_bdu::VERSION.to_string());
-    crates.insert("feagi_burst_engine".to_string(), feagi_burst_engine::VERSION.to_string());
-    crates.insert("feagi_evo".to_string(), feagi_evo::VERSION.to_string());
-    crates.insert("feagi_plasticity".to_string(), feagi_plasticity::VERSION.to_string());
+    crates.insert("feagi_brain_development".to_string(), feagi_brain_development::VERSION.to_string());
+    crates.insert("feagi_npu_burst_engine".to_string(), feagi_npu_burst_engine::VERSION.to_string());
+    crates.insert("feagi_evolutionary".to_string(), feagi_evolutionary::VERSION.to_string());
+    crates.insert("feagi_npu_plasticity".to_string(), feagi_npu_plasticity::VERSION.to_string());
     
     // Service & API layer
     crates.insert("feagi_api".to_string(), feagi_api::VERSION.to_string());
     crates.insert("feagi_services".to_string(), feagi_services::VERSION.to_string());
-    crates.insert("feagi_pns".to_string(), feagi_pns::VERSION.to_string());
+    crates.insert("feagi_io".to_string(), feagi_io::VERSION.to_string());
     
     // Infrastructure
     crates.insert("feagi_state_manager".to_string(), feagi_state_manager::VERSION.to_string());
-    crates.insert("feagi_neural".to_string(), feagi_neural::VERSION.to_string());
+    crates.insert("feagi_npu_neural".to_string(), feagi_npu_neural::VERSION.to_string());
     crates.insert("feagi_config".to_string(), feagi_config::VERSION.to_string());
     crates.insert("feagi_observability".to_string(), feagi_observability::VERSION.to_string());
-    crates.insert("feagi_connectome_serialization".to_string(), feagi_connectome_serialization::VERSION.to_string());
+    // feagi-connectome-serialization moved to feagi-io::connectome (types in feagi-npu-neural)
+    crates.insert("feagi_io_connectome".to_string(), "0.0.0".to_string());
     
-    // Runtime (std only - embedded would use different runtime)
-    crates.insert("feagi_runtime".to_string(), feagi_runtime::VERSION.to_string());
-    crates.insert("feagi_runtime_std".to_string(), feagi_runtime_std::VERSION.to_string());
+    // Runtime (consolidated - std/embedded via features)
+    crates.insert("feagi_npu_runtime".to_string(), feagi_npu_runtime::VERSION.to_string());
     
     // Main binary
     crates.insert("feagi".to_string(), env!("CARGO_PKG_VERSION").to_string());
