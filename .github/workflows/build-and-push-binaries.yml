@@ -287,7 +287,7 @@ jobs:
             ls -lh "$BINARY_PATH"
           else
             echo "Building from source..."
-            cargo build --release --target x86_64-unknown-linux-gnu
+            cargo build --locked --release --target x86_64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
       
@@ -435,7 +435,7 @@ jobs:
             ls -lh "$BINARY_PATH"
           else
             echo "Building from source..."
-            cargo build --release --target aarch64-unknown-linux-gnu
+            cargo build --locked --release --target aarch64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
       
@@ -571,7 +571,7 @@ jobs:
             ls -lh "$BINARY_PATH"
           else
             echo "Building from source..."
-            cargo build --release --target x86_64-apple-darwin
+            cargo build --locked --release --target x86_64-apple-darwin
             ls -lh "$BINARY_PATH"
           fi
       
@@ -707,7 +707,7 @@ jobs:
             ls -lh "$BINARY_PATH"
           else
             echo "Building from source..."
-            cargo build --release --target aarch64-apple-darwin
+            cargo build --locked --release --target aarch64-apple-darwin
             ls -lh "$BINARY_PATH"
           fi
       
@@ -855,7 +855,7 @@ jobs:
             ls -lh "$BINARY_PATH"
           else
             echo "Building from source..."
-            cargo build --release --target x86_64-pc-windows-msvc
+            cargo build --locked --release --target x86_64-pc-windows-msvc
             ls -lh "$BINARY_PATH"
           fi
       

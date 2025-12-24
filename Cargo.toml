@@ -21,20 +21,23 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-# FEAGI Core Components (from feagi-core workspace)
-feagi-npu-neural = { path = "../feagi-core/crates/feagi-npu/neural" }
-feagi-structures = { path = "../feagi-core/crates/feagi-structures" }
-feagi-npu-runtime = { path = "../feagi-core/crates/feagi-npu/runtime", features = ["std"] }
-feagi-config = { path = "../feagi-core/crates/feagi-config" }
+# FEAGI Core Components (crates.io)
+# - Local development can override these with `feagi-rs/.cargo/config.toml` via `[patch.crates-io]`.
+# - Staging should pin exact beta builds via Cargo.lock + `cargo build --locked`.
+# - Main should pin exact stable builds (no `-beta.*`) via Cargo.lock + `cargo build --locked`.
+feagi-npu-neural = { version = "0.0.1-beta.1" }
+feagi-structures = { version = "0.0.1-beta.1" }
+feagi-npu-runtime = { version = "0.0.1-beta.1", features = ["std"] }
+feagi-config = { version = "0.0.1-beta.1" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { path = "../feagi-core/crates/feagi-npu/burst-engine" }
-feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
-feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
-feagi-services = { path = "../feagi-core/crates/feagi-services" }
-feagi-api = { path = "../feagi-core/crates/feagi-api" }
-feagi-io = { path = "../feagi-core/crates/feagi-io", features = ["websocket-transport"] }
-feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
-feagi-npu-plasticity = { path = "../feagi-core/crates/feagi-npu/plasticity" }
+feagi-npu-burst-engine = { version = "0.0.1-beta.1" }
+feagi-brain-development = { version = "0.0.1-beta.1" }
+feagi-evolutionary = { version = "0.0.1-beta.1" }
+feagi-services = { version = "0.0.1-beta.1" }
+feagi-api = { version = "0.0.1-beta.1" }
+feagi-io = { version = "0.0.1-beta.1", features = ["websocket-transport"] }
+feagi-state-manager = { version = "0.0.1-beta.1" }
+feagi-npu-plasticity = { version = "0.0.1-beta.1" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -44,7 +47,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
+feagi-observability = { version = "0.0.1-beta.1" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
