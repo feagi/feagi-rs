@@ -182,13 +182,22 @@ jobs:
         env:
           RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
         run: |
-          cargo metadata --locked --format-version=1 | python << 'PY'
+          set -euo pipefail
+          METADATA_FILE="cargo-metadata.json"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
+            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+            exit 1
+          fi
+
+          python << 'PY'
           import json
           import os
           import sys
 
           release_type = os.environ.get("RELEASE_TYPE", "")
-          data = json.load(sys.stdin)
+          with open("cargo-metadata.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
 
           bad_sources = []
           bad_prerelease = []
@@ -313,13 +322,22 @@ jobs:
         env:
           RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
         run: |
-          cargo metadata --locked --format-version=1 | python << 'PY'
+          set -euo pipefail
+          METADATA_FILE="cargo-metadata.json"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
+            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+            exit 1
+          fi
+
+          python << 'PY'
           import json
           import os
           import sys
 
           release_type = os.environ.get("RELEASE_TYPE", "")
-          data = json.load(sys.stdin)
+          with open("cargo-metadata.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
 
           bad_sources = []
           bad_prerelease = []
@@ -462,13 +480,22 @@ jobs:
         env:
           RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
         run: |
-          cargo metadata --locked --format-version=1 | python3 << 'PY'
+          set -euo pipefail
+          METADATA_FILE="cargo-metadata.json"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
+            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+            exit 1
+          fi
+
+          python3 << 'PY'
           import json
           import os
           import sys
 
           release_type = os.environ.get("RELEASE_TYPE", "")
-          data = json.load(sys.stdin)
+          with open("cargo-metadata.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
 
           bad_sources = []
           bad_prerelease = []
@@ -599,13 +626,22 @@ jobs:
         env:
           RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
         run: |
-          cargo metadata --locked --format-version=1 | python3 << 'PY'
+          set -euo pipefail
+          METADATA_FILE="cargo-metadata.json"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
+            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+            exit 1
+          fi
+
+          python3 << 'PY'
           import json
           import os
           import sys
 
           release_type = os.environ.get("RELEASE_TYPE", "")
-          data = json.load(sys.stdin)
+          with open("cargo-metadata.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
 
           bad_sources = []
           bad_prerelease = []
@@ -736,13 +772,22 @@ jobs:
         env:
           RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
         run: |
-          cargo metadata --locked --format-version=1 | python << 'PY'
+          set -euo pipefail
+          METADATA_FILE="cargo-metadata.json"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
+            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+            exit 1
+          fi
+
+          python << 'PY'
           import json
           import os
           import sys
 
           release_type = os.environ.get("RELEASE_TYPE", "")
-          data = json.load(sys.stdin)
+          with open("cargo-metadata.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
 
           bad_sources = []
           bad_prerelease = []
