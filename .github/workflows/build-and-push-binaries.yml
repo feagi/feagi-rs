@@ -36,11 +36,6 @@ on:
         required: false
         type: string
         default: main
-      feagi_core_branch:
-        description: 'feagi-core branch to use (default: main, or leave empty for default branch)'
-        required: false
-        type: string
-        default: 'main'
       
       # Platform selection (save resources)
       build_linux_x86_64:
@@ -97,7 +92,6 @@ jobs:
       version: ${{ steps.config.outputs.version }}
       source_branch: ${{ steps.config.outputs.source_branch }}
       source_sha: ${{ steps.config.outputs.source_sha }}
-      feagi_core_branch: ${{ steps.config.outputs.feagi_core_branch }}
       create_release: ${{ steps.config.outputs.create_release }}
     steps:
       - name: Determine build configuration
@@ -112,8 +106,6 @@ jobs:
             SOURCE_BRANCH="${{ github.event.inputs.source_branch }}"
             SOURCE_BRANCH="${SOURCE_BRANCH:-main}"
             SOURCE_SHA="${{ github.event.inputs.source_sha }}"
-            FEAGI_CORE_BRANCH="${{ github.event.inputs.feagi_core_branch }}"
-            FEAGI_CORE_BRANCH="${FEAGI_CORE_BRANCH:-main}"
             
             # Auto-generate version for dev if not provided
             if [[ "${RELEASE_TYPE}" == "dev" && -z "${VERSION}" ]]; then
@@ -125,26 +117,22 @@ jobs:
             VERSION="${GITHUB_REF#refs/tags/v}"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
-            FEAGI_CORE_BRANCH="main"
           elif [[ "${{ github.ref }}" =~ refs/tags/.*-beta\. ]]; then
             RELEASE_TYPE="beta"
             VERSION="${GITHUB_REF#refs/tags/v}"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
-            FEAGI_CORE_BRANCH="main"
           elif [[ "${{ github.ref }}" =~ refs/tags/.*-alpha\. ]]; then
             RELEASE_TYPE="alpha"
             VERSION="${GITHUB_REF#refs/tags/v}"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
-            FEAGI_CORE_BRANCH="main"
           else
             # PR merge or other trigger - default to dev
             RELEASE_TYPE="dev"
             VERSION="dev-$(date +%Y%m%d-%H%M%S)"
             SOURCE_BRANCH="main"
             SOURCE_SHA=""
-            FEAGI_CORE_BRANCH="main"
           fi
           
           # Determine if we should create a GitHub Release
@@ -159,7 +147,6 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "source_branch=${SOURCE_BRANCH}" >> $GITHUB_OUTPUT
           echo "source_sha=${SOURCE_SHA}" >> $GITHUB_OUTPUT
-          echo "feagi_core_branch=${FEAGI_CORE_BRANCH}" >> $GITHUB_OUTPUT
           echo "create_release=${CREATE_RELEASE}" >> $GITHUB_OUTPUT
           
           echo "📋 Build Configuration:"
@@ -181,60 +168,61 @@ jobs:
         with:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
-      
-      - name: Checkout feagi-core (dependency repo)
-        uses: actions/checkout@v4
-        with:
-          repository: feagi/feagi-core
-          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
-          path: feagi-core
-          fetch-depth: 0
-      
-      - name: Update Cargo.toml paths for CI
+
+      - name: Disable local path patches (CI must use crates.io)
         shell: bash
         run: |
-          python << 'PYTHON_SCRIPT'
-          import re
+          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
+            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+            rm -f ".cargo/config.toml"
+          fi
+
+      - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
+        run: |
+          cargo metadata --locked --format-version=1 | python << 'PY'
+          import json
+          import os
           import sys
-          import io
-          
-          if sys.platform == 'win32':
-              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-          
-          with open('Cargo.toml', 'r', encoding='utf-8') as f:
-              content = f.read()
-          
-          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
-          
-          with open('Cargo.toml', 'w', encoding='utf-8') as f:
-              f.write(updated)
-          
-          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
-          try:
-              with open(api_cargo_path, 'r', encoding='utf-8') as f:
-                  api_content = f.read()
-              
-              if 'reqwest' in api_content:
-                  if 'features = ["json"]' in api_content:
-                      api_content = api_content.replace(
-                          'reqwest = { version = "0.11", features = ["json"] }',
-                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
-                      )
-                  elif 'reqwest = { version =' in api_content:
-                      api_content = re.sub(
-                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
-                          r'\1, features = ["json", "native-tls-vendored"] }',
-                          api_content
-                      )
-                  
-                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
-                      f.write(api_content)
-                  print("Enabled native-tls-vendored for reqwest in feagi-api")
-          except FileNotFoundError:
-              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
-          
-          print("Updated Cargo.toml paths")
-          PYTHON_SCRIPT
+
+          release_type = os.environ.get("RELEASE_TYPE", "")
+          data = json.load(sys.stdin)
+
+          bad_sources = []
+          bad_prerelease = []
+
+          for pkg in data.get("packages", []):
+            name = str(pkg.get("name", ""))
+            if not name.startswith("feagi-"):
+              continue
+
+            source = pkg.get("source")
+            version = str(pkg.get("version", ""))
+
+            if not (isinstance(source, str) and source.startswith("registry+")):
+              bad_sources.append((name, version, source))
+
+            if release_type == "production" and "-" in version:
+              bad_prerelease.append((name, version))
+
+          if bad_sources:
+            print("ERROR: Non-crates.io sources detected for feagi-* dependencies:")
+            for name, version, source in bad_sources:
+              print(f"  - {name} {version}: source={source!r}")
+            sys.exit(1)
+
+          if bad_prerelease:
+            print("ERROR: Production builds forbid pre-release FEAGI deps (SemVer pre-release contains '-'). Found:")
+            for name, version in bad_prerelease:
+              print(f"  - {name} {version}")
+            sys.exit(1)
+
+          print("OK: feagi-* deps resolve from crates.io registry")
+          if release_type == "production":
+            print("OK: production has no pre-release feagi-* versions")
+          PY
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -249,7 +237,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: linux-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: linux-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             linux-x86_64-cargo-deps-
       
@@ -273,7 +261,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: linux-x86_64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: linux-x86_64-sccache-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             linux-x86_64-sccache-
       
@@ -311,60 +299,61 @@ jobs:
         with:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
-      
-      - name: Checkout feagi-core (dependency repo)
-        uses: actions/checkout@v4
-        with:
-          repository: feagi/feagi-core
-          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
-          path: feagi-core
-          fetch-depth: 0
-      
-      - name: Update Cargo.toml paths for CI
+
+      - name: Disable local path patches (CI must use crates.io)
         shell: bash
         run: |
-          python << 'PYTHON_SCRIPT'
-          import re
+          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
+            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+            rm -f ".cargo/config.toml"
+          fi
+
+      - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
+        run: |
+          cargo metadata --locked --format-version=1 | python << 'PY'
+          import json
+          import os
           import sys
-          import io
-          
-          if sys.platform == 'win32':
-              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-          
-          with open('Cargo.toml', 'r', encoding='utf-8') as f:
-              content = f.read()
-          
-          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
-          
-          with open('Cargo.toml', 'w', encoding='utf-8') as f:
-              f.write(updated)
-          
-          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
-          try:
-              with open(api_cargo_path, 'r', encoding='utf-8') as f:
-                  api_content = f.read()
-              
-              if 'reqwest' in api_content:
-                  if 'features = ["json"]' in api_content:
-                      api_content = api_content.replace(
-                          'reqwest = { version = "0.11", features = ["json"] }',
-                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
-                      )
-                  elif 'reqwest = { version =' in api_content:
-                      api_content = re.sub(
-                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
-                          r'\1, features = ["json", "native-tls-vendored"] }',
-                          api_content
-                      )
-                  
-                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
-                      f.write(api_content)
-                  print("Enabled native-tls-vendored for reqwest in feagi-api")
-          except FileNotFoundError:
-              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
-          
-          print("Updated Cargo.toml paths")
-          PYTHON_SCRIPT
+
+          release_type = os.environ.get("RELEASE_TYPE", "")
+          data = json.load(sys.stdin)
+
+          bad_sources = []
+          bad_prerelease = []
+
+          for pkg in data.get("packages", []):
+            name = str(pkg.get("name", ""))
+            if not name.startswith("feagi-"):
+              continue
+
+            source = pkg.get("source")
+            version = str(pkg.get("version", ""))
+
+            if not (isinstance(source, str) and source.startswith("registry+")):
+              bad_sources.append((name, version, source))
+
+            if release_type == "production" and "-" in version:
+              bad_prerelease.append((name, version))
+
+          if bad_sources:
+            print("ERROR: Non-crates.io sources detected for feagi-* dependencies:")
+            for name, version, source in bad_sources:
+              print(f"  - {name} {version}: source={source!r}")
+            sys.exit(1)
+
+          if bad_prerelease:
+            print("ERROR: Production builds forbid pre-release FEAGI deps (SemVer pre-release contains '-'). Found:")
+            for name, version in bad_prerelease:
+              print(f"  - {name} {version}")
+            sys.exit(1)
+
+          print("OK: feagi-* deps resolve from crates.io registry")
+          if release_type == "production":
+            print("OK: production has no pre-release feagi-* versions")
+          PY
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -391,7 +380,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: linux-aarch64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: linux-aarch64-sccache-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             linux-aarch64-sccache-
       
@@ -421,7 +410,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: linux-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: linux-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             linux-aarch64-cargo-deps-
       
@@ -459,60 +448,61 @@ jobs:
         with:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
-      
-      - name: Checkout feagi-core (dependency repo)
-        uses: actions/checkout@v4
-        with:
-          repository: feagi/feagi-core
-          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
-          path: feagi-core
-          fetch-depth: 0
-      
-      - name: Update Cargo.toml paths for CI
+
+      - name: Disable local path patches (CI must use crates.io)
         shell: bash
         run: |
-          python3 << 'PYTHON_SCRIPT'
-          import re
+          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
+            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+            rm -f ".cargo/config.toml"
+          fi
+
+      - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
+        run: |
+          cargo metadata --locked --format-version=1 | python3 << 'PY'
+          import json
+          import os
           import sys
-          import io
-          
-          if sys.platform == 'win32':
-              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-          
-          with open('Cargo.toml', 'r', encoding='utf-8') as f:
-              content = f.read()
-          
-          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
-          
-          with open('Cargo.toml', 'w', encoding='utf-8') as f:
-              f.write(updated)
-          
-          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
-          try:
-              with open(api_cargo_path, 'r', encoding='utf-8') as f:
-                  api_content = f.read()
-              
-              if 'reqwest' in api_content:
-                  if 'features = ["json"]' in api_content:
-                      api_content = api_content.replace(
-                          'reqwest = { version = "0.11", features = ["json"] }',
-                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
-                      )
-                  elif 'reqwest = { version =' in api_content:
-                      api_content = re.sub(
-                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
-                          r'\1, features = ["json", "native-tls-vendored"] }',
-                          api_content
-                      )
-                  
-                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
-                      f.write(api_content)
-                  print("Enabled native-tls-vendored for reqwest in feagi-api")
-          except FileNotFoundError:
-              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
-          
-          print("Updated Cargo.toml paths")
-          PYTHON_SCRIPT
+
+          release_type = os.environ.get("RELEASE_TYPE", "")
+          data = json.load(sys.stdin)
+
+          bad_sources = []
+          bad_prerelease = []
+
+          for pkg in data.get("packages", []):
+            name = str(pkg.get("name", ""))
+            if not name.startswith("feagi-"):
+              continue
+
+            source = pkg.get("source")
+            version = str(pkg.get("version", ""))
+
+            if not (isinstance(source, str) and source.startswith("registry+")):
+              bad_sources.append((name, version, source))
+
+            if release_type == "production" and "-" in version:
+              bad_prerelease.append((name, version))
+
+          if bad_sources:
+            print("ERROR: Non-crates.io sources detected for feagi-* dependencies:")
+            for name, version, source in bad_sources:
+              print(f"  - {name} {version}: source={source!r}")
+            sys.exit(1)
+
+          if bad_prerelease:
+            print("ERROR: Production builds forbid pre-release FEAGI deps (SemVer pre-release contains '-'). Found:")
+            for name, version in bad_prerelease:
+              print(f"  - {name} {version}")
+            sys.exit(1)
+
+          print("OK: feagi-* deps resolve from crates.io registry")
+          if release_type == "production":
+            print("OK: production has no pre-release feagi-* versions")
+          PY
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -549,7 +539,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: darwin-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: darwin-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             darwin-x86_64-cargo-deps-
       
@@ -557,7 +547,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: darwin-x86_64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: darwin-x86_64-sccache-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             darwin-x86_64-sccache-
       
@@ -595,60 +585,61 @@ jobs:
         with:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
-      
-      - name: Checkout feagi-core (dependency repo)
-        uses: actions/checkout@v4
-        with:
-          repository: feagi/feagi-core
-          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
-          path: feagi-core
-          fetch-depth: 0
-      
-      - name: Update Cargo.toml paths for CI
+
+      - name: Disable local path patches (CI must use crates.io)
         shell: bash
         run: |
-          python3 << 'PYTHON_SCRIPT'
-          import re
+          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
+            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+            rm -f ".cargo/config.toml"
+          fi
+
+      - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
+        run: |
+          cargo metadata --locked --format-version=1 | python3 << 'PY'
+          import json
+          import os
           import sys
-          import io
-          
-          if sys.platform == 'win32':
-              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-          
-          with open('Cargo.toml', 'r', encoding='utf-8') as f:
-              content = f.read()
-          
-          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
-          
-          with open('Cargo.toml', 'w', encoding='utf-8') as f:
-              f.write(updated)
-          
-          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
-          try:
-              with open(api_cargo_path, 'r', encoding='utf-8') as f:
-                  api_content = f.read()
-              
-              if 'reqwest' in api_content:
-                  if 'features = ["json"]' in api_content:
-                      api_content = api_content.replace(
-                          'reqwest = { version = "0.11", features = ["json"] }',
-                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
-                      )
-                  elif 'reqwest = { version =' in api_content:
-                      api_content = re.sub(
-                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
-                          r'\1, features = ["json", "native-tls-vendored"] }',
-                          api_content
-                      )
-                  
-                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
-                      f.write(api_content)
-                  print("Enabled native-tls-vendored for reqwest in feagi-api")
-          except FileNotFoundError:
-              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
-          
-          print("Updated Cargo.toml paths")
-          PYTHON_SCRIPT
+
+          release_type = os.environ.get("RELEASE_TYPE", "")
+          data = json.load(sys.stdin)
+
+          bad_sources = []
+          bad_prerelease = []
+
+          for pkg in data.get("packages", []):
+            name = str(pkg.get("name", ""))
+            if not name.startswith("feagi-"):
+              continue
+
+            source = pkg.get("source")
+            version = str(pkg.get("version", ""))
+
+            if not (isinstance(source, str) and source.startswith("registry+")):
+              bad_sources.append((name, version, source))
+
+            if release_type == "production" and "-" in version:
+              bad_prerelease.append((name, version))
+
+          if bad_sources:
+            print("ERROR: Non-crates.io sources detected for feagi-* dependencies:")
+            for name, version, source in bad_sources:
+              print(f"  - {name} {version}: source={source!r}")
+            sys.exit(1)
+
+          if bad_prerelease:
+            print("ERROR: Production builds forbid pre-release FEAGI deps (SemVer pre-release contains '-'). Found:")
+            for name, version in bad_prerelease:
+              print(f"  - {name} {version}")
+            sys.exit(1)
+
+          print("OK: feagi-* deps resolve from crates.io registry")
+          if release_type == "production":
+            print("OK: production has no pre-release feagi-* versions")
+          PY
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -685,7 +676,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: darwin-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: darwin-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             darwin-aarch64-cargo-deps-
       
@@ -693,7 +684,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: darwin-aarch64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: darwin-aarch64-sccache-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             darwin-aarch64-sccache-
       
@@ -731,60 +722,61 @@ jobs:
         with:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
-      
-      - name: Checkout feagi-core (dependency repo)
-        uses: actions/checkout@v4
-        with:
-          repository: feagi/feagi-core
-          ref: ${{ needs.determine-config.outputs.feagi_core_branch }}
-          path: feagi-core
-          fetch-depth: 0
-      
-      - name: Update Cargo.toml paths for CI
+
+      - name: Disable local path patches (CI must use crates.io)
         shell: bash
         run: |
-          python << 'PYTHON_SCRIPT'
-          import re
+          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
+            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+            rm -f ".cargo/config.toml"
+          fi
+
+      - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ needs.determine-config.outputs.release_type }}
+        run: |
+          cargo metadata --locked --format-version=1 | python << 'PY'
+          import json
+          import os
           import sys
-          import io
-          
-          if sys.platform == 'win32':
-              sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-          
-          with open('Cargo.toml', 'r', encoding='utf-8') as f:
-              content = f.read()
-          
-          updated = re.sub(r'\.\./feagi-core', 'feagi-core', content)
-          
-          with open('Cargo.toml', 'w', encoding='utf-8') as f:
-              f.write(updated)
-          
-          api_cargo_path = 'feagi-core/crates/feagi-api/Cargo.toml'
-          try:
-              with open(api_cargo_path, 'r', encoding='utf-8') as f:
-                  api_content = f.read()
-              
-              if 'reqwest' in api_content:
-                  if 'features = ["json"]' in api_content:
-                      api_content = api_content.replace(
-                          'reqwest = { version = "0.11", features = ["json"] }',
-                          'reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }'
-                      )
-                  elif 'reqwest = { version =' in api_content:
-                      api_content = re.sub(
-                          r'(reqwest\s*=\s*\{\s*version\s*=\s*"0\.11")\s*\}',
-                          r'\1, features = ["json", "native-tls-vendored"] }',
-                          api_content
-                      )
-                  
-                  with open(api_cargo_path, 'w', encoding='utf-8') as f:
-                      f.write(api_content)
-                  print("Enabled native-tls-vendored for reqwest in feagi-api")
-          except FileNotFoundError:
-              print(f"Warning: {api_cargo_path} not found, skipping vendored-openssl setup")
-          
-          print("Updated Cargo.toml paths")
-          PYTHON_SCRIPT
+
+          release_type = os.environ.get("RELEASE_TYPE", "")
+          data = json.load(sys.stdin)
+
+          bad_sources = []
+          bad_prerelease = []
+
+          for pkg in data.get("packages", []):
+            name = str(pkg.get("name", ""))
+            if not name.startswith("feagi-"):
+              continue
+
+            source = pkg.get("source")
+            version = str(pkg.get("version", ""))
+
+            if not (isinstance(source, str) and source.startswith("registry+")):
+              bad_sources.append((name, version, source))
+
+            if release_type == "production" and "-" in version:
+              bad_prerelease.append((name, version))
+
+          if bad_sources:
+            print("ERROR: Non-crates.io sources detected for feagi-* dependencies:")
+            for name, version, source in bad_sources:
+              print(f"  - {name} {version}: source={source!r}")
+            sys.exit(1)
+
+          if bad_prerelease:
+            print("ERROR: Production builds forbid pre-release FEAGI deps (SemVer pre-release contains '-'). Found:")
+            for name, version in bad_prerelease:
+              print(f"  - {name} {version}")
+            sys.exit(1)
+
+          print("OK: feagi-* deps resolve from crates.io registry")
+          if release_type == "production":
+            print("OK: production has no pre-release feagi-* versions")
+          PY
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -833,7 +825,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: windows-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: windows-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             windows-x86_64-cargo-deps-
       
@@ -841,7 +833,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: windows-x86_64-sccache-${{ hashFiles('**/Cargo.lock', 'feagi-core/**/Cargo.lock') }}
+          key: windows-x86_64-sccache-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             windows-x86_64-sccache-
       
