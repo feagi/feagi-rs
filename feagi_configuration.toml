@@ -271,9 +271,9 @@ auto_tune_threshold = false  # Automatically adjust threshold based on performan
 # There is NO dynamic growth - these ARE the hard limits.
 # If physical system memory is insufficient, FEAGI will exit with clear error.
 # ============================================================================
-neuron_space = 100000      # Neuron capacity (allocated at startup, fixed limit)
-synapse_space = 500000     # Synapse capacity (allocated at startup, fixed limit)
-memory_neuron_space = 50000 # Memory neuron capacity (separate SoA, allocated at startup, fixed limit)
+neuron_space = 1000000      # Neuron capacity (allocated at startup, fixed limit)
+synapse_space = 5000000     # Synapse capacity (allocated at startup, fixed limit)
+memory_neuron_space = 500000 # Memory neuron capacity (separate SoA, allocated at startup, fixed limit)
 
 # DEPRECATED: buffer_multiplier is no longer used (capacity is fixed at initialization)
 # buffer_multiplier = 1.5

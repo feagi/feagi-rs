@@ -210,12 +210,17 @@ pub async fn start_http_server(
     // Get parameter queue from burst runner
     let parameter_queue = components.burst_runner.read().parameter_queue.clone();
     
-    let genome_service = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
+    // Create GenomeServiceImpl and get reference to current_genome for sharing
+    let genome_service_impl = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
         Arc::clone(&components.connectome_manager),
         parameter_queue,
     ));
+    let current_genome = genome_service_impl.get_current_genome_arc();
+    let genome_service = genome_service_impl;
+    
     let connectome_service = Arc::new(ConnectomeServiceImpl::new(
-        Arc::clone(&components.connectome_manager)
+        Arc::clone(&components.connectome_manager),
+        current_genome.clone(),
     ));
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),
@@ -288,6 +293,10 @@ pub async fn start_http_server(
         system_service: system_service as Arc<dyn feagi_services::traits::SystemService + Send + Sync>,
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
         feagi_session_timestamp,
+        #[cfg(feature = "plasticity")]
+        memory_stats_cache: None, // Will be initialized with plasticity manager in main.rs
+        #[cfg(not(feature = "plasticity"))]
+        memory_stats_cache: None,
     };
 
     // Start HTTP API server

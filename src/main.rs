@@ -58,6 +58,17 @@ struct Args {
     /// Override burst frequency (Hz)
     #[arg(long)]
     burst_hz: Option<u64>,
+
+    /// Override NPU quantization precision (bypasses genome peek).
+    ///
+    /// Supported values:
+    /// - fp32
+    /// - int8
+    ///
+    /// Example:
+    ///   --precision fp32
+    #[arg(long, value_parser = ["fp32", "int8"])]
+    precision: Option<String>,
     
     /// Enable debug logging for specific crates
     /// Example: --debug feagi-api --debug feagi-burst-engine
@@ -71,12 +82,64 @@ struct Args {
     debug_all: bool,
     
     // Note: --debug-{crate-name} flags are parsed automatically via parse_debug_flags()
+
+    /// Enable NPU trace logging (synapse + dynamics) via a single switch.
+    /// This enables the `feagi-npu-trace` tracing target at DEBUG level and turns on the
+    /// internal NPU trace emitters (power excluded).
+    ///
+    /// Optional filters:
+    /// - --npu-trace-src <NEURON_ID>
+    /// - --npu-trace-dst <NEURON_ID>
+    /// - --npu-trace-neuron <NEURON_ID>
+    #[arg(long)]
+    npu_trace: bool,
+
+    /// Enable only synapse contribution traces (power excluded).
+    #[arg(long)]
+    npu_trace_synapse: bool,
+
+    /// Enable only neural dynamics traces (power excluded).
+    #[arg(long)]
+    npu_trace_dynamics: bool,
+
+    /// Filter synapse traces to a single source neuron id.
+    #[arg(long)]
+    npu_trace_src: Option<u32>,
+
+    /// Filter synapse traces to a single destination neuron id.
+    #[arg(long)]
+    npu_trace_dst: Option<u32>,
+
+    /// Filter dynamics traces to a single neuron id.
+    #[arg(long)]
+    npu_trace_neuron: Option<u32>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
+
+    // Configure NPU tracing BEFORE logging initialization (trace config is cached via OnceLock)
+    let enable_any_trace = args.npu_trace || args.npu_trace_synapse || args.npu_trace_dynamics;
+    if enable_any_trace {
+        // Gate emitters
+        if args.npu_trace || args.npu_trace_synapse {
+            std::env::set_var("FEAGI_NPU_TRACE_SYNAPSE", "1");
+        }
+        if args.npu_trace || args.npu_trace_dynamics {
+            std::env::set_var("FEAGI_NPU_TRACE_DYNAMICS", "1");
+        }
+        if let Some(src) = args.npu_trace_src {
+            std::env::set_var("FEAGI_NPU_TRACE_SRC", src.to_string());
+        }
+        if let Some(dst) = args.npu_trace_dst {
+            std::env::set_var("FEAGI_NPU_TRACE_DST", dst.to_string());
+        }
+        if let Some(n) = args.npu_trace_neuron {
+            std::env::set_var("FEAGI_NPU_TRACE_NEURON", n.to_string());
+        }
+    }
 
     // Initialize observability with per-crate debug flags
     // This automatically parses --debug-{crate-name} flags from command line
@@ -102,6 +165,14 @@ async fn main() -> Result<()> {
         }
     }
     
+    // If NPU tracing was requested, ensure the trace target is visible.
+    // Note: this is a tracing target name, but EnvFilter can match it the same way as a crate/module path.
+    if enable_any_trace {
+        debug_flags
+            .enabled_crates
+            .insert("feagi-npu-trace".to_string(), true);
+    }
+
     // Initialize logging with file output
     let _log_guard = init_logging_default(&debug_flags)
         .context("Failed to initialize logging")?;
@@ -147,17 +218,31 @@ struct FeagiComponents {
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
     pns: Arc<IOSystem>,
+    #[cfg(feature = "plasticity")]
+    plasticity_executor: Option<Arc<std::sync::Mutex<feagi_npu_plasticity::AsyncPlasticityExecutor>>>,
+    #[cfg(feature = "plasticity")]
+    memory_stats_cache: Option<feagi_npu_plasticity::MemoryStatsCache>,
+    #[cfg(not(feature = "plasticity"))]
+    plasticity_executor: Option<()>,
+    #[cfg(not(feature = "plasticity"))]
+    memory_stats_cache: Option<()>,
 }
 
 /// Initialize all core FEAGI components
 async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
-    // Peek at genome to determine quantization precision (if genome provided)
-    let precision = if let Some(genome_path) = &args.genome {
+    // Determine quantization precision:
+    // - If CLI override is present, use it.
+    // - Else, peek genome if provided.
+    // - Else, use int8 (existing behavior).
+    let precision = if let Some(p) = &args.precision {
+        info!("  Precision override from CLI: {}", p);
+        p.clone()
+    } else if let Some(genome_path) = &args.genome {
         match feagi_evolutionary::peek_quantization_precision(genome_path) {
             Ok(p) => {
                 info!("  Genome specifies quantization precision: {}", p);
                 p
-            },
+            }
             Err(e) => {
                 warn!("  Failed to peek genome precision ({}), defaulting to int8", e);
                 "int8".to_string()
@@ -332,6 +417,63 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
     info!("    ✓ Runtime service created");
 
+    // Initialize plasticity executor (if plasticity feature enabled)
+    #[cfg(feature = "plasticity")]
+    let (plasticity_executor, memory_stats_cache) = {
+        use feagi_npu_plasticity::{create_memory_stats_cache, PlasticityConfig, AsyncPlasticityExecutor, PlasticityExecutor};
+        use std::sync::Mutex;
+
+        info!("╔═══════════════════════════════════════════════════════════════╗");
+        info!("║  PLASTICITY SUBSYSTEM INITIALIZATION                          ║");
+        info!("╚═══════════════════════════════════════════════════════════════╝");
+        info!("  📊 Creating memory stats cache...");
+        let cache = create_memory_stats_cache();
+        let config = PlasticityConfig::default();
+        
+        info!("  🧠 Creating AsyncPlasticityExecutor with NPU reference...");
+        // Create executor with NPU reference (for querying CPU-resident FireLedger)
+        let executor = Arc::new(Mutex::new(
+            AsyncPlasticityExecutor::new(config, cache.clone(), Arc::clone(&npu))
+        ));
+        
+        info!("  🚀 Starting PlasticityService background thread...");
+        // Start the plasticity service thread
+        {
+            let mut exec = executor.lock().unwrap();
+            PlasticityExecutor::start(&mut *exec);
+        }
+        
+        info!("  🔗 Wiring PlasticityExecutor into ConnectomeManager...");
+        // Wire plasticity executor into ConnectomeManager for automatic memory area registration
+        ConnectomeManager::instance().write().set_plasticity_executor(Arc::clone(&executor));
+        
+        info!("  🔗 Wiring PlasticityExecutor into BurstLoopRunner...");
+        // Wire plasticity executor notification callback into BurstLoopRunner
+        // This avoids circular dependency: burst-engine depends on plasticity types,
+        // but feagi-rs can safely depend on both and wire them via callback
+        let executor_for_callback = Arc::clone(&executor);
+        burst_runner.write().set_plasticity_notify_callback(move |timestep: u64| {
+            if let Ok(exec) = executor_for_callback.lock() {
+                use feagi_npu_plasticity::PlasticityExecutor;
+                exec.notify_burst(timestep);
+            }
+        });
+        
+        info!("╔═══════════════════════════════════════════════════════════════╗");
+        info!("║  ✅ PLASTICITY SUBSYSTEM READY                                ║");
+        info!("║     • Memory neuron pattern detection: ENABLED                ║");
+        info!("║     • STDP synaptic plasticity: ENABLED                       ║");
+        info!("║     • Background processing thread: ACTIVE                    ║");
+        info!("╚═══════════════════════════════════════════════════════════════╝");
+        (Some(executor), Some(cache))
+    };
+
+    #[cfg(not(feature = "plasticity"))]
+    let (plasticity_executor, memory_stats_cache): (Option<()>, Option<()>) = {
+        info!("  ℹ️  Plasticity feature disabled (compiled without --features plasticity)");
+        (None, None)
+    };
+
     // Wire up bidirectional connections between PNS and BurstLoopRunner
     info!("  Wiring PNS ↔ BurstLoopRunner connections...");
     
@@ -356,6 +498,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         runtime_service,
         burst_runner,
         pns,
+        plasticity_executor,
+        memory_stats_cache,
     })
 }
 
@@ -424,10 +568,13 @@ async fn start_services(
     // Get parameter queue from burst runner for async parameter updates
     let parameter_queue = components.burst_runner.read().parameter_queue.clone();
     
-    let genome_service = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
+    // Create GenomeServiceImpl and get reference to current_genome for sharing with ConnectomeService
+    let genome_service_impl = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
         Arc::clone(&components.connectome_manager),
         parameter_queue,
     ));
+    let current_genome = genome_service_impl.get_current_genome_arc();
+    let genome_service = genome_service_impl;
     info!("    ✓ Genome service created (with RuntimeGenome storage)");
     
     // Load genome BEFORE starting other services (so RuntimeGenome is stored)
@@ -438,6 +585,9 @@ async fn start_services(
             Ok(Some(genome_timestep)) => {
                 info!("    ✓ Genome loaded via GenomeService (RuntimeGenome stored)");
                 info!("    ✓ Dynamic stream evaluation triggered");
+                
+                // TODO: Register memory areas with plasticity executor
+                // This will be implemented once genome access is simplified
                 
                 // Update burst frequency to match genome's simulation_timestep
                 let new_freq = 1.0 / genome_timestep;
@@ -462,9 +612,10 @@ async fn start_services(
         info!("    ⚠️  Data streams will not start until genome is loaded");
     }
     
-    // Now create remaining services
+    // Now create remaining services (share current_genome with ConnectomeService for mapping persistence)
     let connectome_service = Arc::new(ConnectomeServiceImpl::new(
-        Arc::clone(&components.connectome_manager)
+        Arc::clone(&components.connectome_manager),
+        current_genome.clone(),
     ));
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),
@@ -544,6 +695,7 @@ async fn start_services(
         system_service: system_service as Arc<dyn feagi_services::traits::SystemService + Send + Sync>,
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
         feagi_session_timestamp,
+        memory_stats_cache: components.memory_stats_cache.clone(),
     };
 
     // Start PNS control streams FIRST (this wires the dynamic gating callbacks)
@@ -586,6 +738,115 @@ async fn start_services(
     components.runtime_service.start().await
         .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
     info!("    ✓ Burst engine running");
+
+    // Start plasticity executor and command processing loop (if enabled)
+    #[cfg(feature = "plasticity")]
+    if let Some(ref plasticity_exec) = components.plasticity_executor {
+        use feagi_npu_plasticity::PlasticityExecutor;
+        
+        info!("  Starting plasticity executor...");
+        plasticity_exec.lock().unwrap().start();
+        info!("    ✓ Plasticity executor running");
+        
+        // Spawn plasticity command processing loop
+        // This loop reads commands from the PlasticityService and executes them on the NPU
+        let npu_for_plasticity = Arc::clone(&components.npu);
+        let plasticity_for_loop = Arc::clone(plasticity_exec);
+        let burst_runner_for_plasticity = Arc::clone(&components.burst_runner);
+        
+        std::thread::Builder::new()
+            .name("feagi-plasticity-cmd-processor".to_string())
+            .spawn(move || {
+                use feagi_npu_plasticity::{PlasticityCommand, PlasticityExecutor};
+                use tracing::{debug, info, warn};
+                
+                info!("[PLASTICITY-CMD] Command processor thread started");
+                
+                // BurstLoopRunner already notifies plasticity exactly once per completed burst
+                // via `set_plasticity_notify_callback()`. This thread must NOT call `notify_burst()`
+                // again, otherwise neurons get aged/pruned multiple times per burst and indices
+                // get rapidly reused (appearing as "memory count barely increases").
+                let mut last_seen_burst: u64 = 0;
+
+                loop {
+                    // Wait for burst to complete (check every 10ms)
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    
+                    // Track burst progress (draining can happen multiple times per burst; notify must not)
+                    let current_burst = burst_runner_for_plasticity.read().get_burst_count();
+                    if current_burst != last_seen_burst {
+                        last_seen_burst = current_burst;
+                    }
+                    
+                    // Drain and process commands
+                    let commands = plasticity_for_loop.lock().unwrap().drain_commands();
+                    
+                    if !commands.is_empty() {
+                        debug!("[PLASTICITY-CMD] 🎯 Processing {} commands", commands.len());
+                        let mut npu_lock = npu_for_plasticity.lock().unwrap();
+                        
+                        for cmd in commands {
+                            match cmd {
+                                PlasticityCommand::RegisterMemoryNeuron {
+                                    neuron_id,
+                                    area_idx: _,
+                                    threshold: _,
+                                    membrane_potential: _,
+                                } => {
+                                    debug!("[PLASTICITY-CMD] 📝 Registering memory neuron: neuron_id={}", neuron_id);
+                                    // Memory neurons are already created by the plasticity service
+                                    // This command serves as a notification
+                                }
+                                PlasticityCommand::InjectMemoryNeuronToFCL {
+                                    neuron_id,
+                                    area_idx,
+                                    membrane_potential,
+                                    pattern_hash,
+                                    is_reactivation: _,
+                                } => {
+                                    debug!("[PLASTICITY-CMD] 💉 Injecting memory neuron to FCL: neuron_id={}, area_idx={}, potential={}, pattern_hash={}", neuron_id, area_idx, membrane_potential, pattern_hash);
+
+                                    // Get cortical ID from ConnectomeManager (required for propagation engine mapping).
+                                    let cortical_id_opt = {
+                                        let instance = ConnectomeManager::instance();
+                                        let cm = instance.read();
+                                        cm.get_cortical_id(area_idx).cloned()
+                                    };
+                                    
+                                    if let Some(cortical_id) = cortical_id_opt {
+                                        // Register mapping so synaptic propagation can resolve the cortical area for this ID.
+                                        npu_lock.register_dynamic_neuron_mapping(neuron_id, cortical_id);
+
+                                        // Stage injection to next burst’s FCL using the *actual* memory neuron ID.
+                                        npu_lock.inject_memory_neuron_to_fcl(neuron_id, area_idx, membrane_potential);
+
+                                        debug!(
+                                            "[PLASTICITY-CMD] ✅ Memory neuron staged to FCL (id={}, area_idx={}, pattern={}, will fire next burst)",
+                                            neuron_id, area_idx, pattern_hash
+                                        );
+                                    } else {
+                                        warn!("[PLASTICITY-CMD] ⚠️ Could not find cortical ID for area_idx={}", area_idx);
+                                    }
+                                }
+                                PlasticityCommand::UpdateWeightsDelta {
+                                    synapse_indices: _,
+                                    deltas: _,
+                                } => {
+                                    // TODO: Implement STDP weight updates
+                                    warn!("[PLASTICITY-CMD] STDP weight updates not yet implemented");
+                                }
+                                PlasticityCommand::UpdateStateCounters { .. } => {
+                                    // Stats tracking only, no NPU action needed
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("Failed to spawn plasticity command processor thread");
+        
+        info!("    ✓ Plasticity command processor running");
+    }
 
     // Connect NPU to sensory stream for data injection
     info!("  Connecting NPU to PNS sensory stream...");

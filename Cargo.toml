@@ -116,8 +116,9 @@ name = "profile_storage"
 path = "tests/profile_storage.rs"
 
 [features]
-default = ["cli"]
+default = ["cli", "plasticity"]
 gpu = ["feagi-npu-burst-engine/gpu"]
+plasticity = []  # Neuroplasticity and STDP support (handled at feagi-rs level)
 cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
 embedded = []                    # For library usage (no CLI)
 no-network = ["embedded"]        # Embedded + disable network servers (future use)
