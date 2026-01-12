@@ -223,6 +223,7 @@ pattern_duration = 10          # Duration of temporal patterns to detect
 min_activation_count = 3       # Minimum activations required to form memory
 default_temporal_depth = 3     # Default temporal depth (per-area can override)
 pattern_cache_size = 10000     # Maximum patterns to cache for performance
+array_capacity = 50000         # Maximum number of memory neurons that can be stored (memory array capacity)
 initial_lifespan = 20          # Initial lifespan for new memory neurons (bursts)
 lifespan_growth_rate = 3.0     # Additive lifespan increment on reactivation
 longterm_threshold = 100       # Lifespan threshold for long-term memory conversion
@@ -271,8 +272,8 @@ auto_tune_threshold = false  # Automatically adjust threshold based on performan
 # There is NO dynamic growth - these ARE the hard limits.
 # If physical system memory is insufficient, FEAGI will exit with clear error.
 # ============================================================================
-neuron_space = 1000000      # Neuron capacity (allocated at startup, fixed limit)
-synapse_space = 5000000     # Synapse capacity (allocated at startup, fixed limit)
+neuron_space = 10000000      # Neuron capacity (allocated at startup, fixed limit)
+synapse_space = 25000000     # Synapse capacity (allocated at startup, fixed limit)
 memory_neuron_space = 500000 # Memory neuron capacity (separate SoA, allocated at startup, fixed limit)
 
 # DEPRECATED: buffer_multiplier is no longer used (capacity is fixed at initialization)

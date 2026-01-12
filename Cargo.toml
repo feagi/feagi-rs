@@ -34,7 +34,7 @@ feagi-npu-burst-engine = { version = "0.0.1-beta.1" }
 feagi-brain-development = { version = "0.0.1-beta.1" }
 feagi-evolutionary = { version = "0.0.1-beta.1" }
 feagi-services = { version = "0.0.1-beta.1" }
-feagi-api = { version = "0.0.1-beta.1" }
+feagi-api = { version = "0.0.1-beta.1", features = ["services"] }
 feagi-io = { version = "0.0.1-beta.1", features = ["websocket-transport"] }
 feagi-state-manager = { version = "0.0.1-beta.1" }
 feagi-npu-plasticity = { version = "0.0.1-beta.1" }
@@ -118,7 +118,7 @@ path = "tests/profile_storage.rs"
 [features]
 default = ["cli", "plasticity"]
 gpu = ["feagi-npu-burst-engine/gpu"]
-plasticity = []  # Neuroplasticity and STDP support (handled at feagi-rs level)
+plasticity = ["feagi-services/plasticity"]  # Neuroplasticity and STDP support (wires service-layer runtime updates)
 cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
 embedded = []                    # For library usage (no CLI)
 no-network = ["embedded"]        # Embedded + disable network servers (future use)

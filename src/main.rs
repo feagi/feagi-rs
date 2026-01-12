@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_brain_development::ConnectomeManager;
-use feagi_npu_burst_engine::BurstLoopRunner;
+use feagi_npu_burst_engine::{BurstLoopRunner, TracingMutex};
 use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
 /// Core FEAGI components
 struct FeagiComponents {
     #[allow(dead_code)]  // In development - will be exposed via additional services
-    npu: Arc<Mutex<feagi_npu_burst_engine::DynamicNPU>>,
+    npu: Arc<feagi_npu_burst_engine::TracingMutex<feagi_npu_burst_engine::DynamicNPU>>,
     connectome_manager: Arc<RwLock<ConnectomeManager>>,
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
@@ -271,7 +271,9 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let runtime = StdRuntime;
     let backend = CPUBackend::new();
     
-    let npu = Arc::new(Mutex::new(match precision.as_str() {
+    // Wrap NPU in TracingMutex (or Mutex if tracing disabled) to automatically log all lock acquisitions
+    // When npu-lock-tracing feature is disabled, TracingMutex is a type alias for std::sync::Mutex (zero overhead)
+    let npu = Arc::new(TracingMutex::new(match precision.as_str() {
         "fp32" | "f32" => {
             info!("    Creating FP32 NPU (32-bit floating point, highest precision)");
             feagi_npu_burst_engine::DynamicNPU::F32(feagi_npu_burst_engine::RustNPU::new(
@@ -302,7 +304,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 10, // fire_ledger_window
             )?)
         }
-    }));
+    }, "NPU"));
     
     info!("    ✓ NPU initialized with {} precision (capacity: {} neurons, {} synapses)",
           match &*npu.lock().unwrap() {
@@ -569,10 +571,13 @@ async fn start_services(
     let parameter_queue = components.burst_runner.read().parameter_queue.clone();
     
     // Create GenomeServiceImpl and get reference to current_genome for sharing with ConnectomeService
-    let genome_service_impl = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
+    let mut genome_service_impl = GenomeServiceImpl::new_with_parameter_queue(
         Arc::clone(&components.connectome_manager),
         parameter_queue,
-    ));
+    );
+    // Wire burst runner for cache refresh
+    genome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
+    let genome_service_impl = Arc::new(genome_service_impl);
     let current_genome = genome_service_impl.get_current_genome_arc();
     let genome_service = genome_service_impl;
     info!("    ✓ Genome service created (with RuntimeGenome storage)");
@@ -602,9 +607,8 @@ async fn start_services(
             }
             Err(e) => {
                 error!("    ✗ Failed to load genome: {}", e);
-                error!("    ✗ FEAGI will continue without genome (no data streams will start)");
-                error!("    ✗ You can load a genome later via the REST API");
-                // Don't fail startup - allow FEAGI to run without genome
+                error!("    ✗ --genome was provided, so FEAGI will exit");
+                return Err(e);
             }
         }
     } else {
@@ -613,10 +617,13 @@ async fn start_services(
     }
     
     // Now create remaining services (share current_genome with ConnectomeService for mapping persistence)
-    let connectome_service = Arc::new(ConnectomeServiceImpl::new(
+    let mut connectome_service_impl = ConnectomeServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         current_genome.clone(),
-    ));
+    );
+    // Wire burst runner for cache refresh
+    connectome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
+    let connectome_service = Arc::new(connectome_service_impl);
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         Some(Arc::clone(&components.burst_runner)),
@@ -696,6 +703,7 @@ async fn start_services(
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
         feagi_session_timestamp,
         memory_stats_cache: components.memory_stats_cache.clone(),
+        agent_connectors: ApiState::init_agent_connectors(),
     };
 
     // Start PNS control streams FIRST (this wires the dynamic gating callbacks)
