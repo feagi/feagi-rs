@@ -305,6 +305,12 @@ backup_count = 5
 # Visualization settings
 enabled = true
 update_interval = 50  # milliseconds between updates
+# Visualization transport policy (authoritative).
+#
+# - "auto": honor agent request (chosen_transport / shm_path)
+# - "websocket": disable SHM path allocation/advertising for visualization (forces WS path)
+# - "shm": enable SHM path allocation/advertising for visualization (BV should request hybrid/shm)
+transport = "auto"
 
 [compression]
 # Data compression settings for all transport streams (ZMQ, WebSocket)

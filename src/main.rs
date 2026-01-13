@@ -59,6 +59,15 @@ struct Args {
     #[arg(long)]
     burst_hz: Option<u64>,
 
+    /// Override visualization transport policy (authoritative, overrides TOML).
+    ///
+    /// Allowed values:
+    /// - auto: honor agent request (chosen_transport / shm_path)
+    /// - websocket: disable SHM path allocation/advertising for visualization
+    /// - shm: enable SHM path allocation/advertising for visualization
+    #[arg(long, value_parser = ["auto", "websocket", "shm"])]
+    viz_transport: Option<String>,
+
     /// Override NPU quantization precision (bypasses genome peek).
     ///
     /// Supported values:
@@ -190,8 +199,18 @@ async fn main() -> Result<()> {
 
     // Load configuration (REQUIRED - no hardcoded fallbacks)
     info!("Loading FEAGI configuration...");
-    let config = load_config(args.config.as_deref(), None)
+    let mut config = load_config(args.config.as_deref(), None)
         .context("Failed to load configuration. Ensure feagi_configuration.toml exists.")?;
+
+    // Apply CLI overrides that must be validated as part of configuration correctness.
+    if let Some(ref policy) = args.viz_transport {
+        config.visualization.transport = policy.clone();
+        info!(
+            "Applied CLI override: visualization.transport = '{}'",
+            config.visualization.transport
+        );
+    }
+
     validate_config(&config)
         .context("Configuration validation failed")?;
     
@@ -582,40 +601,6 @@ async fn start_services(
     let genome_service = genome_service_impl;
     info!("    ✓ Genome service created (with RuntimeGenome storage)");
     
-    // Load genome BEFORE starting other services (so RuntimeGenome is stored)
-    // This must happen after burst engine is started but before API server
-    if let Some(genome_path) = &args.genome {
-        info!("  Loading genome from: {}", genome_path.display());
-        match load_genome_with_pns(&genome_service, &components.pns, genome_path).await {
-            Ok(Some(genome_timestep)) => {
-                info!("    ✓ Genome loaded via GenomeService (RuntimeGenome stored)");
-                info!("    ✓ Dynamic stream evaluation triggered");
-                
-                // TODO: Register memory areas with plasticity executor
-                // This will be implemented once genome access is simplified
-                
-                // Update burst frequency to match genome's simulation_timestep
-                let new_freq = 1.0 / genome_timestep;
-                info!("    ✓ Updating burst frequency from genome: {}Hz ({}s timestep)", 
-                      new_freq, genome_timestep);
-                components.burst_runner.write().set_frequency(new_freq);
-                info!("    ✓ Burst frequency updated successfully");
-            }
-            Ok(None) => {
-                info!("    ✓ Genome loaded (using config burst frequency)");
-                info!("    ✓ Dynamic stream evaluation triggered");
-            }
-            Err(e) => {
-                error!("    ✗ Failed to load genome: {}", e);
-                error!("    ✗ --genome was provided, so FEAGI will exit");
-                return Err(e);
-            }
-        }
-    } else {
-        info!("  No genome specified, starting with empty connectome");
-        info!("    ⚠️  Data streams will not start until genome is loaded");
-    }
-    
     // Now create remaining services (share current_genome with ConnectomeService for mapping persistence)
     let mut connectome_service_impl = ConnectomeServiceImpl::new(
         Arc::clone(&components.connectome_manager),
@@ -653,6 +638,24 @@ async fn start_services(
         handler.set_genome_service(Arc::clone(&genome_service) as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>);
         handler.set_connectome_service(Arc::clone(&connectome_service) as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>);
         handler.set_auto_create_missing_areas(config.agent.auto_create_missing_cortical_areas);
+        // Visualization transport is driven by feagi_configuration.toml (authoritative).
+        // This controls whether FEAGI allocates/advertises SHM visualization paths during registration.
+        {
+            use feagi_io::core::registration::VisualizationShmPolicy;
+            let policy = match config.visualization.transport.as_str() {
+                "auto" => VisualizationShmPolicy::Auto,
+                "websocket" => VisualizationShmPolicy::ForceWebSocket,
+                "shm" => VisualizationShmPolicy::ForceShm,
+                other => {
+                    // Validation should have rejected this already, but keep behavior deterministic.
+                    return Err(anyhow::anyhow!(
+                        "Invalid config value visualization.transport='{}' (expected auto/websocket/shm)",
+                        other
+                    ));
+                }
+            };
+            handler.set_visualization_shm_policy(policy);
+        }
     }
     info!("    ✓ RegistrationHandler services wired (GenomeService, ConnectomeService, auto-create: {})", config.agent.auto_create_missing_cortical_areas);
     
@@ -694,7 +697,7 @@ async fn start_services(
     
     let api_state = ApiState {
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
-        genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
+        genome_service: genome_service.clone() as Arc<dyn GenomeService + Send + Sync>,
         connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
         runtime_service: components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
@@ -741,9 +744,64 @@ async fn start_services(
             .expect("API server error");
     });
 
-    // Start burst engine via service layer
+    // IMPORTANT:
+    // Do NOT start the burst engine before genome load completes.
+    //
+    // Rationale:
+    // - Genome load performs neuroembryogenesis/synaptogenesis and mutates ConnectomeManager + NPU.
+    // - Running bursts concurrently with connectome mutation is a correctness and determinism risk.
+    //
+    // The burst engine, plasticity executor, and NPU↔sensory wiring are started AFTER genome load below.
+
+    // Load genome AFTER the HTTP API is online.
+    //
+    // Rationale:
+    // - NIFTI-scale genomes can take a long time to load (neuroembryogenesis/synaptogenesis).
+    // - BV's startup health probe requires the API server to be listening.
+    // - Starting the API first improves observability and avoids "API never came online" false negatives.
+    //
+    // Determinism:
+    // - If --genome is provided and loading fails, FEAGI exits (same behavior as before).
+    if let Some(genome_path) = &args.genome {
+        info!("  Loading genome from: {} (API is already online)", genome_path.display());
+        match load_genome_with_pns(&genome_service, &components.pns, genome_path).await {
+            Ok(Some(genome_timestep)) => {
+                info!("    ✓ Genome loaded via GenomeService (RuntimeGenome stored)");
+                info!("    ✓ Dynamic stream evaluation triggered");
+
+                // Update burst frequency to match genome's simulation_timestep
+                let new_freq = 1.0 / genome_timestep;
+                info!(
+                    "    ✓ Updating burst frequency from genome: {}Hz ({}s timestep)",
+                    new_freq, genome_timestep
+                );
+                components.burst_runner.write().set_frequency(new_freq);
+                info!("    ✓ Burst frequency updated successfully");
+            }
+            Ok(None) => {
+                info!("    ✓ Genome loaded (using config burst frequency)");
+                info!("    ✓ Dynamic stream evaluation triggered");
+            }
+            Err(e) => {
+                error!("    ✗ Failed to load genome: {}", e);
+                error!("    ✗ --genome was provided, so FEAGI will exit");
+                // Best-effort graceful shutdown of the API server task before returning.
+                let _ = shutdown_tx_api.send(());
+                let _ = api_handle.await;
+                return Err(e);
+            }
+        }
+    } else {
+        info!("  No genome specified, starting with empty connectome");
+        info!("    ⚠️  Data streams will not start until genome is loaded");
+    }
+
+    // Start burst engine via service layer (safe after genome load / connectome reset completes)
     info!("  Starting burst engine...");
-    components.runtime_service.start().await
+    components
+        .runtime_service
+        .start()
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
     info!("    ✓ Burst engine running");
 
@@ -751,25 +809,25 @@ async fn start_services(
     #[cfg(feature = "plasticity")]
     if let Some(ref plasticity_exec) = components.plasticity_executor {
         use feagi_npu_plasticity::PlasticityExecutor;
-        
+
         info!("  Starting plasticity executor...");
         plasticity_exec.lock().unwrap().start();
         info!("    ✓ Plasticity executor running");
-        
+
         // Spawn plasticity command processing loop
         // This loop reads commands from the PlasticityService and executes them on the NPU
         let npu_for_plasticity = Arc::clone(&components.npu);
         let plasticity_for_loop = Arc::clone(plasticity_exec);
         let burst_runner_for_plasticity = Arc::clone(&components.burst_runner);
-        
+
         std::thread::Builder::new()
             .name("feagi-plasticity-cmd-processor".to_string())
             .spawn(move || {
                 use feagi_npu_plasticity::{PlasticityCommand, PlasticityExecutor};
                 use tracing::{debug, info, warn};
-                
+
                 info!("[PLASTICITY-CMD] Command processor thread started");
-                
+
                 // BurstLoopRunner already notifies plasticity exactly once per completed burst
                 // via `set_plasticity_notify_callback()`. This thread must NOT call `notify_burst()`
                 // again, otherwise neurons get aged/pruned multiple times per burst and indices
@@ -779,20 +837,20 @@ async fn start_services(
                 loop {
                     // Wait for burst to complete (check every 10ms)
                     std::thread::sleep(std::time::Duration::from_millis(10));
-                    
+
                     // Track burst progress (draining can happen multiple times per burst; notify must not)
                     let current_burst = burst_runner_for_plasticity.read().get_burst_count();
                     if current_burst != last_seen_burst {
                         last_seen_burst = current_burst;
                     }
-                    
+
                     // Drain and process commands
                     let commands = plasticity_for_loop.lock().unwrap().drain_commands();
-                    
+
                     if !commands.is_empty() {
                         debug!("[PLASTICITY-CMD] 🎯 Processing {} commands", commands.len());
                         let mut npu_lock = npu_for_plasticity.lock().unwrap();
-                        
+
                         for cmd in commands {
                             match cmd {
                                 PlasticityCommand::RegisterMemoryNeuron {
@@ -801,7 +859,10 @@ async fn start_services(
                                     threshold: _,
                                     membrane_potential: _,
                                 } => {
-                                    debug!("[PLASTICITY-CMD] 📝 Registering memory neuron: neuron_id={}", neuron_id);
+                                    debug!(
+                                        "[PLASTICITY-CMD] 📝 Registering memory neuron: neuron_id={}",
+                                        neuron_id
+                                    );
                                     // Memory neurons are already created by the plasticity service
                                     // This command serves as a notification
                                 }
@@ -812,7 +873,10 @@ async fn start_services(
                                     pattern_hash,
                                     is_reactivation: _,
                                 } => {
-                                    debug!("[PLASTICITY-CMD] 💉 Injecting memory neuron to FCL: neuron_id={}, area_idx={}, potential={}, pattern_hash={}", neuron_id, area_idx, membrane_potential, pattern_hash);
+                                    debug!(
+                                        "[PLASTICITY-CMD] 💉 Injecting memory neuron to FCL: neuron_id={}, area_idx={}, potential={}, pattern_hash={}",
+                                        neuron_id, area_idx, membrane_potential, pattern_hash
+                                    );
 
                                     // Get cortical ID from ConnectomeManager (required for propagation engine mapping).
                                     let cortical_id_opt = {
@@ -820,20 +884,27 @@ async fn start_services(
                                         let cm = instance.read();
                                         cm.get_cortical_id(area_idx).cloned()
                                     };
-                                    
+
                                     if let Some(cortical_id) = cortical_id_opt {
                                         // Register mapping so synaptic propagation can resolve the cortical area for this ID.
                                         npu_lock.register_dynamic_neuron_mapping(neuron_id, cortical_id);
 
                                         // Stage injection to next burst’s FCL using the *actual* memory neuron ID.
-                                        npu_lock.inject_memory_neuron_to_fcl(neuron_id, area_idx, membrane_potential);
+                                        npu_lock.inject_memory_neuron_to_fcl(
+                                            neuron_id,
+                                            area_idx,
+                                            membrane_potential,
+                                        );
 
                                         debug!(
                                             "[PLASTICITY-CMD] ✅ Memory neuron staged to FCL (id={}, area_idx={}, pattern={}, will fire next burst)",
                                             neuron_id, area_idx, pattern_hash
                                         );
                                     } else {
-                                        warn!("[PLASTICITY-CMD] ⚠️ Could not find cortical ID for area_idx={}", area_idx);
+                                        warn!(
+                                            "[PLASTICITY-CMD] ⚠️ Could not find cortical ID for area_idx={}",
+                                            area_idx
+                                        );
                                     }
                                 }
                                 PlasticityCommand::UpdateWeightsDelta {
@@ -852,13 +923,15 @@ async fn start_services(
                 }
             })
             .expect("Failed to spawn plasticity command processor thread");
-        
+
         info!("    ✓ Plasticity command processor running");
     }
 
     // Connect NPU to sensory stream for data injection
     info!("  Connecting NPU to PNS sensory stream...");
-    components.pns.connect_npu_to_sensory_stream(Arc::clone(&components.npu));
+    components
+        .pns
+        .connect_npu_to_sensory_stream(Arc::clone(&components.npu));
     info!("    ✓ NPU connected to sensory stream");
 
     // Data streams start DYNAMICALLY based on:

@@ -195,12 +195,13 @@ pub fn wire_registration_handler_services(
     genome_service: &Arc<dyn feagi_services::traits::GenomeService + Send + Sync>,
     connectome_service: &Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>,
     auto_create_enabled: bool,
-) {
+) -> Result<()> {
     let mut handler = registration_handler.lock();
     handler.set_genome_service(Arc::clone(genome_service) as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>);
     handler.set_connectome_service(Arc::clone(connectome_service) as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>);
     handler.set_auto_create_missing_areas(auto_create_enabled);
     info!("    ✓ RegistrationHandler services wired (GenomeService, ConnectomeService, auto-create: {})", auto_create_enabled);
+    Ok(())
 }
 
 /// Start HTTP API server
@@ -259,7 +260,26 @@ pub async fn start_http_server(
         &(genome_service.clone() as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>),
         &(connectome_service.clone() as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>),
         config.agent.auto_create_missing_cortical_areas,
-    );
+    )?;
+
+    // Visualization transport is driven by feagi_configuration.toml (authoritative).
+    {
+        use feagi_io::core::registration::VisualizationShmPolicy;
+        let policy = match config.visualization.transport.as_str() {
+            "auto" => VisualizationShmPolicy::Auto,
+            "websocket" => VisualizationShmPolicy::ForceWebSocket,
+            "shm" => VisualizationShmPolicy::ForceShm,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "Invalid config value visualization.transport='{}' (expected auto/websocket/shm)",
+                    other
+                ));
+            }
+        };
+        registration_handler
+            .lock()
+            .set_visualization_shm_policy(policy);
+    }
     
     let mut agent_service_impl = AgentServiceImpl::new(
         Arc::clone(&components.connectome_manager),
