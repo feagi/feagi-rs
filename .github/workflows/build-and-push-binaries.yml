@@ -304,11 +304,11 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # Linux aarch64 Build Job (using native ARM64 runner)
+  # Linux aarch64 Build Job (using cross-compilation with vendored OpenSSL)
   # ============================================================================
   build-linux-aarch64:
     needs: determine-config
-    runs-on: ubuntu-24.04-arm64
+    runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch' || inputs.build_linux_aarch64 == true
     steps:
       - name: Checkout feagi-rust (source repo)
@@ -381,8 +381,16 @@ jobs:
             print("OK: production has no pre-release feagi-* versions")
           PY
       
-      - name: Setup Rust
+      - name: Setup Rust with aarch64 target
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      
+      - name: Install cross-compilation toolchain
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -398,47 +406,49 @@ jobs:
       - name: Cache build target directory
         uses: actions/cache@v4
         with:
-          path: target/release
+          path: target/aarch64-unknown-linux-gnu
           key: linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
           restore-keys: |
             linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
             linux-aarch64-target-
       
-      - name: Setup sccache
+      - name: Configure cargo for vendored OpenSSL
         shell: bash
         run: |
-          echo "📦 Installing sccache to speed up Rust builds..."
-          SCCACHE_VERSION="0.12.0"
-          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-aarch64-unknown-linux-musl.tar.gz" | tar xz
-          sudo mv sccache-v${SCCACHE_VERSION}-aarch64-unknown-linux-musl/sccache /usr/local/bin/
-          chmod +x /usr/local/bin/sccache
+          # Create .cargo/config.toml to enable vendored OpenSSL for aarch64 target
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
           
-          # Configure cargo to use sccache
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
-          echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+          [env]
+          OPENSSL_STATIC = "1"
+          OPENSSL_NO_VENDOR = "0"
+          EOF
           
-          echo "✅ sccache installed and configured"
+          # Add openssl-sys with vendored feature as dependency
+          # This modifies Cargo.toml so we can't use --locked
+          echo "" >> Cargo.toml
+          echo "[dependencies.openssl-sys]" >> Cargo.toml
+          echo 'version = "0.9"' >> Cargo.toml
+          echo 'features = ["vendored"]' >> Cargo.toml
       
-      - name: Cache sccache storage
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/sccache
-          key: linux-aarch64-sccache-${{ github.run_id }}
-          restore-keys: |
-            linux-aarch64-sccache-
-      
-      - name: Build FEAGI
+      - name: Build FEAGI with vendored OpenSSL
         shell: bash
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
         run: |
-          BINARY_PATH="target/release/feagi"
+          BINARY_PATH="target/aarch64-unknown-linux-gnu/release/feagi"
           
           if [ -f "$BINARY_PATH" ]; then
             echo "Binary found in cache - using cached version"
             ls -lh "$BINARY_PATH"
           else
-            echo "Building from source..."
-            cargo build --locked --release
+            echo "Building from source with vendored OpenSSL..."
+            # Can't use --locked since we modified Cargo.toml
+            cargo build --release --target aarch64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
       
@@ -446,7 +456,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: feagi-linux-aarch64
-          path: target/release/feagi
+          path: target/aarch64-unknown-linux-gnu/release/feagi
           retention-days: 30
 
   # ============================================================================
