@@ -75,7 +75,7 @@ reload = false      # Can be overridden with $FEAGI_API_RELOAD
 # Port 30001 avoids conflicts with macOS AirPlay (port 5000)
 registration_port = 30001  # ZMQ agent registration endpoint (REQ/REP)
 sensory_port = 5555        # ZMQ sensory data input (PULL socket - agents PUSH sensory data here)
-motor_port = 30005         # ZMQ motor data output (PUB socket - agents SUB to receive motor commands)
+motor_port = 5564          # ZMQ motor data output (PUB socket - agents SUB to receive motor commands)
 host = "127.0.0.1"           # Localhost only - secure by default. Override with FEAGI_AGENT_HOST for network deployments
 
 [ports]
@@ -223,6 +223,7 @@ pattern_duration = 10          # Duration of temporal patterns to detect
 min_activation_count = 3       # Minimum activations required to form memory
 default_temporal_depth = 3     # Default temporal depth (per-area can override)
 pattern_cache_size = 10000     # Maximum patterns to cache for performance
+array_capacity = 50000         # Maximum number of memory neurons that can be stored (memory array capacity)
 initial_lifespan = 20          # Initial lifespan for new memory neurons (bursts)
 lifespan_growth_rate = 3.0     # Additive lifespan increment on reactivation
 longterm_threshold = 100       # Lifespan threshold for long-term memory conversion
@@ -271,9 +272,9 @@ auto_tune_threshold = false  # Automatically adjust threshold based on performan
 # There is NO dynamic growth - these ARE the hard limits.
 # If physical system memory is insufficient, FEAGI will exit with clear error.
 # ============================================================================
-neuron_space = 100000      # Neuron capacity (allocated at startup, fixed limit)
-synapse_space = 500000     # Synapse capacity (allocated at startup, fixed limit)
-memory_neuron_space = 50000 # Memory neuron capacity (separate SoA, allocated at startup, fixed limit)
+neuron_space = 10000000      # Neuron capacity (allocated at startup, fixed limit)
+synapse_space = 25000000     # Synapse capacity (allocated at startup, fixed limit)
+memory_neuron_space = 500000 # Memory neuron capacity (separate SoA, allocated at startup, fixed limit)
 
 # DEPRECATED: buffer_multiplier is no longer used (capacity is fixed at initialization)
 # buffer_multiplier = 1.5
@@ -304,6 +305,12 @@ backup_count = 5
 # Visualization settings
 enabled = true
 update_interval = 50  # milliseconds between updates
+# Visualization transport policy (authoritative).
+#
+# - "auto": honor agent request (chosen_transport / shm_path)
+# - "websocket": disable SHM path allocation/advertising for visualization (forces WS path)
+# - "shm": enable SHM path allocation/advertising for visualization (BV should request hybrid/shm)
+transport = "auto"
 
 [compression]
 # Data compression settings for all transport streams (ZMQ, WebSocket)

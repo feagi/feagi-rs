@@ -10,7 +10,7 @@ use tracing::{info, warn, error};
 
 use feagi_config::FeagiConfig;
 use feagi_brain_development::ConnectomeManager;
-use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU};
+use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU, TracingMutex};
 use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_services::*;
 use feagi_services::traits::agent_service::AgentService;
@@ -22,7 +22,7 @@ use feagi_io::IOSystem;
 /// 
 /// All components are wrapped in Arc/Mutex for thread-safe access.
 pub struct FeagiComponents {
-    pub npu: Arc<Mutex<DynamicNPU>>,
+    pub npu: Arc<feagi_npu_burst_engine::TracingMutex<DynamicNPU>>,
     pub connectome_manager: Arc<RwLock<ConnectomeManager>>,
     pub runtime_service: Arc<RuntimeServiceImpl>,
     pub burst_runner: Arc<RwLock<BurstLoopRunner>>,
@@ -59,9 +59,14 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         10, // fire_ledger_window
     );
     
-    let npu = Arc::new(Mutex::new(DynamicNPU::INT8(
-        npu_result.map_err(|e: FeagiError| anyhow::anyhow!("Failed to create NPU: {}", e))?
-    )));
+    // Wrap NPU in TracingMutex (or Mutex if tracing disabled) to automatically log all lock acquisitions
+    // When npu-lock-tracing feature is disabled, TracingMutex is a type alias for std::sync::Mutex (zero overhead)
+    let npu = Arc::new(TracingMutex::new(
+        DynamicNPU::INT8(
+            npu_result.map_err(|e: FeagiError| anyhow::anyhow!("Failed to create NPU: {}", e))?
+        ),
+        "NPU"
+    ));
     
     info!("    ✓ NPU initialized with INT8 quantization");
 
@@ -190,12 +195,13 @@ pub fn wire_registration_handler_services(
     genome_service: &Arc<dyn feagi_services::traits::GenomeService + Send + Sync>,
     connectome_service: &Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>,
     auto_create_enabled: bool,
-) {
+) -> Result<()> {
     let mut handler = registration_handler.lock();
     handler.set_genome_service(Arc::clone(genome_service) as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>);
     handler.set_connectome_service(Arc::clone(connectome_service) as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>);
     handler.set_auto_create_missing_areas(auto_create_enabled);
     info!("    ✓ RegistrationHandler services wired (GenomeService, ConnectomeService, auto-create: {})", auto_create_enabled);
+    Ok(())
 }
 
 /// Start HTTP API server
@@ -210,13 +216,24 @@ pub async fn start_http_server(
     // Get parameter queue from burst runner
     let parameter_queue = components.burst_runner.read().parameter_queue.clone();
     
-    let genome_service = Arc::new(GenomeServiceImpl::new_with_parameter_queue(
+    // Create GenomeServiceImpl and get reference to current_genome for sharing
+    let mut genome_service_impl = GenomeServiceImpl::new_with_parameter_queue(
         Arc::clone(&components.connectome_manager),
         parameter_queue,
-    ));
-    let connectome_service = Arc::new(ConnectomeServiceImpl::new(
-        Arc::clone(&components.connectome_manager)
-    ));
+    );
+    // Wire burst runner for cache refresh
+    genome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
+    let genome_service_impl = Arc::new(genome_service_impl);
+    let current_genome = genome_service_impl.get_current_genome_arc();
+    let genome_service = genome_service_impl;
+    
+    let mut connectome_service_impl = ConnectomeServiceImpl::new(
+        Arc::clone(&components.connectome_manager),
+        current_genome.clone(),
+    );
+    // Wire burst runner for cache refresh
+    connectome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
+    let connectome_service = Arc::new(connectome_service_impl);
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         Some(Arc::clone(&components.burst_runner)),
@@ -243,7 +260,26 @@ pub async fn start_http_server(
         &(genome_service.clone() as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>),
         &(connectome_service.clone() as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>),
         config.agent.auto_create_missing_cortical_areas,
-    );
+    )?;
+
+    // Visualization transport is driven by feagi_configuration.toml (authoritative).
+    {
+        use feagi_io::core::registration::VisualizationShmPolicy;
+        let policy = match config.visualization.transport.as_str() {
+            "auto" => VisualizationShmPolicy::Auto,
+            "websocket" => VisualizationShmPolicy::ForceWebSocket,
+            "shm" => VisualizationShmPolicy::ForceShm,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "Invalid config value visualization.transport='{}' (expected auto/websocket/shm)",
+                    other
+                ));
+            }
+        };
+        registration_handler
+            .lock()
+            .set_visualization_shm_policy(policy);
+    }
     
     let mut agent_service_impl = AgentServiceImpl::new(
         Arc::clone(&components.connectome_manager),
@@ -288,6 +324,12 @@ pub async fn start_http_server(
         system_service: system_service as Arc<dyn feagi_services::traits::SystemService + Send + Sync>,
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
         feagi_session_timestamp,
+        #[cfg(feature = "plasticity")]
+        memory_stats_cache: None, // Will be initialized with plasticity manager in main.rs
+        #[cfg(not(feature = "plasticity"))]
+        memory_stats_cache: None,
+        amalgamation_state: ApiState::init_amalgamation_state(),
+        agent_connectors: ApiState::init_agent_connectors(),
     };
 
     // Start HTTP API server
