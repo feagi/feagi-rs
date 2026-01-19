@@ -304,11 +304,11 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # Linux aarch64 Build Job
+  # Linux aarch64 Build Job (using native ARM64 runner)
   # ============================================================================
   build-linux-aarch64:
     needs: determine-config
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm64
     if: github.event_name != 'workflow_dispatch' || inputs.build_linux_aarch64 == true
     steps:
       - name: Checkout feagi-rust (source repo)
@@ -338,7 +338,7 @@ jobs:
             exit 1
           fi
 
-          python << 'PY'
+          python3 << 'PY'
           import json
           import os
           import sys
@@ -383,8 +383,6 @@ jobs:
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
       
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -400,7 +398,7 @@ jobs:
       - name: Cache build target directory
         uses: actions/cache@v4
         with:
-          path: target/aarch64-unknown-linux-gnu
+          path: target/release
           key: linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
           restore-keys: |
             linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
@@ -411,8 +409,8 @@ jobs:
         run: |
           echo "📦 Installing sccache to speed up Rust builds..."
           SCCACHE_VERSION="0.12.0"
-          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
-          sudo mv sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache /usr/local/bin/
+          curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-aarch64-unknown-linux-musl.tar.gz" | tar xz
+          sudo mv sccache-v${SCCACHE_VERSION}-aarch64-unknown-linux-musl/sccache /usr/local/bin/
           chmod +x /usr/local/bin/sccache
           
           # Configure cargo to use sccache
@@ -430,32 +428,17 @@ jobs:
           restore-keys: |
             linux-aarch64-sccache-
       
-      - name: Install cross for aarch64 cross-compilation
+      - name: Build FEAGI
         shell: bash
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-      
-      - name: Create Cross.toml with proper image
-        shell: bash
-        run: |
-          cat > Cross.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
-          EOF
-      
-      - name: Build FEAGI using cross
-        shell: bash
-        run: |
-          BINARY_PATH="target/aarch64-unknown-linux-gnu/release/feagi"
+          BINARY_PATH="target/release/feagi"
           
           if [ -f "$BINARY_PATH" ]; then
             echo "Binary found in cache - using cached version"
             ls -lh "$BINARY_PATH"
           else
-            echo "Building from source using cross..."
-            # Unset RUSTC_WRAPPER since sccache is not available in the Docker container
-            unset RUSTC_WRAPPER
-            cross build --locked --release --target aarch64-unknown-linux-gnu
+            echo "Building from source..."
+            cargo build --locked --release
             ls -lh "$BINARY_PATH"
           fi
       
@@ -463,7 +446,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: feagi-linux-aarch64
-          path: target/aarch64-unknown-linux-gnu/release/feagi
+          path: target/release/feagi
           retention-days: 30
 
   # ============================================================================
