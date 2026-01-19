@@ -242,13 +242,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
           key: linux-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             linux-x86_64-cargo-deps-
+      
+      - name: Cache build target directory
+        uses: actions/cache@v4
+        with:
+          path: target/x86_64-unknown-linux-gnu
+          key: linux-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          restore-keys: |
+            linux-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
+            linux-x86_64-target-
       
       - name: Setup sccache
         shell: bash
@@ -270,7 +278,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: linux-x86_64-sccache-${{ hashFiles('**/Cargo.lock') }}
+          key: linux-x86_64-sccache-${{ github.run_id }}
           restore-keys: |
             linux-x86_64-sccache-
       
@@ -378,6 +386,26 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
       
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: linux-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            linux-aarch64-cargo-deps-
+      
+      - name: Cache build target directory
+        uses: actions/cache@v4
+        with:
+          path: target/aarch64-unknown-linux-gnu
+          key: linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          restore-keys: |
+            linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
+            linux-aarch64-target-
+      
       - name: Setup sccache
         shell: bash
         run: |
@@ -398,7 +426,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: linux-aarch64-sccache-${{ hashFiles('**/Cargo.lock') }}
+          key: linux-aarch64-sccache-${{ github.run_id }}
           restore-keys: |
             linux-aarch64-sccache-
       
@@ -429,18 +457,6 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-      
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: linux-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            linux-aarch64-cargo-deps-
       
       - name: Build FEAGI
         shell: bash
@@ -546,6 +562,26 @@ jobs:
         with:
           targets: x86_64-apple-darwin
       
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: darwin-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            darwin-x86_64-cargo-deps-
+      
+      - name: Cache build target directory
+        uses: actions/cache@v4
+        with:
+          path: target/x86_64-apple-darwin
+          key: darwin-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          restore-keys: |
+            darwin-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
+            darwin-x86_64-target-
+      
       - name: Setup sccache
         shell: bash
         run: |
@@ -568,23 +604,11 @@ jobs:
           
           echo "✅ sccache installed and configured"
       
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: darwin-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            darwin-x86_64-cargo-deps-
-      
       - name: Cache sccache storage
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: darwin-x86_64-sccache-${{ hashFiles('**/Cargo.lock') }}
+          key: darwin-x86_64-sccache-${{ github.run_id }}
           restore-keys: |
             darwin-x86_64-sccache-
       
@@ -692,6 +716,26 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: darwin-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            darwin-aarch64-cargo-deps-
+      
+      - name: Cache build target directory
+        uses: actions/cache@v4
+        with:
+          path: target/aarch64-apple-darwin
+          key: darwin-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          restore-keys: |
+            darwin-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
+            darwin-aarch64-target-
+      
       - name: Setup sccache
         shell: bash
         run: |
@@ -714,23 +758,11 @@ jobs:
           
           echo "✅ sccache installed and configured"
       
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: darwin-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            darwin-aarch64-cargo-deps-
-      
       - name: Cache sccache storage
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: darwin-aarch64-sccache-${{ hashFiles('**/Cargo.lock') }}
+          key: darwin-aarch64-sccache-${{ github.run_id }}
           restore-keys: |
             darwin-aarch64-sccache-
       
@@ -838,6 +870,26 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: windows-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            windows-x86_64-cargo-deps-
+      
+      - name: Cache build target directory
+        uses: actions/cache@v4
+        with:
+          path: target/x86_64-pc-windows-msvc
+          key: windows-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          restore-keys: |
+            windows-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
+            windows-x86_64-target-
+      
       - name: Setup sccache
         shell: bash
         run: |
@@ -872,23 +924,11 @@ jobs:
           echo "✅ sccache installed and configured"
           echo "   Absolute path: $SCCACHE_ABS"
       
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: windows-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            windows-x86_64-cargo-deps-
-      
       - name: Cache sccache storage
         uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
-          key: windows-x86_64-sccache-${{ hashFiles('**/Cargo.lock') }}
+          key: windows-x86_64-sccache-${{ github.run_id }}
           restore-keys: |
             windows-x86_64-sccache-
       
