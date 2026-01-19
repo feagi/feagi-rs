@@ -435,7 +435,21 @@ jobs:
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
       
-      - name: Build FEAGI using cross
+      - name: Patch Cargo.toml to enable openssl vendored feature
+        shell: bash
+        run: |
+          # Add openssl-sys with vendored feature to force vendored compilation
+          cat >> Cargo.toml << 'EOF'
+          
+          # Temporary patch for cross-compilation: enable vendored OpenSSL
+          [patch.crates-io]
+          openssl-sys = { version = "0.9", features = ["vendored"] }
+          EOF
+          
+          echo "Modified Cargo.toml to enable vendored OpenSSL:"
+          tail -n 5 Cargo.toml
+      
+      - name: Build FEAGI using cross with vendored OpenSSL
         shell: bash
         run: |
           BINARY_PATH="target/aarch64-unknown-linux-gnu/release/feagi"
@@ -444,10 +458,11 @@ jobs:
             echo "Binary found in cache - using cached version"
             ls -lh "$BINARY_PATH"
           else
-            echo "Building from source using cross..."
+            echo "Building from source using cross with vendored OpenSSL..."
             # Unset RUSTC_WRAPPER since sccache is not available in the Docker container
             unset RUSTC_WRAPPER
-            cross build --locked --release --target aarch64-unknown-linux-gnu
+            # Remove --locked flag since we modified Cargo.toml
+            cross build --release --target aarch64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
       
