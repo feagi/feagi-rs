@@ -433,7 +433,10 @@ jobs:
       - name: Setup cross-compilation for Linux aarch64
         shell: bash
         run: |
-          # Add arm64 architecture repositories before enabling arm64
+          # Restrict existing repositories to amd64 only to prevent arm64 404 errors
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          
+          # Add arm64 architecture repositories
           # arm64 packages are on ports.ubuntu.com, not the main archives
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
