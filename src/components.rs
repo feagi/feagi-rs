@@ -328,6 +328,7 @@ pub async fn start_http_server(
         memory_stats_cache: None, // Will be initialized with plasticity manager in main.rs
         #[cfg(not(feature = "plasticity"))]
         memory_stats_cache: None,
+        amalgamation_state: ApiState::init_amalgamation_state(),
         agent_connectors: ApiState::init_agent_connectors(),
     };
 

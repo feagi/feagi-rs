@@ -25,19 +25,19 @@ required-features = ["cli"]
 # - Local development can override these with `feagi-rs/.cargo/config.toml` via `[patch.crates-io]`.
 # - Staging should pin exact beta builds via Cargo.lock + `cargo build --locked`.
 # - Main should pin exact stable builds (no `-beta.*`) via Cargo.lock + `cargo build --locked`.
-feagi-npu-neural = { version = "0.0.1-beta.1" }
-feagi-structures = { version = "0.0.1-beta.1" }
-feagi-npu-runtime = { version = "0.0.1-beta.1", features = ["std"] }
-feagi-config = { version = "0.0.1-beta.1" }
+feagi-npu-neural = { version = "0.0.1-beta.2" }
+feagi-structures = { version = "0.0.1-beta.2" }
+feagi-npu-runtime = { version = "0.0.1-beta.2", features = ["std"] }
+feagi-config = { version = "0.0.1-beta.2" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "0.0.1-beta.1" }
-feagi-brain-development = { version = "0.0.1-beta.1" }
-feagi-evolutionary = { version = "0.0.1-beta.1" }
-feagi-services = { version = "0.0.1-beta.1" }
-feagi-api = { version = "0.0.1-beta.1", features = ["services"] }
-feagi-io = { version = "0.0.1-beta.1", features = ["websocket-transport"] }
-feagi-state-manager = { version = "0.0.1-beta.1" }
-feagi-npu-plasticity = { version = "0.0.1-beta.1" }
+feagi-npu-burst-engine = { version = "0.0.1-beta.2" }
+feagi-brain-development = { version = "0.0.1-beta.2" }
+feagi-evolutionary = { version = "0.0.1-beta.2" }
+feagi-services = { version = "0.0.1-beta.2" }
+feagi-api = { version = "0.0.1-beta.2", features = ["services"] }
+feagi-io = { version = "0.0.1-beta.2", features = ["websocket-transport"] }
+feagi-state-manager = { version = "0.0.1-beta.2" }
+feagi-npu-plasticity = { version = "0.0.1-beta.2" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -47,7 +47,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "0.0.1-beta.1" }
+feagi-observability = { version = "0.0.1-beta.2" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"

@@ -706,6 +706,7 @@ async fn start_services(
         snapshot_service: Some(snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>),
         feagi_session_timestamp,
         memory_stats_cache: components.memory_stats_cache.clone(),
+        amalgamation_state: ApiState::init_amalgamation_state(),
         agent_connectors: ApiState::init_agent_connectors(),
     };
 
