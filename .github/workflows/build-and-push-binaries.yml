@@ -435,17 +435,6 @@ jobs:
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
       
-      - name: Create Cross.toml configuration
-        shell: bash
-        run: |
-          cat > Cross.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
-          
-          [build.env]
-          passthrough = ["RUSTC_WRAPPER", "SCCACHE_DIR"]
-          EOF
-      
       - name: Build FEAGI using cross
         shell: bash
         run: |
@@ -456,6 +445,8 @@ jobs:
             ls -lh "$BINARY_PATH"
           else
             echo "Building from source using cross..."
+            # Unset RUSTC_WRAPPER since sccache is not available in the Docker container
+            unset RUSTC_WRAPPER
             cross build --locked --release --target aarch64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
