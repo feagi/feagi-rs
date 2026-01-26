@@ -726,16 +726,17 @@ async fn start_services(
     
     info!("  API routes registered, binding to {}...", addr);
     
+    // Bind before spawning so we fail fast on port conflicts.
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .with_context(|| format!("Failed to bind API server on {}", addr))?;
+
     // Spawn API server in background with graceful shutdown support
     let (shutdown_tx_api, shutdown_rx_api) = tokio::sync::oneshot::channel::<()>();
     let api_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .expect("Failed to bind API server");
-        
         info!("    ✓ HTTP API server listening on {}", addr);
         info!("    📡 Swagger UI available at http://{}/swagger-ui/", addr);
-        
+
         // Use graceful shutdown - when shutdown_rx_api is triggered, server will stop accepting new connections
         axum::serve(listener, app)
             .with_graceful_shutdown(async {

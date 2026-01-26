@@ -265,7 +265,8 @@ genome = load_genome("warehouse_robot_v2.json")
 
 # Connect to FEAGI (automatic multi-agent coordination)
 agent = feagi_interface.connect(
-    agent_id="robot_042",
+    # agent_id must be a base64 AgentDescriptor (48-byte payload)
+    agent_id="<agent_descriptor_b64>",
     feagi_host="feagi.warehouse.local"
 )
 
