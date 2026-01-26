@@ -22,6 +22,12 @@ The main FEAGI server application that provides a complete neural processing pla
 
 - Rust 1.75+ (2021 edition)
 - ZMQ libraries: `libzmq` (install via package manager)
+ 
+### Windows Prerequisites
+
+- Visual Studio 2022 Build Tools (MSVC toolchain)
+
+On Windows, `libzmq` is built from source automatically (vendored) to keep setup minimal.
 
 ### Build from Source
 
@@ -239,6 +245,17 @@ Error: ZMQ bind failed
 ```
 
 **Solution**: Check that ZMQ ports are available and not blocked by firewall.
+
+### Windows: `LNK1169` or `LNK2005` during linking
+
+`LNK1169` usually means earlier link errors like `LNK2005` (duplicate symbols) or `LNK2019` (missing symbols).
+Common causes on Windows are mixed toolchains or duplicate native libraries.
+
+**Fix checklist:**
+
+- **Use MSVC-only dependencies**: avoid MSYS2/MinGW libs on `PATH` when building `x86_64-pc-windows-msvc`.
+- **Single ZMQ source**: on Windows, we use a vendored `libzmq` build. Remove any system `libzmq` from your link path.
+- **Avoid static CRT unless required**: if `RUSTFLAGS` includes `-C target-feature=+crt-static`, unset it and rebuild.
 
 ## Differences from `feagi-inference-engine`
 
