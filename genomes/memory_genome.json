@@ -829,7 +829,7 @@
         {
           "ltd_multiplier": 1,
           "ltp_multiplier": 1,
-          "morphology_id": "memory",
+          "morphology_id": "episodic_memory",
           "morphology_scalar": [
             1,
             1,
@@ -842,7 +842,7 @@
       ],
       "Y21lbTFfX04=": [
         {
-          "morphology_id": "memory",
+          "morphology_id": "episodic_memory",
           "morphology_scalar": [
             1,
             1,
@@ -891,7 +891,7 @@
     "_____10c-aXN2aQkAAgA=-cx-dstmap-d": {
       "Y21lbTFfX04=": [
         {
-          "morphology_id": "memory",
+          "morphology_id": "episodic_memory",
           "morphology_scalar": [
             1,
             1,
@@ -1870,7 +1870,7 @@
       },
       "type": "patterns"
     },
-    "memory": {
+    "episodic_memory": {
       "class": "core",
       "parameters": {},
       "type": "functions"

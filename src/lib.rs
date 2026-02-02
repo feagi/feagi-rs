@@ -51,6 +51,7 @@ pub use feagi_io::IOSystem;
 
 // Internal modules (reused from main.rs initialization logic)
 pub mod components;
+pub mod plasticity_runtime;
 pub mod version;
 
 pub use components::FeagiComponents;
