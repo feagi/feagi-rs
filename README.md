@@ -206,5 +206,5 @@ Apache-2.0. See [LICENSE](../LICENSE).
 
 Neuraville Inc. <feagi@neuraville.com>
 
-Copyright 2016-2025 Neuraville Inc. All Rights Reserved.
+Copyright 2025-2026 Neuraville Inc. All Rights Reserved.
 
