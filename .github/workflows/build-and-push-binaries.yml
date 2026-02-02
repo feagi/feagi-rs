@@ -1,14 +1,9 @@
 name: Build Binaries and Create PR/Release
 
 on:
-  # Trigger on tags for releases
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v*-beta.*'
-      - 'v*-alpha.*'
+  release:
+    types: [published]
   
-  # Manual trigger
   workflow_dispatch:
     inputs:
       release_type:
@@ -68,16 +63,6 @@ on:
         type: boolean
         default: true
   
-  # Automatic trigger on PR merge to main
-  pull_request:
-    branches:
-      - main
-    types: [closed]
-    paths:
-      - '**/*.rs'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/build-and-push-binaries.yml'
 
 permissions:
   contents: write      # Required to create branches, commit, push, and create releases
@@ -98,7 +83,21 @@ jobs:
         id: config
         run: |
           # Determine release type and version
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"
+            SOURCE_BRANCH="${TAG}"
+            SOURCE_SHA=""
+            if [[ "${TAG}" =~ -alpha\. ]]; then
+              RELEASE_TYPE="alpha"
+            elif [[ "${TAG}" =~ -beta\. ]]; then
+              RELEASE_TYPE="beta"
+            elif [[ "${{ github.event.release.prerelease }}" == "true" ]]; then
+              RELEASE_TYPE="beta"
+            else
+              RELEASE_TYPE="production"
+            fi
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             RELEASE_TYPE="${{ github.event.inputs.release_type }}"
             VERSION="${{ github.event.inputs.version }}"
             # Strip 'v' prefix if present
@@ -106,27 +105,12 @@ jobs:
             SOURCE_BRANCH="${{ github.event.inputs.source_branch }}"
             SOURCE_BRANCH="${SOURCE_BRANCH:-main}"
             SOURCE_SHA="${{ github.event.inputs.source_sha }}"
-            
+          
             # Auto-generate version for dev if not provided
             if [[ "${RELEASE_TYPE}" == "dev" && -z "${VERSION}" ]]; then
               VERSION="dev-$(date +%Y%m%d-%H%M%S)"
               echo "ℹ️ Auto-generated dev version: ${VERSION}"
             fi
-          elif [[ "${{ github.ref }}" =~ refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            RELEASE_TYPE="production"
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            SOURCE_BRANCH="main"
-            SOURCE_SHA=""
-          elif [[ "${{ github.ref }}" =~ refs/tags/.*-beta\. ]]; then
-            RELEASE_TYPE="beta"
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            SOURCE_BRANCH="main"
-            SOURCE_SHA=""
-          elif [[ "${{ github.ref }}" =~ refs/tags/.*-alpha\. ]]; then
-            RELEASE_TYPE="alpha"
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            SOURCE_BRANCH="main"
-            SOURCE_SHA=""
           else
             # PR merge or other trigger - default to dev
             RELEASE_TYPE="dev"

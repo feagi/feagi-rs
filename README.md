@@ -1,293 +1,210 @@
-# FEAGI - Framework for Evolutionary Artificial General Intelligence
+# FEAGI Server (Rust)
 
-**Full-Featured Server Application** - Apache-2.0 License
+The FEAGI Rust server is the main runtime for the Framework for Evolutionary Artificial General Intelligence. It runs the neural burst engine, exposes the HTTP API, and manages agent I/O transports.
 
-The main FEAGI server application that provides a complete neural processing platform with REST API, ZMQ streams, and real-time brain management.
+This package is part of the FEAGI 2.0 monorepo. Core crates live under `../feagi-core/crates/` and are consumed from crates.io in `Cargo.toml`.
 
-## Features
+## What this provides
 
-- ✅ **REST API** - Full HTTP API for brain management and control
-- ✅ **ZMQ Streams** - Real-time sensory input and motor output
-- ✅ **Burst Engine** - High-performance neural processing
-- ✅ **Genome Loading** - Load brain structures from genome files
-- ✅ **Neuroembryogenesis** - Automatic brain development from genotypes
-- ✅ **Agent Management** - Register and manage multiple agents
-- ✅ **Brain Visualization** - Support for real-time brain visualization
-- ✅ **Configuration-Driven** - No hardcoded values, all from `feagi_configuration.toml`
-- ✅ **Cross-Platform** - Linux, macOS, Windows, Docker, Kubernetes
+- HTTP API for runtime control, genome I/O, and connectome management
+- Transport layer for sensory input, motor output, and visualization
+- Burst engine runtime (CPU by default, GPU optional)
+- Genome-driven brain development and agent registration
+- Configuration-driven runtime (TOML file with env and CLI overrides)
 
-## Installation
+## Build and run
 
 ### Prerequisites
 
-- Rust 1.75+ (2021 edition)
-- ZMQ libraries: `libzmq` (install via package manager)
- 
-### Windows Prerequisites
+- Rust toolchain (edition 2021; see `Cargo.toml`)
 
-- Visual Studio 2022 Build Tools (MSVC toolchain)
-
-On Windows, `libzmq` is built from source automatically (vendored) to keep setup minimal.
-
-### Build from Source
+### Build from source
 
 ```bash
-cd /Users/nadji/code/FEAGI-2.0/feagi
+cd feagi-rs
 cargo build --release
 ```
 
-The binary will be at: `target/release/feagi`
+Binary output: `target/release/feagi`.
 
-## Usage
-
-### Basic Usage
+### Run
 
 ```bash
-# With auto-discovered config
+# Auto-discover configuration file
 feagi
 
-# With explicit config path
+# Specify config path
 feagi --config /path/to/feagi_configuration.toml
 
 # Load a genome on startup
-feagi --genome path/to/genome.json
-
-# Enable verbose logging
-feagi --verbose
-
-# Override API port
-feagi --api-port 9000
+feagi --genome /path/to/genome.json
 ```
 
-### With Docker
+## CLI options
 
-```bash
-docker run -p 8000:8000 \
-  -v $(pwd)/feagi_configuration.toml:/app/feagi_configuration.toml \
-  -v $(pwd)/genomes:/app/genomes \
-  feagi:latest --genome /app/genomes/vision_genome.json
-```
+The `feagi` binary is built when the `cli` feature is enabled (default).
 
-### With Kubernetes
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: feagi-config
-data:
-  feagi_configuration.toml: |
-    [api]
-    host = "0.0.0.0"
-    port = 8000
-    ...
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: feagi
-spec:
-  replicas: 1
-  template:
-    spec:
-      containers:
-      - name: feagi
-        image: feagi:2.0.0
-        volumeMounts:
-        - name: config
-          mountPath: /app/feagi_configuration.toml
-          subPath: feagi_configuration.toml
-      volumes:
-      - name: config
-        configMap:
-          name: feagi-config
-```
+| Option | Description |
+|--------|-------------|
+| `-f, --config <PATH>` | Config path (overrides search) |
+| `-g, --genome <PATH>` | Genome to load on startup |
+| `--verbose` | Verbose logging |
+| `--api-port <PORT>` | Override API port |
+| `--burst-hz <HZ>` | Override burst frequency |
+| `--viz-transport <auto|websocket|shm>` | Override visualization transport policy |
+| `--precision <fp32|int8>` | Override NPU precision |
+| `--debug <CRATE>` | Enable per-crate debug (repeatable) |
+| `--debug-all` | Enable debug for all crates |
+| `--npu-trace` | Enable NPU trace logging |
+| `--npu-trace-synapse` | Enable synapse trace logging |
+| `--npu-trace-dynamics` | Enable dynamics trace logging |
+| `--npu-trace-src <NEURON_ID>` | Filter trace source neuron |
+| `--npu-trace-dst <NEURON_ID>` | Filter trace destination neuron |
+| `--npu-trace-neuron <NEURON_ID>` | Filter trace neuron |
 
 ## Configuration
 
-FEAGI requires a `feagi_configuration.toml` file. The application will search for it in:
+Configuration is loaded from `feagi_configuration.toml` with the following precedence:
 
-1. Path specified by `--config` flag
+1. CLI `--config` (explicit path)
 2. `FEAGI_CONFIG_PATH` environment variable
-3. Current working directory: `./feagi_configuration.toml`
+3. Current directory `./feagi_configuration.toml`
 4. Parent directories (up to 5 levels)
 
-### Minimal Configuration
+Overrides are applied in this order: TOML file, environment variables, then CLI overrides.
+
+### Minimal configuration (defaults shown)
 
 ```toml
 [system]
-max_cores = 0  # 0 = auto-detect
+max_cores = 0
 
 [api]
 host = "0.0.0.0"
 port = 8000
 
 [ports]
+zmq_req_rep_port = 5555
+zmq_pub_sub_port = 5556
+zmq_push_pull_port = 5557
 zmq_sensory_port = 5558
-zmq_motor_port = 5564
 zmq_visualization_port = 5562
+zmq_rest_port = 5563
+zmq_motor_port = 5564
 
 [zmq]
 host = "0.0.0.0"
+enabled = true
 
 [neural]
-burst_engine_timestep = 0.1  # milliseconds
+burst_engine_timestep = 0.1
 ```
 
-See `../feagi-core/feagi_configuration.toml` for a complete example.
+The full schema is defined in `feagi-core/crates/feagi-config/src/types.rs`.
 
-## API Endpoints
+## Environment overrides
 
-Once running, access the interactive API documentation at:
+Supported variables (from `feagi-config`):
+
+| Variable | Maps to |
+|----------|---------|
+| `FEAGI_CONFIG_PATH` | Config file path |
+| `FEAGI_API_HOST` | `api.host` |
+| `FEAGI_API_PORT` | `api.port` |
+| `FEAGI_API_WORKERS` | `api.workers` |
+| `FEAGI_API_RELOAD` | `api.reload` |
+| `FEAGI_ZMQ_HOST` | `zmq.host` |
+| `FEAGI_DATA_DIR` | `system.data_dir` |
+| `FEAGI_MAX_CORES` | `system.max_cores` |
+| `FEAGI_LOG_LEVEL` | `system.log_level` |
+| `FEAGI_AGENT_DEFAULT_HOST` | `agents.default_host` |
+| `FEAGI_ZMQ_REQ_REP_PORT` | `ports.zmq_req_rep_port` |
+| `FEAGI_ZMQ_PUB_SUB_PORT` | `ports.zmq_pub_sub_port` |
+| `FEAGI_ZMQ_PUSH_PULL_PORT` | `ports.zmq_push_pull_port` |
+| `FEAGI_ZMQ_SENSORY_PORT` | `ports.zmq_sensory_port` |
+| `FEAGI_ZMQ_VISUALIZATION_PORT` | `ports.zmq_visualization_port` |
+| `FEAGI_ZMQ_REST_PORT` | `ports.zmq_rest_port` |
+| `FEAGI_ZMQ_MOTOR_PORT` | `ports.zmq_motor_port` |
+
+## Transports
+
+- ZMQ transport is available via the `zeromq` crate (pure Rust).
+- `feagi-io` defaults to ZMQ and UDP transports.
+- WebSocket transport is enabled in this binary via the `feagi-io` `websocket-transport` feature.
+
+## Genome autosave
+
+Autosaved genomes are written to `.genome/` in the working directory. This folder is ignored by git.
+
+## API documentation
+
+Swagger UI is served at:
 
 ```
-http://localhost:8000/swagger-ui/
+http://<api-host>:<api-port>/swagger-ui/
 ```
-
-### Key Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/health` | GET | Health check |
-| `/v1/system/status` | GET | System status |
-| `/v1/genome/load` | POST | Load genome |
-| `/v1/cortical_areas` | GET | List cortical areas |
-| `/v1/cortical_areas` | POST | Create cortical area |
-| `/v1/neurons` | POST | Create neuron |
-| `/v1/runtime/start` | POST | Start burst engine |
-| `/v1/runtime/stop` | POST | Stop burst engine |
-
-## Architecture
-
-FEAGI is built from modular Rust crates:
-
-```
-feagi (application)
-├── feagi-config       (Configuration loading)
-├── feagi-brain-development          (Brain Development Unit)
-├── feagi-burst-engine (NPU/Neural Processing)
-├── feagi-evolutionary          (Genome I/O)
-├── feagi-services     (Service layer)
-├── feagi-api          (REST API)
-├── feagi-io          (ZMQ streams)
-└── ...
-```
-
-The FEAGI core libraries live in `../feagi-core/crates/` in this monorepo and are published to crates.io.
 
 ## Development
 
-### Run in Development Mode
+### Use local `feagi-core` crates
 
-```bash
-cargo run -- --verbose --genome ../genomes/test_genome.json
-```
-
-### Use local `feagi-core` crates (rapid iteration)
-
-By default, `feagi-rs` depends on **crates.io** (CI/staging/main-friendly). For local development, you can override crates.io with local paths:
+For local development, you can override crates.io with local paths:
 
 ```bash
 cp .cargo/config.toml.example .cargo/config.toml
 ```
 
-To return to crates.io behavior (e.g., before pushing), remove the override:
+To return to crates.io behavior:
 
 ```bash
 rm .cargo/config.toml
 ```
 
-### Run Tests
+### Tests and linting
 
 ```bash
 cargo test
-```
-
-### Check Code
-
-```bash
 cargo clippy
 cargo fmt --check
 ```
 
-## Environment Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `FEAGI_CONFIG_PATH` | Path to config file | `/etc/feagi/config.toml` |
-| `FEAGI_API_HOST` | Override API host | `0.0.0.0` |
-| `FEAGI_API_PORT` | Override API port | `9000` |
-| `FEAGI_ZMQ_HOST` | Override ZMQ host | `127.0.0.1` |
-| `RUST_LOG` | Log level | `debug`, `info`, `warn` |
-
 ## Troubleshooting
 
-### Config Not Found
+### Configuration not found
 
 ```
 Error: Failed to load configuration
 ```
 
-**Solution**: Ensure `feagi_configuration.toml` exists in the current directory or specify with `--config`.
+Ensure `feagi_configuration.toml` exists in one of the search locations or set `FEAGI_CONFIG_PATH`.
 
-### Port Already in Use
+### Port already in use
 
 ```
 Error: Failed to bind API server: Address already in use
 ```
 
-**Solution**: Change the port in config or use `--api-port` flag.
+Update the port in config or use `--api-port`.
 
-### ZMQ Connection Failed
+### ZMQ bind failure
 
 ```
 Error: ZMQ bind failed
 ```
 
-**Solution**: Check that ZMQ ports are available and not blocked by firewall.
+Verify that the configured ports are available.
 
-### Windows: `LNK1169` or `LNK2005` during linking
+### Windows linking errors
 
-`LNK1169` usually means earlier link errors like `LNK2005` (duplicate symbols) or `LNK2019` (missing symbols).
-Common causes on Windows are mixed toolchains or duplicate native libraries.
-
-**Fix checklist:**
-
-- **Use MSVC-only dependencies**: avoid MSYS2/MinGW libs on `PATH` when building `x86_64-pc-windows-msvc`.
-- **Single ZMQ source**: on Windows, we use a vendored `libzmq` build. Remove any system `libzmq` from your link path.
-- **Avoid static CRT unless required**: if `RUSTFLAGS` includes `-C target-feature=+crt-static`, unset it and rebuild.
-
-## Differences from `feagi-inference-engine`
-
-| Feature | `feagi` (This) | `feagi-inference-engine` |
-|---------|----------------|--------------------------|
-| **Purpose** | Full server | Embedded inference only |
-| **REST API** | ✅ Full API (60 endpoints) | ❌ None |
-| **ZMQ Streams** | ✅ Full PNS | ✅ Basic |
-| **Genome Loading** | ✅ Full neuroembryogenesis | ❌ Load pre-trained only |
-| **Brain Development** | ✅ Full BDU | ❌ None |
-| **Agent Management** | ✅ Full registry | ✅ Basic |
-| **Target** | Servers, cloud, desktop | Embedded, RTOS, edge |
-| **License** | Apache-2.0 | Apache-2.0 or Commercial |
-| **Size** | ~50MB | ~5MB |
+If you see `LNK1169` or `LNK2005`, ensure you are using the MSVC toolchain and do not mix MSYS2/MinGW libraries on `PATH`.
 
 ## License
 
-Apache-2.0 - See [LICENSE](../LICENSE) for details.
-
-## Links
-
-- **Documentation**: https://feagi.org/docs
-- **Repository**: https://github.com/Neuraville/FEAGI-2.0
-- **Issues**: https://github.com/Neuraville/FEAGI-2.0/issues
-- **Discord**: https://discord.gg/feagi
+Apache-2.0. See [LICENSE](../LICENSE).
 
 ## Authors
 
-Neuraville Inc. - <feagi@neuraville.com>
+Neuraville Inc. <feagi@neuraville.com>
 
 Copyright 2016-2025 Neuraville Inc. All Rights Reserved.
-
-
-
 
