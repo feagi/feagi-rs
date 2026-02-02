@@ -10,14 +10,21 @@ use feagi::plasticity_runtime::wire_plasticity_callbacks;
 use feagi_brain_development::models::CorticalAreaExt;
 use feagi_brain_development::ConnectomeManager;
 use feagi_npu_burst_engine::backend::CPUBackend;
-use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, MotorPublisher, TracingMutex, VisualizationPublisher};
-use feagi_npu_plasticity::{create_memory_stats_cache, AsyncPlasticityExecutor, PlasticityConfig, PlasticityExecutor};
+use feagi_npu_burst_engine::{
+    BurstLoopRunner, DynamicNPU, MemoryReplayFrame, MotorPublisher, TracingMutex,
+    VisualizationPublisher,
+};
+use feagi_npu_plasticity::{
+    create_memory_stats_cache, AsyncPlasticityExecutor, PlasticityConfig, PlasticityExecutor,
+};
 use feagi_npu_runtime::StdRuntime;
 use feagi_structures::genomic::cortical_area::{
     CorticalArea, CorticalAreaDimensions, CorticalAreaType, CorticalID,
     IOCorticalAreaConfigurationFlag, MemoryCorticalType,
 };
 use parking_lot::RwLock;
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Stop the burst loop when the guard drops.
 struct BurstRunnerGuard {
@@ -31,7 +38,11 @@ impl Drop for BurstRunnerGuard {
 }
 
 /// Wait until the burst count reaches the target.
-fn wait_for_burst_count(burst_runner: &Arc<RwLock<BurstLoopRunner>>, target: u64, max_iters: usize) -> bool {
+fn wait_for_burst_count(
+    burst_runner: &Arc<RwLock<BurstLoopRunner>>,
+    target: u64,
+    max_iters: usize,
+) -> bool {
     for _ in 0..max_iters {
         if burst_runner.read().get_burst_count() >= target {
             return true;
@@ -41,16 +52,24 @@ fn wait_for_burst_count(burst_runner: &Arc<RwLock<BurstLoopRunner>>, target: u64
     false
 }
 
-/// Check if the twin area appears in the cached fire queue.
-fn wait_for_twin_fire(
+/// Check if the twin area fired via FireLedger.
+fn wait_for_twin_fire_ledger(
     burst_runner: &Arc<RwLock<BurstLoopRunner>>,
+    npu: &Arc<TracingMutex<DynamicNPU>>,
     twin_idx: u32,
     max_iters: usize,
 ) -> bool {
     for _ in 0..max_iters {
-        if let Some(sample) = burst_runner.write().get_fire_queue_sample() {
-            if sample.contains_key(&twin_idx) {
-                return true;
+        let burst = burst_runner.read().get_burst_count();
+        if burst == 0 {
+            yield_now();
+            continue;
+        }
+        if let Ok(npu_lock) = npu.lock() {
+            if let Ok(window) = npu_lock.get_fire_ledger_dense_window_bitmaps(twin_idx, burst, 1) {
+                if window.iter().any(|(_, bm)| !bm.is_empty()) {
+                    return true;
+                }
             }
         }
         yield_now();
@@ -79,6 +98,7 @@ impl MotorPublisher for NoopMotor {
 
 #[test]
 fn test_runtime_replay_fires_twin_area() {
+    let _test_lock = TEST_LOCK.lock().unwrap();
     let runtime = StdRuntime;
     let backend = CPUBackend::new();
     let npu = Arc::new(TracingMutex::new(
@@ -179,12 +199,26 @@ fn test_runtime_replay_fires_twin_area() {
         let twin_idx = mgr.get_cortical_idx(&twin_id).unwrap();
         (memory_idx, upstream_idx, twin_id, twin_idx)
     };
+    {
+        let mut mgr = manager.write();
+        mgr.create_neurons_for_area(&twin_id)
+            .expect("Failed to create neurons for twin area");
+    }
+    {
+        let mut npu_lock = npu.lock().unwrap();
+        npu_lock
+            .configure_fire_ledger_window(twin_idx, 2)
+            .expect("Failed to configure fire ledger window for twin area");
+    }
     assert_ne!(memory_idx, upstream_idx);
     assert_ne!(twin_idx, upstream_idx);
     assert_ne!(twin_idx, memory_idx);
     let _ = twin_id;
 
-    burst_runner.write().start().expect("Failed to start burst loop");
+    burst_runner
+        .write()
+        .start()
+        .expect("Failed to start burst loop");
     assert!(
         wait_for_burst_count(&burst_runner, 1, 200_000),
         "Burst loop did not advance"
@@ -195,6 +229,20 @@ fn test_runtime_replay_fires_twin_area() {
         let area = mgr.get_cortical_area(&src_id).unwrap();
         area.firing_threshold() + area.firing_threshold_increment()
     };
+    const MEMORY_NEURON_ID_START: u32 = 50_000_000;
+    {
+        let mut npu_lock = npu.lock().unwrap();
+        npu_lock.register_dynamic_neuron_mapping(MEMORY_NEURON_ID_START, mem_id);
+        npu_lock.register_memory_replay_frames(
+            MEMORY_NEURON_ID_START,
+            vec![MemoryReplayFrame {
+                offset: 0,
+                upstream_area_idx: upstream_idx,
+                coords: vec![(0, 0, 0)],
+            }],
+        );
+        npu_lock.register_memory_twin_mapping(memory_idx, upstream_idx, twin_idx, source_potential);
+    }
     let mut burst_target = burst_runner.read().get_burst_count();
     for _ in 0..3 {
         burst_target += 1;
@@ -203,17 +251,18 @@ fn test_runtime_replay_fires_twin_area() {
             "Burst loop stalled before replay stimulus"
         );
         let mut npu_lock = npu.lock().unwrap();
-        npu_lock.inject_sensory_xyzp_by_id(&src_id, &[(0, 0, 0, source_potential)]);
+        npu_lock.inject_memory_neuron_to_fcl(MEMORY_NEURON_ID_START, memory_idx, source_potential);
     }
 
     assert!(
-        wait_for_twin_fire(&burst_runner, twin_idx, 500_000),
+        wait_for_twin_fire_ledger(&burst_runner, &npu, twin_idx, 500_000),
         "Expected replay to drive twin-area firing via runtime scheduler"
     );
 }
 
 #[test]
 fn test_post_burst_callback_does_not_stall_on_memory_replay() {
+    let _test_lock = TEST_LOCK.lock().unwrap();
     let runtime = StdRuntime;
     let backend = CPUBackend::new();
     let npu = Arc::new(TracingMutex::new(
@@ -352,7 +401,10 @@ fn test_post_burst_callback_does_not_stall_on_memory_replay() {
             .expect("Failed to regen m1->m2");
     }
 
-    burst_runner.write().start().expect("Failed to start burst loop");
+    burst_runner
+        .write()
+        .start()
+        .expect("Failed to start burst loop");
     assert!(
         wait_for_burst_count(&burst_runner, 1, 200_000),
         "Burst loop did not advance"
@@ -382,6 +434,7 @@ fn test_post_burst_callback_does_not_stall_on_memory_replay() {
 
 #[test]
 fn test_post_burst_callback_under_connectome_contention() {
+    let _test_lock = TEST_LOCK.lock().unwrap();
     let runtime = StdRuntime;
     let backend = CPUBackend::new();
     let npu = Arc::new(TracingMutex::new(
@@ -520,7 +573,10 @@ fn test_post_burst_callback_under_connectome_contention() {
             .expect("Failed to regen m1->m2");
     }
 
-    burst_runner.write().start().expect("Failed to start burst loop");
+    burst_runner
+        .write()
+        .start()
+        .expect("Failed to start burst loop");
     assert!(
         wait_for_burst_count(&burst_runner, 1, 200_000),
         "Burst loop did not advance"
@@ -565,6 +621,7 @@ fn test_post_burst_callback_under_connectome_contention() {
 
 #[test]
 fn test_post_burst_memory_conversion_command_does_not_deadlock() {
+    let _test_lock = TEST_LOCK.lock().unwrap();
     let runtime = StdRuntime;
     let backend = CPUBackend::new();
     let npu = Arc::new(TracingMutex::new(
@@ -631,7 +688,10 @@ fn test_post_burst_memory_conversion_command_does_not_deadlock() {
     }
     wire_plasticity_callbacks(&burst_runner, Arc::clone(&executor), Arc::clone(&npu));
 
-    burst_runner.write().start().expect("Failed to start burst loop");
+    burst_runner
+        .write()
+        .start()
+        .expect("Failed to start burst loop");
     assert!(
         wait_for_burst_count(&burst_runner, 1, 200_000),
         "Burst loop did not advance"

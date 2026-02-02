@@ -12,10 +12,10 @@
 //! - Console output with timing statistics
 //! - JSON file: `target/profile_cpu_results.json`
 
-use std::time::{Duration, Instant};
+use serde_json::json;
 use std::fs::File;
 use std::io::Write;
-use serde_json::json;
+use std::time::{Duration, Instant};
 
 /// CPU profiling metrics
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ impl CpuMetrics {
         } else {
             0.0
         };
-        
+
         Self {
             operation,
             duration,
@@ -46,7 +46,7 @@ impl CpuMetrics {
 /// Profile basic computation operations
 fn profile_basic_operations() -> Vec<CpuMetrics> {
     let mut metrics = Vec::new();
-    
+
     // Vec push operations
     let start = Instant::now();
     let iterations = 1_000_000;
@@ -60,7 +60,7 @@ fn profile_basic_operations() -> Vec<CpuMetrics> {
         duration,
         iterations,
     ));
-    
+
     // Vec with_capacity
     let start = Instant::now();
     let iterations = 1_000_000;
@@ -74,7 +74,7 @@ fn profile_basic_operations() -> Vec<CpuMetrics> {
         duration,
         iterations,
     ));
-    
+
     // HashMap insertions
     let start = Instant::now();
     let iterations = 100_000;
@@ -88,21 +88,19 @@ fn profile_basic_operations() -> Vec<CpuMetrics> {
         duration,
         iterations,
     ));
-    
+
     metrics
 }
 
 /// TODO: Profile NPU operations
 fn profile_npu_operations() -> Vec<CpuMetrics> {
-    vec![
-        CpuMetrics {
-            operation: "npu_operations_todo".to_string(),
-            duration: Duration::from_secs(0),
-            iterations: 0,
-            ops_per_second: 0.0,
-        }
-    ]
-    
+    vec![CpuMetrics {
+        operation: "npu_operations_todo".to_string(),
+        duration: Duration::from_secs(0),
+        iterations: 0,
+        ops_per_second: 0.0,
+    }]
+
     // TODO: Add actual NPU profiling
     // let npu = RustNPU::new(...);
     // Profile initialization, neuron creation, burst processing, etc.
@@ -113,18 +111,22 @@ fn print_cpu_metrics_table(metrics: &[CpuMetrics], title: &str) {
     println!("\n{}", "=".repeat(90));
     println!("{}", title);
     println!("{}", "=".repeat(90));
-    println!("{:<40} {:>15} {:>10} {:>20}",
-             "Operation", "Total Time", "Iterations", "Ops/Second");
+    println!(
+        "{:<40} {:>15} {:>10} {:>20}",
+        "Operation", "Total Time", "Iterations", "Ops/Second"
+    );
     println!("{}", "-".repeat(90));
-    
+
     for metric in metrics {
-        println!("{:<40} {:>15} {:>10} {:>20.2}",
-                 metric.operation,
-                 format!("{:.3}s", metric.duration.as_secs_f64()),
-                 metric.iterations,
-                 metric.ops_per_second);
+        println!(
+            "{:<40} {:>15} {:>10} {:>20.2}",
+            metric.operation,
+            format!("{:.3}s", metric.duration.as_secs_f64()),
+            metric.iterations,
+            metric.ops_per_second
+        );
     }
-    
+
     println!("{}", "=".repeat(90));
 }
 
@@ -144,12 +146,12 @@ fn save_cpu_metrics_to_json(metrics: &[CpuMetrics]) -> std::io::Result<()> {
             })
         }).collect::<Vec<_>>(),
     });
-    
+
     let mut file = File::create("target/profile_cpu_results.json")?;
     file.write_all(serde_json::to_string_pretty(&output)?.as_bytes())?;
-    
+
     println!("\n✓ Results saved to: target/profile_cpu_results.json");
-    
+
     Ok(())
 }
 
@@ -157,27 +159,31 @@ fn save_cpu_metrics_to_json(metrics: &[CpuMetrics]) -> std::io::Result<()> {
 fn test_cpu_profiling() {
     println!("\n⚡ FEAGI CPU Profiling (STUB VERSION)");
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
-    println!("Build: {}", if cfg!(debug_assertions) { "Debug" } else { "Release" });
+    println!(
+        "Build: {}",
+        if cfg!(debug_assertions) {
+            "Debug"
+        } else {
+            "Release"
+        }
+    );
     println!("\nNOTE: This is a stub version demonstrating basic timing.");
     println!("TODO: Update to use actual FEAGI Rust API for comprehensive profiling.");
-    
+
     // Profile basic operations
     let basic_metrics = profile_basic_operations();
     print_cpu_metrics_table(&basic_metrics, "Basic Operation Performance");
-    
+
     // Profile NPU operations (stub)
     let npu_metrics = profile_npu_operations();
     print_cpu_metrics_table(&npu_metrics, "NPU Performance (TODO: Implement)");
-    
+
     // Combine all metrics
-    let all_metrics: Vec<_> = basic_metrics.into_iter()
-        .chain(npu_metrics.into_iter())
-        .collect();
-    
+    let all_metrics: Vec<_> = basic_metrics.into_iter().chain(npu_metrics).collect();
+
     // Save results
-    save_cpu_metrics_to_json(&all_metrics)
-        .expect("Failed to save CPU metrics");
-    
+    save_cpu_metrics_to_json(&all_metrics).expect("Failed to save CPU metrics");
+
     println!("\n✅ CPU profiling complete!");
     println!("\nTo complete this test:");
     println!("1. Study the current FEAGI Rust API");

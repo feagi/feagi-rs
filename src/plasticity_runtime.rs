@@ -9,13 +9,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "plasticity")]
-use feagi_brain_development::ConnectomeManager;
-#[cfg(feature = "plasticity")]
 use feagi_brain_development::models::CorticalAreaExt;
 #[cfg(feature = "plasticity")]
-use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, TracingMutex};
+use feagi_brain_development::ConnectomeManager;
 #[cfg(feature = "plasticity")]
 use feagi_npu_burst_engine::npu::MemoryReplayFrame;
+#[cfg(feature = "plasticity")]
+use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, TracingMutex};
 #[cfg(feature = "plasticity")]
 use feagi_npu_neural::types::NeuronId;
 #[cfg(feature = "plasticity")]
@@ -44,12 +44,14 @@ pub fn wire_plasticity_callbacks(
     npu: Arc<TracingMutex<DynamicNPU>>,
 ) -> Arc<Mutex<BTreeMap<u64, Vec<ReplayInjection>>>> {
     let executor_for_callback = Arc::clone(&executor);
-    burst_runner.write().set_plasticity_notify_callback(move |timestep: u64| {
-        if let Ok(exec) = executor_for_callback.lock() {
-            use feagi_npu_plasticity::PlasticityExecutor;
-            exec.notify_burst(timestep);
-        }
-    });
+    burst_runner
+        .write()
+        .set_plasticity_notify_callback(move |timestep: u64| {
+            if let Ok(exec) = executor_for_callback.lock() {
+                use feagi_npu_plasticity::PlasticityExecutor;
+                exec.notify_burst(timestep);
+            }
+        });
 
     let replay_schedule: Arc<Mutex<BTreeMap<u64, Vec<ReplayInjection>>>> =
         Arc::new(Mutex::new(BTreeMap::new()));
@@ -60,8 +62,7 @@ pub fn wire_plasticity_callbacks(
         Arc::new(Mutex::new(HashMap::new()));
     let bridge_injected_memory: Arc<Mutex<HashMap<u32, u64>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let bridge_injected_twin: Arc<Mutex<HashMap<u32, u64>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let bridge_injected_twin: Arc<Mutex<HashMap<u32, u64>>> = Arc::new(Mutex::new(HashMap::new()));
     let replay_schedule_for_post = Arc::clone(&replay_schedule);
     let ltm_twin_map_for_post = Arc::clone(&ltm_twin_map);
     let ltm_twin_reverse_for_post = Arc::clone(&ltm_twin_reverse);
@@ -80,7 +81,7 @@ pub fn wire_plasticity_callbacks(
             return;
         };
         let commands = exec.drain_commands();
-        let mut scheduled_replays: Vec<(u64, ReplayInjection)> = Vec::new();
+        let scheduled_replays: Vec<(u64, ReplayInjection)> = Vec::new();
         if !commands.is_empty() {
             for cmd in commands {
                 match cmd {

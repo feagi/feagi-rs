@@ -36,4 +36,7 @@ feagi.log
 
 /logs/
 
+# Autosaved genomes
+.genome/
+
 

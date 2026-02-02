@@ -79,6 +79,10 @@ tempfile = "3.8"
 # JSON output
 serde_json = "1.0"
 
+# Example dependencies
+feagi-agent = { version = "0.0.1-beta.8" }
+feagi-sensorimotor = { version = "0.0.1-beta.8" }
+
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -122,3 +126,4 @@ plasticity = ["feagi-services/plasticity"]  # Neuroplasticity and STDP support (
 cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
 embedded = []                    # For library usage (no CLI)
 no-network = ["embedded"]        # Embedded + disable network servers (future use)
+zmq-transport = ["feagi-io/zmq-transport"]
