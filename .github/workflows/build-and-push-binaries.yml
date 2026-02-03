@@ -77,7 +77,6 @@ jobs:
       version: ${{ steps.config.outputs.version }}
       source_branch: ${{ steps.config.outputs.source_branch }}
       source_sha: ${{ steps.config.outputs.source_sha }}
-      create_release: ${{ steps.config.outputs.create_release }}
     steps:
       - name: Determine build configuration
         id: config
@@ -119,25 +118,15 @@ jobs:
             SOURCE_SHA=""
           fi
           
-          # Determine if we should create a GitHub Release
-          # Only create releases for production, beta, and alpha (not dev)
-          if [[ "${RELEASE_TYPE}" == "production" || "${RELEASE_TYPE}" == "beta" || "${RELEASE_TYPE}" == "alpha" ]]; then
-            CREATE_RELEASE="true"
-          else
-            CREATE_RELEASE="false"
-          fi
-          
           echo "release_type=${RELEASE_TYPE}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "source_branch=${SOURCE_BRANCH}" >> $GITHUB_OUTPUT
           echo "source_sha=${SOURCE_SHA}" >> $GITHUB_OUTPUT
-          echo "create_release=${CREATE_RELEASE}" >> $GITHUB_OUTPUT
           
           echo "📋 Build Configuration:"
           echo "   Release Type: ${RELEASE_TYPE}"
           echo "   Version: ${VERSION}"
           echo "   Source Branch: ${SOURCE_BRANCH}"
-          echo "   Create Release: ${CREATE_RELEASE}"
 
   # ============================================================================
   # Linux x86_64 Build Job
@@ -918,13 +907,13 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # Collect all binaries and create PR (for dev builds) or Release (for production/beta/alpha)
+  # Collect all binaries and create PR
   # ============================================================================
   create-pr:
     name: Create PR with Binaries
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    if: always() && (needs.determine-config.outputs.create_release == 'false' || needs.determine-config.outputs.release_type == 'beta')
+    if: always()
     
     steps:
       - name: Determine source commit
@@ -1130,13 +1119,13 @@ jobs:
           GH_TOKEN: ${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}
 
   # ============================================================================
-  # Push binaries to feagi/feagi repo staging branch (for releases)
+  # Disabled: direct push to staging (manual only)
   # ============================================================================
   push-binaries-to-repo:
     name: Push Binaries to feagi/feagi Repo
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    if: always()
+    if: false
     
     steps:
       - name: Download all binaries
@@ -1237,13 +1226,13 @@ jobs:
           fi
 
   # ============================================================================
-  # Create GitHub Release (for production/beta/alpha builds)
+  # Disabled: GitHub Release creation (manual only)
   # ============================================================================
   create-release:
     name: Create GitHub Release
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64, push-binaries-to-repo]
     runs-on: ubuntu-latest
-    if: always() && needs.determine-config.outputs.create_release == 'true'
+    if: false
     permissions:
       contents: write
     
