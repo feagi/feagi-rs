@@ -924,7 +924,7 @@ jobs:
     name: Create PR with Binaries
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    if: always() && needs.determine-config.outputs.create_release == 'false'
+    if: always() && (needs.determine-config.outputs.create_release == 'false' || needs.determine-config.outputs.release_type == 'beta')
     
     steps:
       - name: Determine source commit
