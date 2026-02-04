@@ -261,6 +261,37 @@ async fn main() -> Result<()> {
             "Applied CLI override: visualization.transport = '{}'",
             config.visualization.transport
         );
+        // So that HTTP agent registration and build_agent_handler add WebSocket publishers when
+        // the user requests viz over WebSocket, ensure transports.available includes "websocket".
+        if policy == "websocket" {
+            let has_ws = config
+                .transports
+                .available
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("websocket") || t.eq_ignore_ascii_case("ws"));
+            if !has_ws {
+                config.transports.available.push("websocket".to_string());
+                info!(
+                    "Applied: transports.available now includes 'websocket' (required for agent registration with chosen_transport websocket)"
+                );
+            }
+        }
+    }
+
+    // If [websocket] is enabled in config, ensure transports.available includes "websocket"
+    // so build_agent_handler adds WebSocket publishers (required for HTTP registration with chosen_transport websocket).
+    if config.websocket.enabled {
+        let has_ws = config
+            .transports
+            .available
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("websocket") || t.eq_ignore_ascii_case("ws"));
+        if !has_ws {
+            config.transports.available.push("websocket".to_string());
+            info!(
+                "Applied: [websocket] enabled but transports.available did not include 'websocket' - added it for agent registration"
+            );
+        }
     }
 
     validate_config(&config).context("Configuration validation failed")?;
@@ -974,6 +1005,12 @@ async fn start_services(
 fn log_config_summary(config: &FeagiConfig) {
     info!("Configuration Summary:");
     info!("  API: {}:{}", config.api.host, config.api.port);
+    info!(
+        "  Transports: available = {:?}, default = {}",
+        config.transports.available,
+        config.transports.default
+    );
+    info!("  WebSocket: enabled = {}", config.websocket.enabled);
     info!("  ZMQ Host: {}", config.zmq.host);
     info!("  Ports:");
     info!("    - Sensory: {}", config.ports.zmq_sensory_port);
