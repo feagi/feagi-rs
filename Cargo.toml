@@ -25,19 +25,21 @@ required-features = ["cli"]
 # - Local development can override these with `feagi-rs/.cargo/config.toml` via `[patch.crates-io]`.
 # - Staging should pin exact beta builds via Cargo.lock + `cargo build --locked`.
 # - Main should pin exact stable builds (no `-beta.*`) via Cargo.lock + `cargo build --locked`.
-feagi-npu-neural = { version = "0.0.1-beta.9" }
-feagi-structures = { version = "0.0.1-beta.9" }
-feagi-npu-runtime = { version = "0.0.1-beta.9", features = ["std"] }
-feagi-config = { version = "0.0.1-beta.9" }
+feagi-npu-neural = { version = "0.0.1-beta.8" }
+feagi-structures = { version = "0.0.1-beta.8" }
+feagi-npu-runtime = { version = "0.0.1-beta.8", features = ["std"] }
+feagi-config = { version = "0.0.1-beta.8" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "0.0.1-beta.9" }
-feagi-brain-development = { version = "0.0.1-beta.9" }
-feagi-evolutionary = { version = "0.0.1-beta.9" }
-feagi-services = { version = "0.0.1-beta.9" }
-feagi-api = { version = "0.0.1-beta.9", features = ["services"] }
-feagi-io = { version = "0.0.1-beta.9", features = ["websocket-transport"] }
-feagi-state-manager = { version = "0.0.1-beta.9" }
-feagi-npu-plasticity = { version = "0.0.1-beta.9" }
+feagi-npu-burst-engine = { version = "0.0.1-beta.10" }
+feagi-brain-development = { version = "0.0.1-beta.8" }
+feagi-evolutionary = { version = "0.0.1-beta.8" }
+feagi-services = { version = "0.0.1-beta.8" }
+feagi-api = { version = "0.0.1-beta.8", features = ["services"] }
+feagi-io = { path = "../feagi-core/crates/feagi-io", version = "0.0.1-beta.8", features = ["zmq-transport", "ws-transport"] }
+feagi-state-manager = { version = "0.0.1-beta.8" }
+feagi-npu-plasticity = { version = "0.0.1-beta.10" }
+feagi-agent = { version = "0.0.1-beta.8" }
+feagi-serialization = { version = "0.0.1-beta.8" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -47,7 +49,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "0.0.1-beta.9" }
+feagi-observability = { version = "0.0.1-beta.8" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
@@ -79,9 +81,8 @@ tempfile = "3.8"
 # JSON output
 serde_json = "1.0"
 
-# Example dependencies
-feagi-agent = { version = "0.0.1-beta.8" }
-feagi-sensorimotor = { version = "0.0.1-beta.8" }
+# Example dependencies (feagi-agent comes from [dependencies] + patch)
+feagi-sensorimotor = { path = "../feagi-core/crates/feagi-sensorimotor", version = "0.0.1-beta.8" }
 
 [profile.release]
 opt-level = 3
@@ -118,6 +119,24 @@ path = "tests/profile_cpu.rs"
 [[test]]
 name = "profile_storage"
 path = "tests/profile_storage.rs"
+
+[patch.crates-io]
+feagi-api = { path = "../feagi-core/crates/feagi-api" }
+feagi-io = { path = "../feagi-core/crates/feagi-io" }
+feagi-services = { path = "../feagi-core/crates/feagi-services" }
+feagi-config = { path = "../feagi-core/crates/feagi-config" }
+feagi-structures = { path = "../feagi-core/crates/feagi-structures" }
+feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
+feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
+feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
+feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
+feagi-npu-neural = { path = "../feagi-core/crates/feagi-npu/neural" }
+feagi-npu-runtime = { path = "../feagi-core/crates/feagi-npu/runtime" }
+feagi-npu-burst-engine = { path = "../feagi-core/crates/feagi-npu/burst-engine" }
+feagi-npu-plasticity = { path = "../feagi-core/crates/feagi-npu/plasticity" }
+feagi-agent = { path = "../feagi-core/crates/feagi-agent" }
+feagi-sensorimotor = { path = "../feagi-core/crates/feagi-sensorimotor" }
+feagi-serialization = { path = "../feagi-core/crates/feagi-serialization" }
 
 [features]
 default = ["cli", "plasticity"]

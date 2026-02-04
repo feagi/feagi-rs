@@ -41,8 +41,6 @@ pub fn collect_version_info() -> VersionInfo {
         "feagi_services".to_string(),
         feagi_services::VERSION.to_string(),
     );
-    crates.insert("feagi_io".to_string(), feagi_io::VERSION.to_string());
-
     // Infrastructure
     crates.insert(
         "feagi_state_manager".to_string(),

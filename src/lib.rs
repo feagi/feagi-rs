@@ -45,11 +45,11 @@ pub use feagi_npu_burst_engine::RawFireQueueSnapshot;
 
 // Re-export for embedders who need them
 pub use feagi_brain_development::ConnectomeManager;
-pub use feagi_io::IOSystem;
 pub use feagi_npu_burst_engine::BurstLoopRunner;
 pub use feagi_services::*;
 
 // Internal modules (reused from main.rs initialization logic)
+pub mod agent_io;
 pub mod components;
 pub mod plasticity_runtime;
 pub mod version;
@@ -397,12 +397,7 @@ impl FeagiInstance {
         info!("🧠 Loading genome: {}", genome_path);
 
         self.runtime.block_on(async {
-            components::load_genome_with_pns(
-                &components.connectome_manager,
-                &components.pns,
-                &path,
-            )
-            .await?;
+            components::load_genome(&components.connectome_manager, &path).await?;
 
             info!("✅ Genome loaded successfully");
             Ok(())
@@ -444,10 +439,11 @@ impl FeagiInstance {
     pub fn shutdown(&self) -> Result<()> {
         info!("🛑 Shutting down FEAGI...");
 
-        let components = self.components.lock().unwrap();
-        if let Some(ref components) = *components {
+        let mut components_guard = self.components.lock().unwrap();
+        if let Some(components) = components_guard.as_mut() {
             // Stop burst engine
             components.burst_runner.write().stop();
+            components.agent_runtime.stop();
 
             info!("✅ FEAGI shutdown complete");
         }

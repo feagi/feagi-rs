@@ -18,6 +18,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 #[cfg(feature = "plasticity")]
 use feagi::plasticity_runtime::wire_plasticity_callbacks;
+use feagi::agent_io::{
+    build_agent_handler, AgentHandlerRuntime, HandlerMotorPublisher, HandlerVisualizationPublisher,
+};
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,7 +30,6 @@ use tracing::{debug, error, info, warn};
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
-use feagi_io::IOSystem;
 use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_npu_burst_engine::{BurstLoopRunner, TracingMutex};
 use feagi_observability::{init_logging_default, parse_debug_flags};
@@ -36,6 +38,8 @@ use feagi_services::impls::SystemServiceImpl;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::types::LoadGenomeParams;
 use feagi_services::*;
+use feagi_services::types::agent_registry::AgentRegistry;
+use feagi_agent::server::FeagiAgentHandler;
 
 #[cfg(feature = "plasticity")]
 fn build_plasticity_config(config: &FeagiConfig) -> feagi_npu_plasticity::PlasticityConfig {
@@ -280,7 +284,9 @@ struct FeagiComponents {
     connectome_manager: Arc<RwLock<ConnectomeManager>>,
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
-    pns: Arc<IOSystem>,
+    agent_handler: Arc<parking_lot::Mutex<FeagiAgentHandler>>,
+    agent_registry: Arc<RwLock<AgentRegistry>>,
+    agent_runtime: AgentHandlerRuntime,
     #[cfg(feature = "plasticity")]
     plasticity_executor:
         Option<Arc<std::sync::Mutex<feagi_npu_plasticity::AsyncPlasticityExecutor>>>,
@@ -396,107 +402,25 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     manager.write().set_npu(Arc::clone(&npu));
     info!("    ✓ ConnectomeManager initialized and connected to NPU");
 
-    // NOTE: Genome loading is deferred until after PNS is created and wired
-    // This allows dynamic stream gating to work properly
+    // NOTE: Genome loading is deferred until after agent handler is created.
 
-    // Initialize PNS (Peripheral Nervous System - handles agent I/O)
-    // MUST be created BEFORE BurstLoopRunner to provide visualization publisher
-    info!("  Creating PNS (Agent Management)...");
+    // Initialize agent handler (transport servers)
+    info!("  Creating agent handler...");
+    let agent_handler = Arc::new(parking_lot::Mutex::new(build_agent_handler(config)?));
+    let agent_registry = Arc::new(RwLock::new(AgentRegistry::with_defaults()));
+    let agent_runtime = AgentHandlerRuntime::start(Arc::clone(&agent_handler), Arc::clone(&npu));
+    info!("    ✓ Agent handler created");
 
-    // Build PNS config from FEAGI config (NO HARDCODED DEFAULTS!)
-    use feagi_io::{IOConfig, WebSocketConfig};
-
-    let io_config = IOConfig {
-        #[cfg(feature = "zmq-transport")]
-        zmq_rest_address: format!(
-            "tcp://{}:{}",
-            config.agent.host, config.agent.registration_port
-        ),
-        #[cfg(feature = "zmq-transport")]
-        zmq_motor_address: format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port),
-        #[cfg(feature = "zmq-transport")]
-        zmq_viz_address: format!(
-            "tcp://{}:{}",
-            config.zmq.host, config.ports.zmq_visualization_port
-        ),
-        #[cfg(feature = "zmq-transport")]
-        zmq_sensory_address: format!(
-            "tcp://{}:{}",
-            config.zmq.host, config.ports.zmq_sensory_port
-        ),
-        websocket: WebSocketConfig {
-            enabled: config.websocket.enabled,
-            host: config.websocket.host.clone(),
-            sensory_port: config.websocket.sensory_port,
-            motor_port: config.websocket.motor_port,
-            visualization_port: config.websocket.visualization_port,
-            registration_port: config.websocket.registration_port,
-            rest_api_port: config.websocket.rest_api_port,
-            connection_timeout_ms: config.websocket.connection_timeout_ms,
-            ping_interval_ms: config.websocket.ping_interval_ms,
-            ping_timeout_ms: config.websocket.ping_timeout_ms,
-            close_timeout_ms: config.websocket.close_timeout_ms,
-            max_message_size: config.websocket.max_message_size,
-            max_connections: config.websocket.max_connections,
-        },
-        ..Default::default()
-    };
-    info!(
-        "    ✓ WebSocket config loaded: enabled={}, ports={}/{}/{}/{}",
-        io_config.websocket.enabled,
-        io_config.websocket.sensory_port,
-        io_config.websocket.motor_port,
-        io_config.websocket.visualization_port,
-        io_config.websocket.registration_port
-    );
-
-    let pns = Arc::new(IOSystem::with_config(io_config).context("Failed to create PNS")?);
-
-    // Wire dynamic gating callbacks (must be done after Arc wrapping)
-    IOSystem::wire_dynamic_gating_callbacks(&pns);
-
-    info!("    ✓ PNS created");
-
-    // Initialize BurstLoopRunner with PNS-backed publishers
+    // Initialize BurstLoopRunner with handler-backed publishers
     info!("  Initializing BurstLoopRunner...");
     let burst_timestep = config.neural.burst_engine_timestep;
 
-    // Create PNS-backed visualization publisher
-    struct PnsVisualizationPublisher {
-        pns: Arc<IOSystem>,
-    }
-
-    impl feagi_npu_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
-        fn publish_raw_fire_queue(
-            &self,
-            fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
-        ) -> Result<(), String> {
-            self.pns
-                .publish_raw_fire_queue(fire_data)
-                .map_err(|e| format!("PNS viz publish failed: {}", e))
-        }
-    }
-
-    // Create PNS-backed motor publisher
-    struct PnsMotorPublisher {
-        pns: Arc<IOSystem>,
-    }
-
-    impl feagi_npu_burst_engine::MotorPublisher for PnsMotorPublisher {
-        fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
-            self.pns
-                .publish_motor(agent_id, data)
-                .map_err(|e| format!("PNS motor publish failed: {}", e))
-        }
-    }
-
-    let viz_publisher = Arc::new(Mutex::new(PnsVisualizationPublisher {
-        pns: Arc::clone(&pns),
-    }));
-
-    let motor_publisher = Arc::new(Mutex::new(PnsMotorPublisher {
-        pns: Arc::clone(&pns),
-    }));
+    let viz_publisher = Arc::new(Mutex::new(HandlerVisualizationPublisher::new(
+        Arc::clone(&agent_handler),
+    )));
+    let motor_publisher = Arc::new(Mutex::new(HandlerMotorPublisher::new(
+        Arc::clone(&agent_handler),
+    )));
 
     // Calculate burst frequency from timestep (seconds → Hz)
     // timestep is in seconds, so frequency = 1 / timestep_seconds
@@ -509,7 +433,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         burst_hz,
     )));
     info!(
-        "    ✓ BurstLoopRunner initialized ({:.0}Hz, {}s timestep, PNS-backed viz+motor)",
+        "    ✓ BurstLoopRunner initialized ({:.0}Hz, {}s timestep, handler-backed viz+motor)",
         burst_hz, burst_timestep
     );
 
@@ -576,41 +500,24 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         (None, None, false)
     };
 
-    // Wire up bidirectional connections between PNS and BurstLoopRunner
-    info!("  Wiring PNS ↔ BurstLoopRunner connections...");
-
-    // PNS needs sensory manager from BurstLoopRunner (for sensory injection)
-    let sensory_mgr = burst_runner.read().sensory_manager.clone();
-    pns.set_sensory_agent_manager(sensory_mgr);
-
-    // PNS needs burst_runner reference (for motor subscription tracking)
-    pns.set_burst_runner(Arc::clone(&burst_runner));
-
-    // Wire NPU to PNS for dynamic stream gating
-    pns.set_npu_for_gating(Arc::clone(&npu));
-
-    info!("    ✓ PNS ↔ BurstLoopRunner connections established");
-    info!("      - Sensory: PNS → BurstLoopRunner (injection)");
-    info!("      - Motor: BurstLoopRunner → PNS (publishing)");
-    info!("      - Dynamic gating: NPU genome state → PNS stream control");
-
     Ok(FeagiComponents {
         npu,
         connectome_manager: manager,
         runtime_service,
         burst_runner,
-        pns,
+        agent_handler,
+        agent_registry,
+        agent_runtime,
         plasticity_executor,
         memory_stats_cache,
         use_post_burst_processor,
     })
 }
 
-/// Load genome and notify PNS for dynamic gating
+/// Load genome via GenomeService.
 /// Returns the genome's simulation_timestep (in seconds) if available
-async fn load_genome_with_pns(
+async fn load_genome(
     genome_service: &Arc<GenomeServiceImpl>,
-    pns: &Arc<IOSystem>,
     genome_path: &PathBuf,
 ) -> Result<Option<f64>> {
     info!("    [GENOME-LOAD] Step 1: Reading genome file...");
@@ -633,11 +540,6 @@ async fn load_genome_with_pns(
         simulation_timestep,
         1.0 / simulation_timestep
     );
-
-    info!("    [GENOME-LOAD] Step 3: Notifying PNS (triggers dynamic stream evaluation)...");
-    // Notify PNS that genome is loaded (triggers stream evaluation)
-    pns.on_genome_loaded();
-    info!("    [GENOME-LOAD] Step 4: PNS notified, dynamic evaluation complete");
 
     Ok(Some(simulation_timestep))
 }
@@ -711,65 +613,14 @@ async fn start_services(
         version_info,
     ));
 
-    // Get agent registry from PNS for agent service
-    let agent_registry = components.pns.get_agent_registry();
-    let registration_handler = components.pns.get_registration_handler();
+    let agent_registry = Arc::clone(&components.agent_registry);
+    let registration_handler = Arc::clone(&components.agent_handler);
 
-    // Wire GenomeService and ConnectomeService to RegistrationHandler (required for auto-creation feature)
-    // NOTE: This wiring is REQUIRED for the auto-creation of missing IPU/OPU cortical areas feature.
-    // All FEAGI embedders must perform this wiring after creating services.
-    {
-        let mut handler = registration_handler.lock();
-        handler.set_genome_service(Arc::clone(&genome_service)
-            as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>);
-        handler.set_connectome_service(Arc::clone(&connectome_service)
-            as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>);
-        handler.set_auto_create_missing_areas(config.agent.auto_create_missing_cortical_areas);
-        // Visualization transport is driven by feagi_configuration.toml (authoritative).
-        // This controls whether FEAGI allocates/advertises SHM visualization paths during registration.
-        {
-            use feagi_io::core::registration::VisualizationShmPolicy;
-            let policy = match config.visualization.transport.as_str() {
-                "auto" => VisualizationShmPolicy::Auto,
-                "websocket" => VisualizationShmPolicy::ForceWebSocket,
-                "shm" => VisualizationShmPolicy::ForceShm,
-                other => {
-                    // Validation should have rejected this already, but keep behavior deterministic.
-                    return Err(anyhow::anyhow!(
-                        "Invalid config value visualization.transport='{}' (expected auto/websocket/shm)",
-                        other
-                    ));
-                }
-            };
-            handler.set_visualization_shm_policy(policy);
-        }
-    }
-    info!("    ✓ RegistrationHandler services wired (GenomeService, ConnectomeService, auto-create: {})", config.agent.auto_create_missing_cortical_areas);
-
-    let mut agent_service_impl =
+    let agent_service_impl =
         AgentServiceImpl::new(Arc::clone(&components.connectome_manager), agent_registry);
-
-    // Wire registration handler for full transport negotiation
-    // Convert Arc<Mutex<RegistrationHandler>> to Arc<dyn RegistrationHandlerTrait>
-    use feagi_services::traits::registration_handler::RegistrationHandlerTrait;
-
-    // Wrapper to convert Arc<Mutex<RegistrationHandler>> to trait object
-    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_io::RegistrationHandler>>);
-    impl RegistrationHandlerTrait for RegistrationHandlerWrapper {
-        fn process_registration(
-            &self,
-            request: feagi_services::types::registration::RegistrationRequest,
-        ) -> Result<feagi_services::types::registration::RegistrationResponse, String> {
-            self.0.lock().process_registration(request)
-        }
-    }
-
-    let handler_trait: Arc<dyn RegistrationHandlerTrait> =
-        Arc::new(RegistrationHandlerWrapper(registration_handler));
-    agent_service_impl.set_registration_handler(handler_trait);
-
+    agent_service_impl.set_runtime_service(components.runtime_service.clone());
     let agent_service = Arc::new(agent_service_impl);
-    info!("    ✓ Services created (agent service with transport negotiation)");
+    info!("    ✓ Services created");
 
     // Create API state (runtime_service already created in components)
     // Create snapshot service
@@ -801,15 +652,8 @@ async fn start_services(
         memory_stats_cache: components.memory_stats_cache.clone(),
         amalgamation_state: ApiState::init_amalgamation_state(),
         agent_connectors: ApiState::init_agent_connectors(),
+        agent_registration_handler: registration_handler,
     };
-
-    // Start PNS control streams FIRST (this wires the dynamic gating callbacks)
-    info!("  Starting PNS control streams (agent registration)...");
-    components
-        .pns
-        .start_control_streams()
-        .context("Failed to start PNS control streams")?;
-    info!("    ✓ PNS control streams started (agent registration ready)");
 
     // Start HTTP API server (before genome load in case it hangs)
     let api_port = args.api_port.unwrap_or(config.api.port);
@@ -864,7 +708,7 @@ async fn start_services(
             "  Loading genome from: {} (API is already online)",
             genome_path.display()
         );
-        match load_genome_with_pns(&genome_service, &components.pns, genome_path).await {
+        match load_genome(&genome_service, genome_path).await {
             Ok(Some(genome_timestep)) => {
                 info!("    ✓ Genome loaded via GenomeService (RuntimeGenome stored)");
                 info!("    ✓ Dynamic stream evaluation triggered");
@@ -1035,13 +879,6 @@ async fn start_services(
         }
     }
 
-    // Connect NPU to sensory stream for data injection
-    info!("  Connecting NPU to PNS sensory stream...");
-    components
-        .pns
-        .connect_npu_to_sensory_stream(Arc::clone(&components.npu));
-    info!("    ✓ NPU connected to sensory stream");
-
     // Data streams start DYNAMICALLY based on:
     // 1. Genome loaded (NPU has neurons)
     // 2. At least one agent with matching capability registered
@@ -1085,13 +922,10 @@ async fn start_services(
         }
     }
 
-    info!("  Stopping PNS (agent I/O)...");
-    match components.pns.stop() {
-        Ok(_) => info!("    ✓ PNS stopped"),
-        Err(e) => {
-            error!("    ✗ Failed to stop PNS: {}", e);
-        }
-    }
+    info!("  Stopping agent handler runtime...");
+    let mut agent_runtime = components.agent_runtime;
+    agent_runtime.stop();
+    info!("    ✓ Agent handler runtime stopped");
 
     info!("  Stopping API server...");
     // Trigger graceful shutdown for axum server

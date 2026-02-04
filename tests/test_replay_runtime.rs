@@ -80,8 +80,9 @@ fn wait_for_twin_fire_ledger(
 struct NoopViz;
 
 impl VisualizationPublisher for NoopViz {
-    fn publish_raw_fire_queue(
+    fn publish_raw_fire_queue_for_agent(
         &self,
+        _agent_id: &str,
         _fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
     ) -> Result<(), String> {
         Ok(())
