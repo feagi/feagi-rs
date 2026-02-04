@@ -5,12 +5,15 @@
 
 use anyhow::{Context, Result};
 use parking_lot::{Mutex as ParkingMutex, RwLock};
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex as StdMutex};
 use tracing::{error, info, warn};
 
 use crate::agent_io::{
-    build_agent_handler, AgentHandlerRuntime, HandlerMotorPublisher, HandlerVisualizationPublisher,
+    build_agent_handler, AgentHandlerRuntime, HandlerMotorPublisher,
+    HandlerVisualizationPublisher, RegistrationDeviceRegistrationsRx,
 };
+use feagi_api::common::agent_registration::auto_create_cortical_areas_from_device_registrations;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::FeagiConfig;
@@ -33,6 +36,8 @@ pub struct FeagiComponents {
     pub agent_handler: Arc<ParkingMutex<FeagiAgentHandler>>,
     pub agent_registry: Arc<RwLock<AgentRegistry>>,
     pub agent_runtime: AgentHandlerRuntime,
+    /// Receiver for device_registrations from ZMQ/WS registration hook (consumed in start_http_server).
+    pub registration_rx: RefCell<Option<RegistrationDeviceRegistrationsRx>>,
 }
 
 /// Initialize all core FEAGI components
@@ -84,7 +89,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
 
     // Initialize agent handler (transport servers)
     info!("  Creating agent handler...");
-    let agent_handler = Arc::new(ParkingMutex::new(build_agent_handler(config)?));
+    let (handler, registration_rx) = build_agent_handler(config)?;
+    let agent_handler = Arc::new(ParkingMutex::new(handler));
     let agent_registry = Arc::new(RwLock::new(AgentRegistry::with_defaults()));
     let agent_runtime = AgentHandlerRuntime::start(Arc::clone(&agent_handler), Arc::clone(&npu));
     info!("    ✓ Agent handler created");
@@ -122,6 +128,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         agent_handler,
         agent_registry,
         agent_runtime,
+        registration_rx: RefCell::new(Some(registration_rx)),
     })
 }
 
@@ -212,6 +219,17 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         agent_connectors: ApiState::init_agent_connectors(),
         agent_registration_handler: registration_handler,
     };
+
+    // Spawn task to run auto IPU/OPU creation for ZMQ/WS registrations (device_registrations from hook)
+    if let Some(mut rx) = components.registration_rx.borrow_mut().take() {
+        let state = api_state.clone();
+        tokio::spawn(async move {
+            while let Some(device_registrations) = rx.recv().await {
+                auto_create_cortical_areas_from_device_registrations(&state, &device_registrations)
+                    .await;
+            }
+        });
+    }
 
     // Start HTTP API server
     let api_port = config.api.port;

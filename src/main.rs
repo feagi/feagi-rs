@@ -19,9 +19,12 @@ use clap::Parser;
 #[cfg(feature = "plasticity")]
 use feagi::plasticity_runtime::wire_plasticity_callbacks;
 use feagi::agent_io::{
-    build_agent_handler, AgentHandlerRuntime, HandlerMotorPublisher, HandlerVisualizationPublisher,
+    build_agent_handler, AgentHandlerRuntime, HandlerMotorPublisher,
+    HandlerVisualizationPublisher, RegistrationDeviceRegistrationsRx,
 };
+use feagi_api::common::agent_registration::auto_create_cortical_areas_from_device_registrations;
 use parking_lot::RwLock;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -297,6 +300,7 @@ struct FeagiComponents {
     #[cfg(not(feature = "plasticity"))]
     memory_stats_cache: Option<()>,
     use_post_burst_processor: bool,
+    registration_rx: RefCell<Option<RegistrationDeviceRegistrationsRx>>,
 }
 
 /// Initialize all core FEAGI components
@@ -406,7 +410,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
     // Initialize agent handler (transport servers)
     info!("  Creating agent handler...");
-    let agent_handler = Arc::new(parking_lot::Mutex::new(build_agent_handler(config)?));
+    let (handler, registration_rx) = build_agent_handler(config)?;
+    let agent_handler = Arc::new(parking_lot::Mutex::new(handler));
     let agent_registry = Arc::new(RwLock::new(AgentRegistry::with_defaults()));
     let agent_runtime = AgentHandlerRuntime::start(Arc::clone(&agent_handler), Arc::clone(&npu));
     info!("    ✓ Agent handler created");
@@ -511,6 +516,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         plasticity_executor,
         memory_stats_cache,
         use_post_burst_processor,
+        registration_rx: RefCell::new(Some(registration_rx)),
     })
 }
 
@@ -654,6 +660,17 @@ async fn start_services(
         agent_connectors: ApiState::init_agent_connectors(),
         agent_registration_handler: registration_handler,
     };
+
+    // Spawn task to run auto IPU/OPU creation for ZMQ/WS registrations (device_registrations from hook)
+    if let Some(mut rx) = components.registration_rx.borrow_mut().take() {
+        let state = api_state.clone();
+        tokio::spawn(async move {
+            while let Some(device_registrations) = rx.recv().await {
+                auto_create_cortical_areas_from_device_registrations(&state, &device_registrations)
+                    .await;
+            }
+        });
+    }
 
     // Start HTTP API server (before genome load in case it hangs)
     let api_port = args.api_port.unwrap_or(config.api.port);

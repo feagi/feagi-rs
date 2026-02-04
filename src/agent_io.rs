@@ -81,10 +81,32 @@ impl AgentHandlerRuntime {
     }
 }
 
+/// Receiver for device_registrations from ZMQ/WS registrations (for auto IPU/OPU creation).
+pub type RegistrationDeviceRegistrationsRx = tokio::sync::mpsc::Receiver<serde_json::Value>;
+
 /// Build and configure a FeagiAgentHandler based on FEAGI config.
-pub fn build_agent_handler(config: &FeagiConfig) -> Result<FeagiAgentHandler> {
+/// Returns the handler and a receiver for device_registrations sent by the registration hook
+/// (ZMQ/WS path); the host should spawn a task that receives and runs auto_create.
+pub fn build_agent_handler(
+    config: &FeagiConfig,
+) -> Result<(FeagiAgentHandler, RegistrationDeviceRegistrationsRx)> {
     let mut handler =
         FeagiAgentHandler::new_with_config(Box::new(DummyAuth {}), config.clone());
+
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    let hook: Arc<
+        dyn Fn(
+                feagi_serialization::SessionID,
+                feagi_agent::registration::AgentDescriptor,
+                Option<serde_json::Value>,
+            ) + Send
+            + Sync,
+    > = Arc::new(move |_session_id, _descriptor, device_registrations| {
+        if let Some(dr) = device_registrations {
+            let _ = tx.try_send(dr);
+        }
+    });
+    handler.set_registration_hook(hook);
 
     let available_transports: Vec<String> = config
         .transports
@@ -155,7 +177,7 @@ pub fn build_agent_handler(config: &FeagiConfig) -> Result<FeagiAgentHandler> {
     }
 
     info!("    ✓ Agent handler configured");
-    Ok(handler)
+    Ok((handler, rx))
 }
 
 /// Publisher that forwards visualization data to FeagiAgentHandler transports.
