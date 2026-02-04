@@ -81,30 +81,83 @@ impl AgentHandlerRuntime {
     }
 }
 
-/// Receiver for device_registrations from ZMQ/WS registrations (for auto IPU/OPU creation).
-pub type RegistrationDeviceRegistrationsRx = tokio::sync::mpsc::Receiver<serde_json::Value>;
+use feagi_agent::registration::{AgentCapabilities, AgentDescriptor};
+use feagi_serialization::SessionID;
+
+/// Payload sent by the registration hook on each ZMQ/WS agent registration.
+/// Used for auto IPU/OPU creation (device_registrations) and session-aware motor/visualization subscriptions.
+#[derive(Clone, Debug)]
+pub struct RegistrationHookPayload {
+    pub session_id: SessionID,
+    pub agent_descriptor: AgentDescriptor,
+    pub capabilities: Vec<AgentCapabilities>,
+    pub device_registrations: Option<serde_json::Value>,
+}
+
+/// Receiver for registration hook payloads (ZMQ/WS path).
+pub type RegistrationHookRx = tokio::sync::mpsc::Receiver<RegistrationHookPayload>;
+
+/// Legacy alias for compatibility; prefer `RegistrationHookRx`.
+pub type RegistrationDeviceRegistrationsRx = RegistrationHookRx;
+
+/// Default visualization rate (Hz) for agents that subscribe to neuron visualizations.
+const DEFAULT_VIZ_RATE_HZ: f64 = 20.0;
+
+/// Registers motor and visualization subscriptions with the burst runner for a ZMQ/WS-registered agent.
+/// Uses session_id as the agent_id key. Call from the registration-hook consumer task.
+pub fn register_agent_subscriptions(
+    burst_runner: &std::sync::Arc<parking_lot::RwLock<feagi_npu_burst_engine::BurstLoopRunner>>,
+    payload: &RegistrationHookPayload,
+) {
+    let b = payload.session_id.bytes();
+    let agent_id = format!(
+        "zmq-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]
+    );
+    if payload
+        .capabilities
+        .contains(&AgentCapabilities::ReceiveMotorData)
+    {
+        burst_runner.write().register_motor_subscriptions(
+            agent_id.clone(),
+            ahash::AHashSet::new(),
+        );
+    }
+    if payload
+        .capabilities
+        .contains(&AgentCapabilities::ReceiveNeuronVisualizations)
+    {
+        if let Err(e) = burst_runner
+            .write()
+            .register_visualization_subscriptions_with_rate(agent_id, DEFAULT_VIZ_RATE_HZ)
+        {
+            warn!("Failed to register visualization subscription: {}", e);
+        }
+    }
+}
 
 /// Build and configure a FeagiAgentHandler based on FEAGI config.
-/// Returns the handler and a receiver for device_registrations sent by the registration hook
-/// (ZMQ/WS path); the host should spawn a task that receives and runs auto_create.
+/// Returns the handler and a receiver for registration payloads (session, descriptor, capabilities, device_registrations).
+/// The host should spawn a task that receives payloads and runs auto_create + registers motor/visualization subscriptions.
 pub fn build_agent_handler(
     config: &FeagiConfig,
-) -> Result<(FeagiAgentHandler, RegistrationDeviceRegistrationsRx)> {
+) -> Result<(FeagiAgentHandler, RegistrationHookRx)> {
     let mut handler =
         FeagiAgentHandler::new_with_config(Box::new(DummyAuth {}), config.clone());
 
     let (tx, rx) = tokio::sync::mpsc::channel(32);
     let hook: Arc<
-        dyn Fn(
-                feagi_serialization::SessionID,
-                feagi_agent::registration::AgentDescriptor,
-                Option<serde_json::Value>,
-            ) + Send
+        dyn Fn(SessionID, AgentDescriptor, Vec<AgentCapabilities>, Option<serde_json::Value>)
+            + Send
             + Sync,
-    > = Arc::new(move |_session_id, _descriptor, device_registrations| {
-        if let Some(dr) = device_registrations {
-            let _ = tx.try_send(dr);
-        }
+    > = Arc::new(move |session_id, agent_descriptor, capabilities, device_registrations| {
+        let payload = RegistrationHookPayload {
+            session_id,
+            agent_descriptor,
+            capabilities,
+            device_registrations,
+        };
+        let _ = tx.try_send(payload);
     });
     handler.set_registration_hook(hook);
 

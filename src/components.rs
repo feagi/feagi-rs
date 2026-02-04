@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tracing::{error, info, warn};
 
 use crate::agent_io::{
-    build_agent_handler, AgentHandlerRuntime, HandlerMotorPublisher,
+    build_agent_handler, register_agent_subscriptions, AgentHandlerRuntime, HandlerMotorPublisher,
     HandlerVisualizationPublisher, RegistrationDeviceRegistrationsRx,
 };
 use feagi_api::common::agent_registration::auto_create_cortical_areas_from_device_registrations;
@@ -220,13 +220,16 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         agent_registration_handler: registration_handler,
     };
 
-    // Spawn task to run auto IPU/OPU creation for ZMQ/WS registrations (device_registrations from hook)
+    // Spawn task: on each ZMQ/WS registration payload, run auto IPU/OPU creation and register motor/visualization subscriptions
     if let Some(mut rx) = components.registration_rx.borrow_mut().take() {
         let state = api_state.clone();
+        let burst_runner = components.burst_runner.clone();
         tokio::spawn(async move {
-            while let Some(device_registrations) = rx.recv().await {
-                auto_create_cortical_areas_from_device_registrations(&state, &device_registrations)
-                    .await;
+            while let Some(payload) = rx.recv().await {
+                if let Some(ref dr) = payload.device_registrations {
+                    auto_create_cortical_areas_from_device_registrations(&state, dr).await;
+                }
+                register_agent_subscriptions(&burst_runner, &payload);
             }
         });
     }
