@@ -142,11 +142,11 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
 
@@ -290,11 +290,11 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
 
@@ -446,11 +446,11 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
 
@@ -600,11 +600,11 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
 
@@ -754,11 +754,11 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
 
