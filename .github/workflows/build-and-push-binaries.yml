@@ -150,6 +150,19 @@ jobs:
             rm -f ".cargo/config.toml"
           fi
 
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
+
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
         env:
@@ -157,11 +170,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python << 'PY'
           import json
@@ -298,6 +317,19 @@ jobs:
             rm -f ".cargo/config.toml"
           fi
 
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
+
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
         env:
@@ -305,11 +337,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python3 << 'PY'
           import json
@@ -454,6 +492,19 @@ jobs:
             rm -f ".cargo/config.toml"
           fi
 
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
+
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
         env:
@@ -461,11 +512,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python3 << 'PY'
           import json
@@ -608,6 +665,19 @@ jobs:
             rm -f ".cargo/config.toml"
           fi
 
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
+
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
         env:
@@ -615,11 +685,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python3 << 'PY'
           import json
@@ -762,6 +838,19 @@ jobs:
             rm -f ".cargo/config.toml"
           fi
 
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
+
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
         env:
@@ -769,11 +858,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python << 'PY'
           import json
