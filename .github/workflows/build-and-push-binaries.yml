@@ -1226,7 +1226,81 @@ jobs:
           fi
 
   # ============================================================================
-  # Disabled: GitHub Release creation (manual only)
+  # Upload built binaries to the feagi-rs release that triggered this workflow
+  # (so feagi-desktop and others can gh release download from feagi/feagi-rs)
+  # ============================================================================
+  upload-release-assets-feagi-rs:
+    name: Upload release assets to feagi-rs
+    needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+
+      - name: Checkout feagi-rs (for config file)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install zip for Windows packaging
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
+      - name: Package binaries for release
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "Packaging binaries for feagi-rs release v${VERSION}..."
+          mkdir -p release-assets
+          if [ -f "binaries/feagi-linux-x86_64/feagi" ]; then
+            mkdir -p release-package-linux-x86_64
+            cp binaries/feagi-linux-x86_64/feagi release-package-linux-x86_64/
+            cp feagi_configuration.toml release-package-linux-x86_64/ 2>/dev/null || true
+            cd release-package-linux-x86_64 && tar -czf ../release-assets/feagi-linux-x86_64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-linux-aarch64/feagi" ]; then
+            mkdir -p release-package-linux-aarch64
+            cp binaries/feagi-linux-aarch64/feagi release-package-linux-aarch64/
+            cp feagi_configuration.toml release-package-linux-aarch64/ 2>/dev/null || true
+            cd release-package-linux-aarch64 && tar -czf ../release-assets/feagi-linux-aarch64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-darwin-x86_64/feagi" ]; then
+            mkdir -p release-package-darwin-x86_64
+            cp binaries/feagi-darwin-x86_64/feagi release-package-darwin-x86_64/
+            cp feagi_configuration.toml release-package-darwin-x86_64/ 2>/dev/null || true
+            cd release-package-darwin-x86_64 && tar -czf ../release-assets/feagi-macos-x86_64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
+            mkdir -p release-package-darwin-aarch64
+            cp binaries/feagi-darwin-aarch64/feagi release-package-darwin-aarch64/
+            cp feagi_configuration.toml release-package-darwin-aarch64/ 2>/dev/null || true
+            cd release-package-darwin-aarch64 && tar -czf ../release-assets/feagi-macos-arm64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-windows-x86_64/feagi.exe" ]; then
+            mkdir -p release-package-windows-x86_64
+            cp binaries/feagi-windows-x86_64/feagi.exe release-package-windows-x86_64/
+            cp feagi_configuration.toml release-package-windows-x86_64/ 2>/dev/null || true
+            cd release-package-windows-x86_64 && zip -r ../release-assets/feagi-windows-x86_64-v${VERSION}.zip * && cd ..
+          fi
+          ls -la release-assets/
+
+      - name: Upload assets to feagi-rs release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: release-assets/*
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # ============================================================================
+  # Disabled: GitHub Release creation in feagi/feagi (manual only)
   # ============================================================================
   create-release:
     name: Create GitHub Release
