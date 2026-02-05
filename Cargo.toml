@@ -87,8 +87,8 @@ tempfile = "3.8"
 # JSON output
 serde_json = "1.0"
 
-# Example dependencies (feagi-agent comes from [dependencies] + patch)
-feagi-sensorimotor = { path = "../feagi-core/crates/feagi-sensorimotor", version = "0.0.1-beta.8" }
+# Example dependencies (use crates.io; local dev can override via .cargo/config.toml [patch.crates-io])
+feagi-sensorimotor = { version = "0.0.1-beta.8" }
 
 [profile.release]
 opt-level = 3
@@ -126,23 +126,8 @@ path = "tests/profile_cpu.rs"
 name = "profile_storage"
 path = "tests/profile_storage.rs"
 
-[patch.crates-io]
-feagi-api = { path = "../feagi-core/crates/feagi-api" }
-feagi-io = { path = "../feagi-core/crates/feagi-io" }
-feagi-services = { path = "../feagi-core/crates/feagi-services" }
-feagi-config = { path = "../feagi-core/crates/feagi-config" }
-feagi-structures = { path = "../feagi-core/crates/feagi-structures" }
-feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
-feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
-feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
-feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
-feagi-npu-neural = { path = "../feagi-core/crates/feagi-npu/neural" }
-feagi-npu-runtime = { path = "../feagi-core/crates/feagi-npu/runtime" }
-feagi-npu-burst-engine = { path = "../feagi-core/crates/feagi-npu/burst-engine" }
-feagi-npu-plasticity = { path = "../feagi-core/crates/feagi-npu/plasticity" }
-feagi-agent = { path = "../feagi-core/crates/feagi-agent" }
-feagi-sensorimotor = { path = "../feagi-core/crates/feagi-sensorimotor" }
-feagi-serialization = { path = "../feagi-core/crates/feagi-serialization" }
+# Local dev: use .cargo/config.toml with [patch.crates-io] to override with ../feagi-core (see .cargo/config.toml.example).
+# CI uses crates.io only (no patch in this file).
 
 [features]
 default = ["cli", "plasticity"]
