@@ -35,7 +35,7 @@ feagi-brain-development = { version = "0.0.1-beta.8" }
 feagi-evolutionary = { version = "0.0.1-beta.8" }
 feagi-services = { version = "0.0.1-beta.8" }
 feagi-api = { version = "0.0.1-beta.8", features = ["services"] }
-feagi-io = { path = "../feagi-core/crates/feagi-io", version = "0.0.1-beta.8", features = ["zmq-transport", "ws-transport"] }
+feagi-io = { version = "0.0.1-beta.8", features = ["zmq-transport", "ws-transport"] }
 feagi-state-manager = { version = "0.0.1-beta.8" }
 feagi-npu-plasticity = { version = "0.0.1-beta.10" }
 feagi-agent = { version = "0.0.1-beta.8" }
