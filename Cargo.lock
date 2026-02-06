@@ -5654,3 +5654,63 @@ checksum = "410e9ecef634c709e3831c2cfdb8d9c32164fae1c67496d5b68fff728eec37fe"
 dependencies = [
  "zune-core 0.5.1",
 ]
+
+[[patch.unused]]
+name = "feagi-agent"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-api"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-brain-development"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-config"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-evolutionary"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-io"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-npu-burst-engine"
+version = "0.0.1-beta.10"
+
+[[patch.unused]]
+name = "feagi-npu-neural"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-npu-plasticity"
+version = "0.0.1-beta.10"
+
+[[patch.unused]]
+name = "feagi-npu-runtime"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-observability"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-serialization"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-services"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-state-manager"
+version = "0.0.1-beta.8"
+
+[[patch.unused]]
+name = "feagi-structures"
+version = "0.0.1-beta.8"
