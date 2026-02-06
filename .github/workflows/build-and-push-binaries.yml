@@ -142,13 +142,26 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
+
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
 
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
@@ -157,11 +170,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python << 'PY'
           import json
@@ -205,12 +224,12 @@ jobs:
           if release_type == "production":
             print("OK: production has no pre-release feagi-* versions")
           PY
-      
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
-      
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -221,7 +240,7 @@ jobs:
           key: linux-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             linux-x86_64-cargo-deps-
-      
+
       - name: Cache build target directory
         uses: actions/cache@v4
         with:
@@ -230,7 +249,7 @@ jobs:
           restore-keys: |
             linux-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
             linux-x86_64-target-
-      
+
       - name: Setup sccache
         shell: bash
         run: |
@@ -246,7 +265,7 @@ jobs:
           echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
           
           echo "✅ sccache installed and configured"
-      
+
       - name: Cache sccache storage
         uses: actions/cache@v4
         with:
@@ -254,7 +273,7 @@ jobs:
           key: linux-x86_64-sccache-${{ github.run_id }}
           restore-keys: |
             linux-x86_64-sccache-
-      
+
       - name: Build FEAGI
         shell: bash
         run: |
@@ -268,7 +287,7 @@ jobs:
             cargo build --locked --release --target x86_64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
-      
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -290,13 +309,26 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
+
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
 
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
@@ -305,11 +337,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python3 << 'PY'
           import json
@@ -353,18 +391,18 @@ jobs:
           if release_type == "production":
             print("OK: production has no pre-release feagi-* versions")
           PY
-      
+
       - name: Setup Rust with aarch64 target
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
-      
+
       - name: Install cross-compilation toolchain
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-      
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -375,7 +413,7 @@ jobs:
           key: linux-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             linux-aarch64-cargo-deps-
-      
+
       - name: Cache build target directory
         uses: actions/cache@v4
         with:
@@ -384,7 +422,7 @@ jobs:
           restore-keys: |
             linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
             linux-aarch64-target-
-      
+
       - name: Configure cargo for vendored OpenSSL
         shell: bash
         run: |
@@ -405,7 +443,7 @@ jobs:
           echo "[dependencies.openssl-sys]" >> Cargo.toml
           echo 'version = "0.9"' >> Cargo.toml
           echo 'features = ["vendored"]' >> Cargo.toml
-      
+
       - name: Build FEAGI with vendored OpenSSL
         shell: bash
         env:
@@ -424,7 +462,7 @@ jobs:
             cargo build --release --target aarch64-unknown-linux-gnu
             ls -lh "$BINARY_PATH"
           fi
-      
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -446,13 +484,26 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
+
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
 
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
@@ -461,11 +512,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python3 << 'PY'
           import json
@@ -509,12 +566,12 @@ jobs:
           if release_type == "production":
             print("OK: production has no pre-release feagi-* versions")
           PY
-      
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
-      
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -525,7 +582,7 @@ jobs:
           key: darwin-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             darwin-x86_64-cargo-deps-
-      
+
       - name: Cache build target directory
         uses: actions/cache@v4
         with:
@@ -534,7 +591,7 @@ jobs:
           restore-keys: |
             darwin-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
             darwin-x86_64-target-
-      
+
       - name: Setup sccache
         shell: bash
         run: |
@@ -556,7 +613,7 @@ jobs:
           echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
           
           echo "✅ sccache installed and configured"
-      
+
       - name: Cache sccache storage
         uses: actions/cache@v4
         with:
@@ -564,7 +621,7 @@ jobs:
           key: darwin-x86_64-sccache-${{ github.run_id }}
           restore-keys: |
             darwin-x86_64-sccache-
-      
+
       - name: Build FEAGI
         shell: bash
         run: |
@@ -578,7 +635,7 @@ jobs:
             cargo build --locked --release --target x86_64-apple-darwin
             ls -lh "$BINARY_PATH"
           fi
-      
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -600,13 +657,26 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
+
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
 
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
@@ -615,11 +685,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python3 << 'PY'
           import json
@@ -663,12 +739,12 @@ jobs:
           if release_type == "production":
             print("OK: production has no pre-release feagi-* versions")
           PY
-      
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
-      
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -679,7 +755,7 @@ jobs:
           key: darwin-aarch64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             darwin-aarch64-cargo-deps-
-      
+
       - name: Cache build target directory
         uses: actions/cache@v4
         with:
@@ -688,7 +764,7 @@ jobs:
           restore-keys: |
             darwin-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
             darwin-aarch64-target-
-      
+
       - name: Setup sccache
         shell: bash
         run: |
@@ -710,7 +786,7 @@ jobs:
           echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
           
           echo "✅ sccache installed and configured"
-      
+
       - name: Cache sccache storage
         uses: actions/cache@v4
         with:
@@ -718,7 +794,7 @@ jobs:
           key: darwin-aarch64-sccache-${{ github.run_id }}
           restore-keys: |
             darwin-aarch64-sccache-
-      
+
       - name: Build FEAGI
         shell: bash
         run: |
@@ -732,7 +808,7 @@ jobs:
             cargo build --locked --release --target aarch64-apple-darwin
             ls -lh "$BINARY_PATH"
           fi
-      
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -754,13 +830,26 @@ jobs:
           ref: ${{ needs.determine-config.outputs.source_branch }}
           fetch-depth: 0
 
-      - name: Disable local path patches (CI must use crates.io)
+      - name: Disable local path patches (CI must use crates.io only)
         shell: bash
         run: |
-          if [ -f ".cargo/config.toml" ] && grep -q "^\[patch\.crates-io\]" ".cargo/config.toml"; then
-            echo "Removing .cargo/config.toml (contains [patch.crates-io]) to force crates.io resolution"
+          if [ -f ".cargo/config.toml" ]; then
+            echo "Removing .cargo/config.toml so CI resolves all deps from crates.io (no path/patch)."
             rm -f ".cargo/config.toml"
           fi
+
+      - name: Log dependency resolution context (root-cause)
+        shell: bash
+        run: |
+          echo "=== Dependency resolution context (ref: ${{ needs.determine-config.outputs.source_branch }}) ==="
+          echo ".cargo/config.toml present after patch step: $([ -f .cargo/config.toml ] && echo yes || echo no)"
+          echo "Cargo.toml [patch] or path deps:"
+          grep -n "\[patch" Cargo.toml 2>/dev/null || echo "  (none)"
+          grep -nE "path\s*=" Cargo.toml 2>/dev/null || echo "  (no path= in Cargo.toml)"
+          echo "Cargo.lock path sources for feagi-* (path+ or source with path):"
+          grep -B1 "path+" Cargo.lock 2>/dev/null | head -20 || true
+          (grep -A1 'name = "feagi-' Cargo.lock | grep -E "source|path" || true) | head -30
+          echo "=== End context ==="
 
       - name: Verify feagi-* dependencies resolve from crates.io (and production forbids pre-release)
         shell: bash
@@ -769,11 +858,17 @@ jobs:
         run: |
           set -euo pipefail
           METADATA_FILE="cargo-metadata.json"
-          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE"; then
-            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date for this branch/ref)."
-            echo "Fix: regenerate and commit Cargo.lock (e.g., 'cargo generate-lockfile') before running CI with --locked."
+          CARGO_STDERR="$(mktemp)"
+          if ! cargo metadata --locked --format-version=1 > "$METADATA_FILE" 2> "$CARGO_STDERR"; then
+            echo "ERROR: cargo metadata failed (likely Cargo.lock out of date or path/patch still active)."
+            echo "--- Full cargo metadata stderr ---"
+            cat "$CARGO_STDERR"
+            echo "--- End ---"
+            echo "Fix: ensure Cargo.toml has no [patch.crates-io] and no path deps; ensure Cargo.lock is registry-only; regenerate with: cargo generate-lockfile (without .cargo/config.toml patch)."
+            rm -f "$CARGO_STDERR"
             exit 1
           fi
+          rm -f "$CARGO_STDERR"
 
           python << 'PY'
           import json
@@ -817,12 +912,12 @@ jobs:
           if release_type == "production":
             print("OK: production has no pre-release feagi-* versions")
           PY
-      
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-      
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -833,7 +928,7 @@ jobs:
           key: windows-x86_64-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             windows-x86_64-cargo-deps-
-      
+
       - name: Cache build target directory
         uses: actions/cache@v4
         with:
@@ -842,7 +937,7 @@ jobs:
           restore-keys: |
             windows-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
             windows-x86_64-target-
-      
+
       - name: Setup sccache
         shell: bash
         run: |
@@ -876,7 +971,7 @@ jobs:
           
           echo "✅ sccache installed and configured"
           echo "   Absolute path: $SCCACHE_ABS"
-      
+
       - name: Cache sccache storage
         uses: actions/cache@v4
         with:
@@ -884,7 +979,7 @@ jobs:
           key: windows-x86_64-sccache-${{ github.run_id }}
           restore-keys: |
             windows-x86_64-sccache-
-      
+
       - name: Build FEAGI
         shell: bash
         run: |
@@ -898,7 +993,7 @@ jobs:
             cargo build --locked --release --target x86_64-pc-windows-msvc
             ls -lh "$BINARY_PATH"
           fi
-      
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -914,7 +1009,7 @@ jobs:
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
     if: always()
-    
+
     steps:
       - name: Determine source commit
         id: source_info
@@ -930,12 +1025,12 @@ jobs:
           
           echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
           echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
-      
+
       - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
           path: binaries
-      
+
       - name: Determine which platforms were built
         id: platforms
         shell: bash
@@ -961,7 +1056,7 @@ jobs:
           echo "platforms=${PLATFORMS_STR}" >> $GITHUB_OUTPUT
           echo "platform_count=${#PLATFORMS[@]}" >> $GITHUB_OUTPUT
           echo "Built platforms: ${PLATFORMS_STR}"
-      
+
       - name: Checkout public repo
         uses: actions/checkout@v4
         with:
@@ -970,7 +1065,7 @@ jobs:
           path: public-repo
           ref: staging
           fetch-depth: 0
-      
+
       - name: Create branch name
         id: branch_name
         shell: bash
@@ -981,7 +1076,7 @@ jobs:
             BRANCH_NAME="update-binaries-$(date +%Y%m%d-%H%M%S)-$(echo ${{ steps.source_info.outputs.source_sha }} | cut -c1-7)"
           fi
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-      
+
       - name: Create and checkout branch
         shell: bash
         run: |
@@ -991,7 +1086,7 @@ jobs:
           # Configure remote URL with token for push operations
           git remote set-url origin https://${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}@github.com/feagi/feagi.git
           git checkout -b ${{ steps.branch_name.outputs.branch_name }}
-      
+
       - name: Copy binaries
         shell: bash
         run: |
@@ -1026,7 +1121,7 @@ jobs:
             mkdir -p feagi/bin/windows-x86_64
             cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
           fi
-      
+
       - name: Commit changes
         shell: bash
         run: |
@@ -1053,18 +1148,18 @@ jobs:
           fi
           
           git commit -m "$COMMIT_MSG"
-      
+
       - name: Push branch
         shell: bash
         run: |
           cd public-repo
           git push origin ${{ steps.branch_name.outputs.branch_name }}
-      
+
       - name: Setup GitHub CLI
         shell: bash
         run: |
           gh auth login --with-token <<< "${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}"
-      
+
       - name: Generate PR body
         id: pr_body
         shell: bash
@@ -1098,7 +1193,7 @@ jobs:
           ---
           *This PR was automatically created by GitHub Actions*
           EOF
-      
+
       - name: Create Pull Request
         id: create_pr
         shell: bash
@@ -1126,13 +1221,13 @@ jobs:
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
     if: false
-    
+
     steps:
       - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
           path: binaries
-      
+
       - name: Checkout public repo
         uses: actions/checkout@v4
         with:
@@ -1141,7 +1236,7 @@ jobs:
           path: public-repo
           ref: staging
           fetch-depth: 0
-      
+
       - name: Copy binaries
         shell: bash
         run: |
@@ -1181,7 +1276,7 @@ jobs:
             mkdir -p feagi/bin/windows-x86_64
             cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
           fi
-      
+
       - name: Commit and push binaries
         shell: bash
         run: |
@@ -1226,7 +1321,81 @@ jobs:
           fi
 
   # ============================================================================
-  # Disabled: GitHub Release creation (manual only)
+  # Upload built binaries to the feagi-rs release that triggered this workflow
+  # (so feagi-desktop and others can gh release download from feagi/feagi-rs)
+  # ============================================================================
+  upload-release-assets-feagi-rs:
+    name: Upload release assets to feagi-rs
+    needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+
+      - name: Checkout feagi-rs (for config file)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install zip for Windows packaging
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
+      - name: Package binaries for release
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "Packaging binaries for feagi-rs release v${VERSION}..."
+          mkdir -p release-assets
+          if [ -f "binaries/feagi-linux-x86_64/feagi" ]; then
+            mkdir -p release-package-linux-x86_64
+            cp binaries/feagi-linux-x86_64/feagi release-package-linux-x86_64/
+            cp feagi_configuration.toml release-package-linux-x86_64/ 2>/dev/null || true
+            cd release-package-linux-x86_64 && tar -czf ../release-assets/feagi-linux-x86_64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-linux-aarch64/feagi" ]; then
+            mkdir -p release-package-linux-aarch64
+            cp binaries/feagi-linux-aarch64/feagi release-package-linux-aarch64/
+            cp feagi_configuration.toml release-package-linux-aarch64/ 2>/dev/null || true
+            cd release-package-linux-aarch64 && tar -czf ../release-assets/feagi-linux-aarch64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-darwin-x86_64/feagi" ]; then
+            mkdir -p release-package-darwin-x86_64
+            cp binaries/feagi-darwin-x86_64/feagi release-package-darwin-x86_64/
+            cp feagi_configuration.toml release-package-darwin-x86_64/ 2>/dev/null || true
+            cd release-package-darwin-x86_64 && tar -czf ../release-assets/feagi-macos-x86_64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
+            mkdir -p release-package-darwin-aarch64
+            cp binaries/feagi-darwin-aarch64/feagi release-package-darwin-aarch64/
+            cp feagi_configuration.toml release-package-darwin-aarch64/ 2>/dev/null || true
+            cd release-package-darwin-aarch64 && tar -czf ../release-assets/feagi-macos-arm64-v${VERSION}.tar.gz * && cd ..
+          fi
+          if [ -f "binaries/feagi-windows-x86_64/feagi.exe" ]; then
+            mkdir -p release-package-windows-x86_64
+            cp binaries/feagi-windows-x86_64/feagi.exe release-package-windows-x86_64/
+            cp feagi_configuration.toml release-package-windows-x86_64/ 2>/dev/null || true
+            cd release-package-windows-x86_64 && zip -r ../release-assets/feagi-windows-x86_64-v${VERSION}.zip * && cd ..
+          fi
+          ls -la release-assets/
+
+      - name: Upload assets to feagi-rs release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: release-assets/*
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # ============================================================================
+  # Disabled: GitHub Release creation in feagi/feagi (manual only)
   # ============================================================================
   create-release:
     name: Create GitHub Release
