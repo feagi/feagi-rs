@@ -1242,25 +1242,28 @@ jobs:
 
   # ============================================================================
   # Upload built binaries to the feagi-rs release that triggered this workflow
-  # (so feagi-desktop and others can gh release download from feagi/feagi-rs)
+  # (so feagi-desktop and others can gh release download from feagi/feagi-rs).
+  # Only runs when the workflow is triggered by "Publish release" (release event).
+  # If triggered by "Run workflow" (workflow_dispatch), this job is skipped.
+  # Requires all five build jobs to succeed; if any build fails, this job is skipped.
   # ============================================================================
   upload-release-assets-feagi-rs:
     name: Upload release assets to feagi-rs
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' && !cancelled() && !failure()
     permissions:
       contents: write
     steps:
-      - name: Download all binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: binaries
-
       - name: Checkout feagi-rs (for config file)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
 
       - name: Install zip for Windows packaging
         run: |
@@ -1304,10 +1307,16 @@ jobs:
             cd release-package-windows-x86_64 && zip -r ../release-assets/feagi-windows-x86_64-v${VERSION}.zip * && cd ..
           fi
           ls -la release-assets/
+          N=$(find release-assets -type f | wc -l)
+          if [ "$N" -eq 0 ]; then
+            echo "ERROR: No release assets produced. Check that all build jobs succeeded and artifacts were downloaded."
+            exit 1
+          fi
 
       - name: Upload assets to feagi-rs release
         uses: softprops/action-gh-release@v2
         with:
+          repository: ${{ github.repository }}
           tag_name: ${{ github.event.release.tag_name }}
           files: release-assets/*
           make_latest: true
