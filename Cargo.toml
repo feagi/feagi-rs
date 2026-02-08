@@ -30,14 +30,14 @@ feagi-structures = { version = "0.0.1-beta.9" }
 feagi-npu-runtime = { version = "0.0.1-beta.9", features = ["std"] }
 feagi-config = { version = "0.0.1-beta.9" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "0.0.1-beta.9" }
+feagi-npu-burst-engine = { version = "0.0.1-beta.11" }
 feagi-brain-development = { version = "0.0.1-beta.9" }
 feagi-evolutionary = { version = "0.0.1-beta.9" }
 feagi-services = { version = "0.0.1-beta.9" }
 feagi-api = { version = "0.0.1-beta.9", features = ["services"] }
-feagi-io = { version = "0.0.1-beta.9", features = ["websocket-transport"] }
+feagi-io = { version = "0.0.1-beta.10", features = ["websocket-transport"] }
 feagi-state-manager = { version = "0.0.1-beta.9" }
-feagi-npu-plasticity = { version = "0.0.1-beta.9" }
+feagi-npu-plasticity = { version = "0.0.1-beta.11" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
