@@ -8,6 +8,8 @@ use parking_lot::RwLock;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
+use crate::network_provider::FeagiNetworkConnectionInfoProvider;
+use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::FeagiConfig;
@@ -336,7 +338,17 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
 
     info!("    ✓ FEAGI session timestamp: {}", feagi_session_timestamp);
 
+    let api_port = config.api.port;
+    let api_host = config.api.host.clone();
+    let network_provider = Arc::new(FeagiNetworkConnectionInfoProvider {
+        api_host: api_host.clone(),
+        api_port,
+        pns: Arc::clone(&components.pns),
+        viz_transport_policy: config.visualization.transport.clone(),
+    }) as Arc<dyn NetworkConnectionInfoProvider>;
+
     let api_state = ApiState {
+        network_connection_info_provider: Some(network_provider),
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
         genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
         connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
@@ -359,9 +371,6 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     };
 
     // Start HTTP API server
-    let api_port = config.api.port;
-    let api_host = config.api.host.clone();
-
     info!("  Starting HTTP API server on {}:{}...", api_host, api_port);
     let app = create_http_server(api_state);
     let addr = format!("{}:{}", api_host, api_port);

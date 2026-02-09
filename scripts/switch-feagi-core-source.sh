@@ -75,7 +75,7 @@ versions = json.loads(os.environ["VERSIONS_JSON"])
 
 for name, version in versions.items():
     pattern = rf'^({re.escape(name)}\s*=\s*\{{[^}}]*version\s*=\s*")[^"]+(")'
-    replacement = rf'\g<1>{version}\g<2>'
+    replacement = rf'\g<1>^{version}\g<2>'
     data, count = re.subn(pattern, replacement, data, flags=re.MULTILINE)
     if count == 0:
         raise SystemExit(f"Failed to update version for {name} in Cargo.toml")
@@ -98,6 +98,8 @@ CRATES=(
   "feagi-state-manager:crates/feagi-state-manager"
   "feagi-npu-plasticity:crates/feagi-npu/plasticity"
   "feagi-observability:crates/feagi-observability"
+  "feagi-agent:crates/feagi-agent"
+  "feagi-sensorimotor:crates/feagi-sensorimotor"
 )
 
 VERSIONS_JSON="{"

@@ -51,6 +51,7 @@ pub use feagi_services::*;
 
 // Internal modules (reused from main.rs initialization logic)
 pub mod components;
+pub mod network_provider;
 pub mod plasticity_runtime;
 pub mod version;
 

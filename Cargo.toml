@@ -22,22 +22,22 @@ required-features = ["cli"]
 
 [dependencies]
 # FEAGI Core Components (crates.io)
-# - Local development can override these with `feagi-rs/.cargo/config.toml` via `[patch.crates-io]`.
-# - Staging should pin exact beta builds via Cargo.lock + `cargo build --locked`.
-# - Main should pin exact stable builds (no `-beta.*`) via Cargo.lock + `cargo build --locked`.
-feagi-npu-neural = { version = "0.0.1-beta.9" }
-feagi-structures = { version = "0.0.1-beta.9" }
-feagi-npu-runtime = { version = "0.0.1-beta.9", features = ["std"] }
-feagi-config = { version = "0.0.1-beta.9" }
+# - Use ^ to pick up latest compatible; run `cargo update` to refresh.
+# - Local dev: override via `feagi-rs/.cargo/config.toml` [patch.crates-io].
+# - CI/release: pin with `cargo build --locked` and Cargo.lock.
+feagi-npu-neural = { version = "^0.0.1-beta.9" }
+feagi-structures = { version = "^0.0.1-beta.9" }
+feagi-npu-runtime = { version = "^0.0.1-beta.9", features = ["std"] }
+feagi-config = { version = "^0.0.1-beta.9" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "0.0.1-beta.11" }
-feagi-brain-development = { version = "0.0.1-beta.9" }
-feagi-evolutionary = { version = "0.0.1-beta.9" }
-feagi-services = { version = "0.0.1-beta.9" }
-feagi-api = { version = "0.0.1-beta.9", features = ["services"] }
-feagi-io = { version = "0.0.1-beta.10", features = ["websocket-transport"] }
-feagi-state-manager = { version = "0.0.1-beta.9" }
-feagi-npu-plasticity = { version = "0.0.1-beta.11" }
+feagi-npu-burst-engine = { version = "^0.0.1-beta.12" }
+feagi-brain-development = { version = "^0.0.1-beta.9" }
+feagi-evolutionary = { version = "^0.0.1-beta.9" }
+feagi-services = { version = "^0.0.1-beta.9" }
+feagi-api = { version = "^0.0.1-beta.9", features = ["services"] }
+feagi-io = { version = "^0.0.1-beta.11", features = ["websocket-transport"] }
+feagi-state-manager = { version = "^0.0.1-beta.9" }
+feagi-npu-plasticity = { version = "^0.0.1-beta.12" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -47,7 +47,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "0.0.1-beta.9" }
+feagi-observability = { version = "^0.0.1-beta.9" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
@@ -80,8 +80,8 @@ tempfile = "3.8"
 serde_json = "1.0"
 
 # Example dependencies
-feagi-agent = { version = "0.0.1-beta.8" }
-feagi-sensorimotor = { version = "0.0.1-beta.8" }
+feagi-agent = { version = "^0.0.1-beta.9" }
+feagi-sensorimotor = { version = "^0.0.1-beta.9" }
 
 [profile.release]
 opt-level = 3

@@ -15,6 +15,8 @@ feagi-services = { path = "../feagi-core/crates/feagi-services" }
 feagi-config = { path = "../feagi-core/crates/feagi-config" }
 feagi-structures = { path = "../feagi-core/crates/feagi-structures" }
 feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
+feagi-agent = { path = "../feagi-core/crates/feagi-agent" }
+feagi-sensorimotor = { path = "../feagi-core/crates/feagi-sensorimotor" }
 feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
 feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
 feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
