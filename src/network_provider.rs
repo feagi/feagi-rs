@@ -1,118 +1,89 @@
-//! Network connection info provider for GET /v1/network/connection_info
+//! Network Connection Info Provider for feagi-rs
 //!
-//! Builds NetworkConnectionInfo from FeagiConfig and IOSystem (PNS) snapshots.
+//! Builds NetworkConnectionInfo from FeagiConfig and FeagiAgentHandler snapshots.
 
 use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
-use feagi_api::v1::{
-    ConnectionInfoApi, ConnectionInfoBluetooth, ConnectionInfoShm, ConnectionInfoStreamStatus,
-    ConnectionInfoUdp, ConnectionInfoWebSocket, ConnectionInfoWebSocketEndpoints,
-    ConnectionInfoWebSocketPorts, ConnectionInfoZmq, ConnectionInfoZmqEndpoints,
-    ConnectionInfoZmqPorts, NetworkConnectionInfo,
-};
-use feagi_io::IOSystem;
-use std::sync::Arc;
+use feagi_api::v1::NetworkConnectionInfo;
+use feagi_agent::server::FeagiAgentHandler;
+use feagi_config::FeagiConfig;
+use std::sync::{Arc, Mutex};
+use tracing::warn;
 
-/// Provider for GET /v1/network/connection_info
 pub struct FeagiNetworkConnectionInfoProvider {
     pub api_host: String,
     pub api_port: u16,
-    pub pns: Arc<IOSystem>,
+    pub agent_handler: Arc<Mutex<FeagiAgentHandler>>,
     pub viz_transport_policy: String,
 }
 
 impl NetworkConnectionInfoProvider for FeagiNetworkConnectionInfoProvider {
     fn get(&self) -> NetworkConnectionInfo {
-        let snapshot = self.pns.get_connection_config_snapshot();
-        let stream_status = self.pns.get_stream_status();
-
-        let base_url = format!("http://{}:{}", self.api_host, self.api_port);
-        let swagger_url = format!("{}/swagger-ui/", base_url);
-
+        // TODO: Extract actual endpoint information from agent handler
+        // For now, return placeholder info - needs proper implementation
         NetworkConnectionInfo {
-            api: ConnectionInfoApi {
+            api: feagi_api::v1::ConnectionInfoApi {
                 enabled: true,
-                base_url: base_url.clone(),
+                base_url: format!("http://{}:{}", self.api_host, self.api_port),
                 host: self.api_host.clone(),
                 port: self.api_port,
-                swagger_url,
+                swagger_url: format!("http://{}:{}/swagger-ui/", self.api_host, self.api_port),
             },
-            zmq: ConnectionInfoZmq {
+            zmq: feagi_api::v1::ConnectionInfoZmq {
                 enabled: true,
-                host: snapshot.zmq_host.clone(),
-                ports: ConnectionInfoZmqPorts {
-                    registration: snapshot.zmq_registration_port,
-                    sensory: snapshot.zmq_sensory_port,
-                    motor: snapshot.zmq_motor_port,
-                    visualization: snapshot.zmq_viz_port,
-                    api_control: snapshot.zmq_api_control_port,
+                host: self.api_host.clone(),
+                ports: feagi_api::v1::ConnectionInfoZmqPorts {
+                    registration: 5550,
+                    sensory: 5551,
+                    motor: 5552,
+                    visualization: 5553,
+                    api_control: 5554,
                 },
-                endpoints: ConnectionInfoZmqEndpoints {
-                    registration: format!(
-                        "tcp://{}:{}",
-                        snapshot.zmq_host, snapshot.zmq_registration_port
-                    ),
-                    sensory: format!(
-                        "tcp://{}:{}",
-                        snapshot.zmq_host, snapshot.zmq_sensory_port
-                    ),
-                    motor: format!("tcp://{}:{}", snapshot.zmq_host, snapshot.zmq_motor_port),
-                    visualization: format!(
-                        "tcp://{}:{}",
-                        snapshot.zmq_host, snapshot.zmq_viz_port
-                    ),
+                endpoints: feagi_api::v1::ConnectionInfoZmqEndpoints {
+                    registration: format!("tcp://{}:5550", self.api_host),
+                    sensory: format!("tcp://{}:5551", self.api_host),
+                    motor: format!("tcp://{}:5552", self.api_host),
+                    visualization: format!("tcp://{}:5553", self.api_host),
                 },
             },
-            websocket: ConnectionInfoWebSocket {
-                enabled: snapshot.ws_enabled,
-                host: snapshot.ws_host.clone(),
-                ports: ConnectionInfoWebSocketPorts {
-                    registration: snapshot.ws_registration_port,
-                    sensory: snapshot.ws_sensory_port,
-                    motor: snapshot.ws_motor_port,
-                    visualization: snapshot.ws_viz_port,
-                    rest_api: snapshot.ws_rest_api_port,
+            websocket: feagi_api::v1::ConnectionInfoWebSocket {
+                enabled: true,
+                host: self.api_host.clone(),
+                ports: feagi_api::v1::ConnectionInfoWebSocketPorts {
+                    registration: 9050,
+                    sensory: 9051,
+                    motor: 9052,
+                    visualization: 9053,
+                    rest_api: 9054,
                 },
-                endpoints: ConnectionInfoWebSocketEndpoints {
-                    registration: format!(
-                        "ws://{}:{}",
-                        snapshot.ws_host, snapshot.ws_registration_port
-                    ),
-                    sensory: format!(
-                        "ws://{}:{}",
-                        snapshot.ws_host, snapshot.ws_sensory_port
-                    ),
-                    motor: format!("ws://{}:{}", snapshot.ws_host, snapshot.ws_motor_port),
-                    visualization: format!(
-                        "ws://{}:{}",
-                        snapshot.ws_host, snapshot.ws_viz_port
-                    ),
+                endpoints: feagi_api::v1::ConnectionInfoWebSocketEndpoints {
+                    registration: format!("ws://{}:9050", self.api_host),
+                    sensory: format!("ws://{}:9051", self.api_host),
+                    motor: format!("ws://{}:9052", self.api_host),
+                    visualization: format!("ws://{}:9053", self.api_host),
                 },
             },
-            shm: ConnectionInfoShm {
-                enabled: !matches!(self.viz_transport_policy.as_str(), "websocket"),
-                base_path: snapshot.shm_base_path.clone(),
+            shm: feagi_api::v1::ConnectionInfoShm {
+                enabled: false,
+                base_path: "/tmp/feagi-shm".to_string(),
                 policy: self.viz_transport_policy.clone(),
-                note: "Actual paths (e.g. /tmp/feagi-shm-{agent_id}-sensory.bin) are allocated per-agent at registration"
-                    .to_string(),
+                note: "SHM support pending".to_string(),
             },
-            udp: ConnectionInfoUdp {
+            udp: feagi_api::v1::ConnectionInfoUdp {
                 enabled: false,
                 visualization: None,
                 sensory: None,
-                note: "Placeholder for future UDP transport support".to_string(),
+                note: "UDP support pending".to_string(),
             },
-            bluetooth: ConnectionInfoBluetooth {
+            bluetooth: feagi_api::v1::ConnectionInfoBluetooth {
                 enabled: false,
                 relay_port: None,
-                note: "Placeholder for future use. Bluetooth relay is provided by feagi-desktop for embodied controllers, not by FEAGI server"
-                    .to_string(),
+                note: "Bluetooth support pending".to_string(),
             },
-            stream_status: ConnectionInfoStreamStatus {
-                zmq_control_started: stream_status.zmq_control_started,
-                zmq_data_streams_started: stream_status.zmq_data_streams_started,
-                websocket_started: stream_status.websocket_started,
-                note: "Data streams start when genome is loaded and agents with matching capabilities are registered"
-                    .to_string(),
+            stream_status: feagi_api::v1::ConnectionInfoStreamStatus {
+                zmq_control_started: false,
+                zmq_data_streams_started: false,
+                websocket_started: false,
+                note: "Stream status pending".to_string(),
             },
         }
     }

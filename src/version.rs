@@ -41,7 +41,7 @@ pub fn collect_version_info() -> VersionInfo {
         "feagi_services".to_string(),
         feagi_services::VERSION.to_string(),
     );
-    crates.insert("feagi_io".to_string(), feagi_io::VERSION.to_string());
+    crates.insert("feagi_io".to_string(), "0.0.1-beta.12".to_string()); // TODO: Get from feagi-io crate metadata
 
     // Infrastructure
     crates.insert(
