@@ -201,8 +201,9 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr)
                 .context("Failed to create WebSocket visualization publisher properties")?
         );
-        agent_handler.add_publisher_server(ws_viz_props);
-        info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
+        agent_handler.add_and_start_broadcast_publisher(ws_viz_props)
+            .context("Failed to start WebSocket visualization publisher")?;
+        info!("      ✓ WebSocket visualization publisher: {} (broadcast mode)", ws_viz_addr);
     }
 
     let agent_handler = Arc::new(Mutex::new(agent_handler));
@@ -230,18 +231,10 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
 
             let mut handler_guard = self.handler.lock().unwrap();
             
-            // Find SessionID for this agent
-            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
-                Some(sid) => sid,
-                None => {
-                    // Agent not connected, skip silently (expected during startup)
-                    return Ok(());
-                }
-            };
-
             // Convert RawFireQueueSnapshot to CorticalMappedXYZPNeuronVoxels
             use feagi_structures::neuron_voxels::xyzp::{CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays};
             use feagi_structures::genomic::cortical_area::CorticalID;
+            use feagi_serialization::FeagiByteContainer;
             
             let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
             
@@ -259,16 +252,28 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
                 }
             }
 
-            // Serialize to FeagiByteContainer
-            use feagi_serialization::FeagiByteContainer;
-            let mut container = FeagiByteContainer::new_empty();
-            let _ = container.set_session_id(session_id);
-            container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+            // Serialize to raw bytes (Type 11 format)
+            use feagi_serialization::FeagiSerializable;
+            let num_bytes = cortical_mapped.get_number_of_bytes_needed();
+            let mut raw_bytes = vec![0u8; num_bytes];
+            cortical_mapped.try_serialize_struct_to_byte_slice(&mut raw_bytes)
                 .map_err(|e| format!("Failed to serialize visualization: {:?}", e))?;
 
-            // Send via handler
-            handler_guard.send_visualization_data(session_id, &container)
-                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
+            // Try to find SessionID for embodiment agents
+            if let Some(session_id) = handler_guard.find_session_by_agent_id(agent_id) {
+                // Embodiment agent - properly wrap in FeagiByteContainer
+                let mut container = FeagiByteContainer::new_empty();
+                let _ = container.set_session_id(session_id);
+                container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                    .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
+                handler_guard.send_visualization_data(session_id, &container)
+                    .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
+            } else {
+                // Visualization-only agent - send raw Type 11 data (BV expects unwrapped format)
+                tracing::trace!("[VIZ-PUBLISHER] Broadcasting {} raw bytes to visualization-only clients (agent_id={})", raw_bytes.len(), agent_id);
+                handler_guard.broadcast_raw_visualization_data(&raw_bytes)
+                    .map_err(|e| format!("Failed to broadcast visualization: {:?}", e))?;
+            }
 
             Ok(())
         }

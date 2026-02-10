@@ -315,9 +315,12 @@ async fn main() -> Result<()> {
                     error!("❌ Error polling embodiment motors: {:?}", e);
                 }
                 
+                // Poll broadcast publishers (e.g., visualization on port 9050) to accept new connections
+                handler_guard.poll_broadcast_publishers();
+                
                 // Check for new WebSocket agent registrations with visualization capability
                 let registered_agents = handler_guard.get_registered_agents();
-                for (session_id, agent_descriptor) in registered_agents.iter() {
+                for (session_id, _agent_descriptor) in registered_agents.iter() {
                     if known_sessions.contains(session_id) {
                         continue; // Already processed
                     }
@@ -539,7 +542,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         
         let ws_viz_addr = format!("{}:{}", config.websocket.host, config.websocket.visualization_port);
         let ws_viz_props = Box::new(FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr)?);
-        agent_handler.add_publisher_server(ws_viz_props);
+        agent_handler.add_and_start_broadcast_publisher(ws_viz_props)?;
+        info!("      ✓ WebSocket visualization publisher: {} (broadcast mode)", ws_viz_addr);
         
         info!("    ✓ WebSocket transport servers added");
     }
@@ -570,13 +574,9 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
             let mut handler_guard = self.handler.lock().unwrap();
             
-            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
-                Some(sid) => sid,
-                None => return Ok(()),
-            };
-
             use feagi_structures::neuron_voxels::xyzp::{CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays};
             use feagi_structures::genomic::cortical_area::CorticalID;
+            use feagi_serialization::FeagiByteContainer;
             
             let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
             
@@ -593,14 +593,29 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 }
             }
 
-            use feagi_serialization::FeagiByteContainer;
-            let mut container = FeagiByteContainer::new_empty();
-            let _ = container.set_session_id(session_id);
-            container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+            // Serialize to raw Type 11 bytes for BV, wrap properly for embodiment
+            use feagi_serialization::FeagiSerializable;
+            let num_bytes = cortical_mapped.get_number_of_bytes_needed();
+            let mut raw_bytes = vec![0u8; num_bytes];
+            cortical_mapped.try_serialize_struct_to_byte_slice(&mut raw_bytes)
                 .map_err(|e| format!("Failed to serialize visualization: {:?}", e))?;
 
-            handler_guard.send_visualization_data(session_id, &container)
-                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
+            // Try to find SessionID for embodiment agents
+            if let Some(session_id) = handler_guard.find_session_by_agent_id(agent_id) {
+                // Embodiment agent - properly wrap using overwrite method
+                let mut container = FeagiByteContainer::new_empty();
+                let _ = container.set_session_id(session_id);
+                container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                    .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
+                handler_guard.send_visualization_data(session_id, &container)
+                    .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
+                tracing::trace!("[VIZ-PUBLISHER] Sent to embodiment agent {} (session {:?})", agent_id, session_id);
+            } else {
+                // Visualization-only agent - send raw Type 11 data (BV expects unwrapped format)
+                tracing::trace!("[VIZ-PUBLISHER] Broadcasting {} raw bytes to visualization-only clients (agent_id={})", raw_bytes.len(), agent_id);
+                handler_guard.broadcast_raw_visualization_data(&raw_bytes)
+                    .map_err(|e| format!("Failed to broadcast visualization: {:?}", e))?;
+            }
 
             Ok(())
         }
