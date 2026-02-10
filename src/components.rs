@@ -22,6 +22,8 @@ use feagi_services::*;
 // New architecture imports
 use feagi_agent::server::auth::DummyAuth;
 use feagi_agent::server::FeagiAgentHandler;
+
+#[cfg(feature = "zmq-transport")]
 use feagi_io::protocol_implementations::zmq::{
     FeagiZmqServerPublisherProperties, FeagiZmqServerPullerProperties,
     FeagiZmqServerRouterProperties,
@@ -210,43 +212,29 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     info!("  Initializing BurstLoopRunner...");
     let burst_timestep = config.neural.burst_engine_timestep;
 
-    // Create agent-handler-backed visualization publisher
-    struct AgentHandlerVisualizationPublisher {
-        handler: Arc<Mutex<FeagiAgentHandler>>,
-    }
-
-    impl feagi_npu_burst_engine::VisualizationPublisher for AgentHandlerVisualizationPublisher {
+    // Create stub publishers (TODO: wire to agent_handler properly)
+    struct StubVisualizationPublisher;
+    impl feagi_npu_burst_engine::VisualizationPublisher for StubVisualizationPublisher {
         fn publish_raw_fire_queue_for_agent(
             &self,
             _agent_id: &str,
             _fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
         ) -> Result<(), String> {
             // TODO: Implement visualization publishing through agent handler
-            // For now, we'll skip this - it needs proper integration
             Ok(())
         }
     }
 
-    // Create agent-handler-backed motor publisher
-    struct AgentHandlerMotorPublisher {
-        handler: Arc<Mutex<FeagiAgentHandler>>,
-    }
-
-    impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
+    struct StubMotorPublisher;
+    impl feagi_npu_burst_engine::MotorPublisher for StubMotorPublisher {
         fn publish_motor(&self, _agent_id: &str, _data: &[u8]) -> Result<(), String> {
             // TODO: Implement motor publishing through agent handler
-            // For now, we'll skip this - it needs proper integration
             Ok(())
         }
     }
 
-    let viz_publisher = Arc::new(Mutex::new(AgentHandlerVisualizationPublisher {
-        handler: Arc::clone(&agent_handler),
-    }));
-
-    let motor_publisher = Arc::new(Mutex::new(AgentHandlerMotorPublisher {
-        handler: Arc::clone(&agent_handler),
-    }));
+    let viz_publisher = Arc::new(Mutex::new(StubVisualizationPublisher));
+    let motor_publisher = Arc::new(Mutex::new(StubMotorPublisher));
 
     let burst_hz = 1.0 / burst_timestep;
 

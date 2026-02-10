@@ -5,9 +5,7 @@
 use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::v1::NetworkConnectionInfo;
 use feagi_agent::server::FeagiAgentHandler;
-use feagi_config::FeagiConfig;
 use std::sync::{Arc, Mutex};
-use tracing::warn;
 
 pub struct FeagiNetworkConnectionInfoProvider {
     pub api_host: String,

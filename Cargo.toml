@@ -121,10 +121,11 @@ name = "profile_storage"
 path = "tests/profile_storage.rs"
 
 [features]
-default = ["cli", "plasticity"]
+default = ["cli", "plasticity", "feagi-agent"]
 gpu = ["feagi-npu-burst-engine/gpu"]
 plasticity = ["feagi-services/plasticity"]  # Neuroplasticity and STDP support (wires service-layer runtime updates)
 cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
 embedded = []                    # For library usage (no CLI)
 no-network = ["embedded"]        # Embedded + disable network servers (future use)
 zmq-transport = ["feagi-io/zmq-transport"]
+feagi-agent = []                 # Enable agent handler functionality
