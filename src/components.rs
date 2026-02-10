@@ -212,29 +212,47 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     info!("  Initializing BurstLoopRunner...");
     let burst_timestep = config.neural.burst_engine_timestep;
 
-    // Create stub publishers (TODO: wire to agent_handler properly)
-    struct StubVisualizationPublisher;
-    impl feagi_npu_burst_engine::VisualizationPublisher for StubVisualizationPublisher {
+    // Create agent-handler-backed publishers
+    struct AgentHandlerVisualizationPublisher {
+        handler: Arc<Mutex<FeagiAgentHandler>>,
+    }
+    
+    impl feagi_npu_burst_engine::VisualizationPublisher for AgentHandlerVisualizationPublisher {
         fn publish_raw_fire_queue_for_agent(
             &self,
-            _agent_id: &str,
-            _fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
+            agent_id: &str,
+            fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
         ) -> Result<(), String> {
-            // TODO: Implement visualization publishing through agent handler
+            // TODO: Encode fire_data to FeagiByteContainer and send via handler
+            // For now, log that we received data
+            if !fire_data.is_empty() {
+                tracing::trace!("📊 Viz data ready for agent '{}': {} areas", agent_id, fire_data.len());
+            }
             Ok(())
         }
     }
 
-    struct StubMotorPublisher;
-    impl feagi_npu_burst_engine::MotorPublisher for StubMotorPublisher {
-        fn publish_motor(&self, _agent_id: &str, _data: &[u8]) -> Result<(), String> {
-            // TODO: Implement motor publishing through agent handler
+    struct AgentHandlerMotorPublisher {
+        handler: Arc<Mutex<FeagiAgentHandler>>,
+    }
+    
+    impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
+        fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
+            // TODO: Send motor data via handler using SessionID lookup
+            // For now, log that we received data
+            if !data.is_empty() {
+                tracing::trace!("🎮 Motor data ready for agent '{}': {} bytes", agent_id, data.len());
+            }
             Ok(())
         }
     }
 
-    let viz_publisher = Arc::new(Mutex::new(StubVisualizationPublisher));
-    let motor_publisher = Arc::new(Mutex::new(StubMotorPublisher));
+    let viz_publisher = Arc::new(Mutex::new(AgentHandlerVisualizationPublisher {
+        handler: Arc::clone(&agent_handler),
+    }));
+    let motor_publisher = Arc::new(Mutex::new(AgentHandlerMotorPublisher {
+        handler: Arc::clone(&agent_handler),
+    }));
 
     let burst_hz = 1.0 / burst_timestep;
 
