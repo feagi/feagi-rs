@@ -224,11 +224,52 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             agent_id: &str,
             fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
         ) -> Result<(), String> {
-            // TODO: Encode fire_data to FeagiByteContainer and send via handler
-            // For now, log that we received data
-            if !fire_data.is_empty() {
-                tracing::trace!("📊 Viz data ready for agent '{}': {} areas", agent_id, fire_data.len());
+            if fire_data.is_empty() {
+                return Ok(());
             }
+
+            let mut handler_guard = self.handler.lock().unwrap();
+            
+            // Find SessionID for this agent
+            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
+                Some(sid) => sid,
+                None => {
+                    // Agent not connected, skip silently (expected during startup)
+                    return Ok(());
+                }
+            };
+
+            // Convert RawFireQueueSnapshot to CorticalMappedXYZPNeuronVoxels
+            use feagi_structures::neuron_voxels::xyzp::{CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays};
+            use feagi_structures::genomic::cortical_area::CorticalID;
+            
+            let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
+            
+            for (_area_idx, fire_queue_data) in fire_data {
+                // Parse cortical_id from base64 string
+                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id) {
+                    if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
+                        fire_queue_data.coords_x,
+                        fire_queue_data.coords_y,
+                        fire_queue_data.coords_z,
+                        fire_queue_data.potentials,
+                    ) {
+                        cortical_mapped.insert(cortical_id, neuron_voxels);
+                    }
+                }
+            }
+
+            // Serialize to FeagiByteContainer
+            use feagi_serialization::FeagiByteContainer;
+            let mut container = FeagiByteContainer::new_empty();
+            let _ = container.set_session_id(session_id);
+            container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                .map_err(|e| format!("Failed to serialize visualization: {:?}", e))?;
+
+            // Send via handler
+            handler_guard.send_visualization_data(session_id, &container)
+                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
+
             Ok(())
         }
     }
@@ -240,11 +281,32 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     
     impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
-            // TODO: Send motor data via handler using SessionID lookup
-            // For now, log that we received data
-            if !data.is_empty() {
-                tracing::trace!("🎮 Motor data ready for agent '{}': {} bytes", agent_id, data.len());
+            if data.is_empty() {
+                return Ok(());
             }
+
+            let mut handler_guard = self.handler.lock().unwrap();
+            
+            // Find SessionID for this agent
+            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
+                Some(sid) => sid,
+                None => {
+                    // Agent not connected, skip silently
+                    return Ok(());
+                }
+            };
+
+            // Motor data is already encoded as FeagiByteContainer bytes
+            use feagi_serialization::FeagiByteContainer;
+            // Create container by copying existing bytes
+            let mut container = FeagiByteContainer::new_empty();
+            container.try_write_data_by_copy_and_verify(data)
+                .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
+
+            // Send via handler
+            handler_guard.send_motor_data(session_id, &container)
+                .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
+
             Ok(())
         }
     }
