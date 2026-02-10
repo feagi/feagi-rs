@@ -287,8 +287,12 @@ async fn main() -> Result<()> {
     // Start agent handler polling loop IMMEDIATELY (servers need polling to accept connections)
     let agent_handler_for_loop = Arc::clone(&components.agent_handler);
     let shutdown_flag_for_polling = Arc::clone(&shutdown_flag);
+    let runtime_service_for_polling = components.runtime_service.clone();
     
     tokio::task::spawn_blocking(move || {
+        use std::collections::HashSet;
+        let mut known_sessions: HashSet<feagi_serialization::SessionID> = HashSet::new();
+        
         loop {
             if !shutdown_flag_for_polling.load(Ordering::SeqCst) {
                 info!("✓ Agent handler polling loop shutting down");
@@ -309,6 +313,35 @@ async fn main() -> Result<()> {
                 
                 if let Err(e) = handler_guard.poll_embodiment_motors() {
                     error!("❌ Error polling embodiment motors: {:?}", e);
+                }
+                
+                // Check for new WebSocket agent registrations with visualization capability
+                let registered_agents = handler_guard.get_registered_agents();
+                for (session_id, agent_descriptor) in registered_agents.iter() {
+                    if known_sessions.contains(session_id) {
+                        continue; // Already processed
+                    }
+                    
+                    // Check if this session has visualization capability (from prior REST registration)
+                    if let Some((agent_id, rate_hz)) = handler_guard.get_visualization_info_for_session(*session_id) {
+                        // New agent with visualization - register it with runtime service
+                        known_sessions.insert(*session_id);
+                        
+                        let runtime_svc = runtime_service_for_polling.clone();
+                        tokio::spawn(async move {
+                            match runtime_svc.register_visualization_subscriptions(&agent_id, rate_hz).await {
+                                Ok(_) => {
+                                    info!("✅ [WS-REGISTRATION] Registered visualization for agent at {}Hz", rate_hz);
+                                }
+                                Err(e) => {
+                                    warn!("⚠️  [WS-REGISTRATION] Failed to register visualization: {}", e);
+                                }
+                            }
+                        });
+                    } else {
+                        // No visualization capability, just mark as known
+                        known_sessions.insert(*session_id);
+                    }
                 }
             }
             
