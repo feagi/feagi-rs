@@ -480,10 +480,44 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             agent_id: &str,
             fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
         ) -> Result<(), String> {
-            // TODO: Encode fire_data and send via handler
-            if !fire_data.is_empty() {
-                tracing::trace!("📊 Viz data for '{}': {} areas", agent_id, fire_data.len());
+            if fire_data.is_empty() {
+                return Ok(());
             }
+
+            let mut handler_guard = self.handler.lock().unwrap();
+            
+            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
+                Some(sid) => sid,
+                None => return Ok(()),
+            };
+
+            use feagi_structures::neuron_voxels::xyzp::{CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays};
+            use feagi_structures::genomic::cortical_area::CorticalID;
+            
+            let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
+            
+            for (_area_idx, fire_queue_data) in fire_data {
+                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id) {
+                    if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
+                        fire_queue_data.coords_x,
+                        fire_queue_data.coords_y,
+                        fire_queue_data.coords_z,
+                        fire_queue_data.potentials,
+                    ) {
+                        cortical_mapped.insert(cortical_id, neuron_voxels);
+                    }
+                }
+            }
+
+            use feagi_serialization::FeagiByteContainer;
+            let mut container = FeagiByteContainer::new_empty();
+            let _ = container.set_session_id(session_id);
+            container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                .map_err(|e| format!("Failed to serialize visualization: {:?}", e))?;
+
+            handler_guard.send_visualization_data(session_id, &container)
+                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
+
             Ok(())
         }
     }
@@ -495,10 +529,25 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     
     impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
-            // TODO: Send via handler using SessionID
-            if !data.is_empty() {
-                tracing::trace!("🎮 Motor data for '{}': {} bytes", agent_id, data.len());
+            if data.is_empty() {
+                return Ok(());
             }
+
+            let mut handler_guard = self.handler.lock().unwrap();
+            
+            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
+                Some(sid) => sid,
+                None => return Ok(()),
+            };
+
+            use feagi_serialization::FeagiByteContainer;
+            let mut container = FeagiByteContainer::new_empty();
+            container.try_write_data_by_copy_and_verify(data)
+                .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
+
+            handler_guard.send_motor_data(session_id, &container)
+                .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
+
             Ok(())
         }
     }
