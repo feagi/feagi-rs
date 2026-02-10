@@ -262,6 +262,23 @@ async fn main() -> Result<()> {
     info!("✓ Configuration loaded and validated");
     log_config_summary(&config);
 
+    // Create shutdown flag early (needed for polling loop)
+    let shutdown_flag = Arc::new(AtomicBool::new(true));
+    
+    // Setup signal handler for graceful shutdown
+    let shutdown_flag_for_signal = shutdown_flag.clone();
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                eprintln!("[SHUTDOWN] Ctrl+C received");
+                shutdown_flag_for_signal.store(false, Ordering::SeqCst);
+            }
+            Err(e) => {
+                eprintln!("[SHUTDOWN] Error receiving Ctrl+C: {}", e);
+            }
+        }
+    });
+
     // Initialize core components
     info!("Initializing FEAGI core components...");
     let components = initialize_components(&config, &args).await?;
@@ -303,7 +320,7 @@ async fn main() -> Result<()> {
 
     // Start services
     info!("Starting FEAGI services...");
-    start_services(components, &config, &args).await?;
+    start_services(components, &config, &args, shutdown_flag).await?;
 
     Ok(())
 }
@@ -725,26 +742,9 @@ async fn start_services(
     components: FeagiComponents,
     config: &FeagiConfig,
     args: &Args,
+    shutdown_flag: Arc<AtomicBool>,
 ) -> Result<()> {
-    // Setup signal handler for graceful shutdown using tokio's built-in signal handling
-    // This is the recommended way and handles all synchronization correctly
-    // Create a shutdown flag
-    let shutdown_flag = Arc::new(AtomicBool::new(true)); // Start as true (running)
-
-    // Spawn a task to watch for Ctrl+C signal using tokio's async signal handling
-    let shutdown_flag_for_task = shutdown_flag.clone();
-    tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                eprintln!("[SHUTDOWN-TASK] Ctrl+C received - setting shutdown flag");
-                shutdown_flag_for_task.store(false, Ordering::SeqCst);
-                eprintln!("[SHUTDOWN-TASK] Shutdown flag set to false");
-            }
-            Err(e) => {
-                eprintln!("[SHUTDOWN-TASK] Error receiving Ctrl+C signal: {}", e);
-            }
-        }
-    });
+    // Signal handler already setup in main()
 
     // Create genome service FIRST (needed for genome loading at startup)
     info!("  Creating service layer...");
