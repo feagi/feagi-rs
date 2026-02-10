@@ -267,6 +267,40 @@ async fn main() -> Result<()> {
     let components = initialize_components(&config, &args).await?;
     info!("✓ Core components initialized");
 
+    // Start agent handler polling loop IMMEDIATELY (servers need polling to accept connections)
+    let agent_handler_for_loop = Arc::clone(&components.agent_handler);
+    let shutdown_flag_for_polling = Arc::clone(&shutdown_flag);
+    
+    tokio::task::spawn_blocking(move || {
+        loop {
+            if !shutdown_flag_for_polling.load(Ordering::SeqCst) {
+                info!("✓ Agent handler polling loop shutting down");
+                break;
+            }
+            
+            {
+                let mut handler_guard = agent_handler_for_loop.lock().unwrap();
+                match handler_guard.poll_command_and_control() {
+                    Ok(Some((session_id, message))) => {
+                        info!("📨 Received message from session {:?}: {:?}", session_id, message);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        error!("❌ Error polling command/control: {:?}", e);
+                    }
+                }
+                
+                if let Err(e) = handler_guard.poll_embodiment_motors() {
+                    error!("❌ Error polling embodiment motors: {:?}", e);
+                }
+            }
+            
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+    
+    info!("    ✓ Agent handler polling loop started - servers ready for connections");
+
     // Start services
     info!("Starting FEAGI services...");
     start_services(components, &config, &args).await?;
