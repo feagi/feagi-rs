@@ -1058,50 +1058,7 @@ async fn start_services(
     // Wait for shutdown signal using tokio's signal handling (recommended approach)
     info!("Waiting for shutdown signal...");
 
-    // Wait loop - check flag with SeqCst ordering
-    // Note: We don't log periodically here to avoid noise - only log when shutdown actually happens
-    // Main polling loop - process agent registrations and handle messages
-    let agent_handler_for_loop = Arc::clone(&components.agent_handler);
-    let shutdown_flag_for_polling = Arc::clone(&shutdown_flag);
-    
-    tokio::task::spawn_blocking(move || {
-        loop {
-            // Check shutdown flag
-            if !shutdown_flag_for_polling.load(Ordering::SeqCst) {
-                info!("✓ Agent handler polling loop shutting down");
-                break;
-            }
-            
-            // Poll for command/control messages (registration requests, heartbeats, etc.)
-            {
-                let mut handler_guard = agent_handler_for_loop.lock().unwrap();
-                match handler_guard.poll_command_and_control() {
-                    Ok(Some((session_id, message))) => {
-                        info!("📨 Received message from session {:?}: {:?}", session_id, message);
-                        // TODO: Handle non-registration messages if needed
-                    }
-                    Ok(None) => {
-                        // No messages - normal
-                    }
-                    Err(e) => {
-                        error!("❌ Error polling command/control: {:?}", e);
-                    }
-                }
-                
-                // Poll embodiment motors (send queued motor data)
-                if let Err(e) = handler_guard.poll_embodiment_motors() {
-                    error!("❌ Error polling embodiment motors: {:?}", e);
-                }
-            }
-            
-            // Sleep briefly to avoid busy-waiting
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    });
-    
-    info!("    ✓ Agent handler polling loop started");
-    
-    // Wait for shutdown signal
+    // Wait for shutdown signal (polling loop already started after initialization)
     loop {
         let flag_value = shutdown_flag.load(Ordering::SeqCst);
 
