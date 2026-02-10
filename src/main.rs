@@ -470,6 +470,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
     // Create agent-handler-backed publishers
     struct AgentHandlerVisualizationPublisher {
+        #[allow(dead_code)] // TODO: Use when encoding is implemented
         handler: Arc<Mutex<feagi_agent::server::FeagiAgentHandler>>,
     }
     
@@ -488,6 +489,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     }
 
     struct AgentHandlerMotorPublisher {
+        #[allow(dead_code)] // TODO: Use when SessionID lookup is implemented
         handler: Arc<Mutex<feagi_agent::server::FeagiAgentHandler>>,
     }
     
