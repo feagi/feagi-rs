@@ -1062,11 +1062,12 @@ async fn start_services(
     // Note: We don't log periodically here to avoid noise - only log when shutdown actually happens
     // Main polling loop - process agent registrations and handle messages
     let agent_handler_for_loop = Arc::clone(&components.agent_handler);
+    let shutdown_flag_for_polling = Arc::clone(&shutdown_flag);
     
     tokio::task::spawn_blocking(move || {
         loop {
             // Check shutdown flag
-            if !shutdown_flag.load(Ordering::SeqCst) {
+            if !shutdown_flag_for_polling.load(Ordering::SeqCst) {
                 info!("✓ Agent handler polling loop shutting down");
                 break;
             }
