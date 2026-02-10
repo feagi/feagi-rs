@@ -403,6 +403,12 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     use feagi_agent::server::auth::DummyAuth;
     use feagi_agent::server::FeagiAgentHandler;
     
+    #[cfg(feature = "zmq-transport")]
+    use feagi_io::protocol_implementations::zmq::{
+        FeagiZmqServerPublisherProperties, FeagiZmqServerPullerProperties,
+        FeagiZmqServerRouterProperties,
+    };
+    
     use feagi_io::protocol_implementations::websocket::websocket_std::{
         FeagiWebSocketServerPublisherProperties, FeagiWebSocketServerPullerProperties,
         FeagiWebSocketServerRouterProperties,
