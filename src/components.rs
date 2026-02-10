@@ -250,9 +250,13 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
     info!("    ✓ Runtime service created");
 
-    // TODO: Wire up bidirectional connections between agent_handler and burst_runner
-    // This requires implementing the polling loop in the burst runner
-    info!("    ⚠ Agent Handler ↔ BurstLoopRunner wiring TODO");
+    // Wire agent handler to burst runner for sensory polling
+    {
+        // AgentHandler already implements EmbodimentSensoryPoller trait
+        // Just wrap it in Mutex and pass to burst_runner
+        burst_runner.write().set_embodiment_poller(Arc::clone(&agent_handler) as Arc<Mutex<dyn feagi_npu_burst_engine::EmbodimentSensoryPoller>>);
+        info!("    ✓ Agent Handler sensory polling wired to BurstLoopRunner");
+    }
 
     Ok(FeagiComponents {
         npu,
