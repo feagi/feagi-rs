@@ -29,8 +29,9 @@ use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
+use feagi_io::SensoryIntakeQueue;
 use feagi_npu_burst_engine::backend::GpuConfig;
-use feagi_npu_burst_engine::{BurstLoopRunner, TracingMutex};
+use feagi_npu_burst_engine::{BurstLoopRunner, SensoryIntake, TracingMutex};
 use feagi_observability::{init_logging_default, parse_debug_flags};
 use feagi_services::impls::AgentServiceImpl;
 use feagi_services::impls::SystemServiceImpl;
@@ -288,7 +289,8 @@ async fn main() -> Result<()> {
     let agent_handler_for_loop = Arc::clone(&components.agent_handler);
     let shutdown_flag_for_polling = Arc::clone(&shutdown_flag);
     let runtime_service_for_polling = components.runtime_service.clone();
-    
+    let sensory_intake_queue_for_polling = Arc::clone(&components.sensory_intake_queue);
+
     tokio::task::spawn_blocking(move || {
         use std::collections::HashSet;
         let mut known_sessions: HashSet<feagi_serialization::SessionID> = HashSet::new();
@@ -304,6 +306,14 @@ async fn main() -> Result<()> {
                 match handler_guard.poll_command_and_control() {
                     Ok(Some((session_id, message))) => {
                         info!("📨 Received message from session {:?}: {:?}", session_id, message);
+                        match handler_guard.send_message_to_agent(session_id, message, 0) {
+                            Ok(()) => {
+                                info!("✅ Sent response to session {:?}", session_id);
+                            }
+                            Err(e) => {
+                                error!("❌ Failed to send response to agent: {:?}", e);
+                            }
+                        }
                     }
                     Ok(None) => {}
                     Err(e) => {
@@ -314,7 +324,12 @@ async fn main() -> Result<()> {
                 if let Err(e) = handler_guard.poll_embodiment_motors() {
                     error!("❌ Error polling embodiment motors: {:?}", e);
                 }
-                
+
+                // Feed transport-agnostic sensory intake (any transport that received data)
+                if let Ok(Some(container)) = handler_guard.poll_embodiment_sensors() {
+                    sensory_intake_queue_for_polling.push(container.get_byte_ref().to_vec());
+                }
+
                 // Poll broadcast publishers (e.g., visualization on port 9050) to accept new connections
                 handler_guard.poll_broadcast_publishers();
                 
@@ -369,6 +384,8 @@ struct FeagiComponents {
     runtime_service: Arc<RuntimeServiceImpl>,
     burst_runner: Arc<RwLock<BurstLoopRunner>>,
     agent_handler: Arc<std::sync::Mutex<feagi_agent::server::FeagiAgentHandler>>,
+    /// Transport-agnostic sensory queue (feagi-io); polling loop pushes here when agents send sensory
+    sensory_intake_queue: Arc<SensoryIntakeQueue>,
     #[cfg(feature = "plasticity")]
     plasticity_executor:
         Option<Arc<std::sync::Mutex<feagi_npu_plasticity::AsyncPlasticityExecutor>>>,
@@ -504,26 +521,47 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let auth_backend = Box::new(DummyAuth {});
     let mut agent_handler = FeagiAgentHandler::new(auth_backend);
 
-    // Add ZMQ servers
+    // Add ZMQ servers (multiple slots so multiple agents can register)
     #[cfg(feature = "zmq-transport")]
     {
         let registration_addr = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
         let router_props = Box::new(FeagiZmqServerRouterProperties::new(&registration_addr)?);
         agent_handler.add_and_start_command_control_server(router_props)?;
-        
-        let sensory_addr = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_sensory_port);
-        let sensory_props = Box::new(FeagiZmqServerPullerProperties::new(&sensory_addr)?);
-        agent_handler.add_puller_server(sensory_props);
-        
-        let motor_addr = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port);
-        let motor_props = Box::new(FeagiZmqServerPublisherProperties::new(&motor_addr)?);
-        agent_handler.add_publisher_server(motor_props);
-        
-        let viz_addr = format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_visualization_port);
-        let viz_props = Box::new(FeagiZmqServerPublisherProperties::new(&viz_addr)?);
-        agent_handler.add_publisher_server(viz_props);
-        
-        info!("    ✓ ZMQ transport servers added");
+
+        const ZMQ_AGENT_SLOTS: u16 = 8;
+        const ZMQ_SENSORY_OFFSET: u16 = 5566;
+        const ZMQ_MOTOR_OFFSET: u16 = 5574;
+        const ZMQ_VIZ_OFFSET: u16 = 5582;
+
+        for slot in 0..ZMQ_AGENT_SLOTS {
+            let (sensory_port, motor_port, viz_port) = if slot == 0 {
+                (
+                    config.ports.zmq_sensory_port,
+                    config.ports.zmq_motor_port,
+                    config.ports.zmq_visualization_port,
+                )
+            } else {
+                let i = slot;
+                (
+                    ZMQ_SENSORY_OFFSET + i - 1,
+                    ZMQ_MOTOR_OFFSET + i - 1,
+                    ZMQ_VIZ_OFFSET + i - 1,
+                )
+            };
+
+            let sensory_addr = format!("tcp://{}:{}", config.zmq.host, sensory_port);
+            let sensory_props = Box::new(FeagiZmqServerPullerProperties::new(&sensory_addr)?);
+            agent_handler.add_puller_server(sensory_props);
+
+            let motor_addr = format!("tcp://{}:{}", config.zmq.host, motor_port);
+            let motor_props = Box::new(FeagiZmqServerPublisherProperties::new(&motor_addr)?);
+            agent_handler.add_publisher_server(motor_props);
+
+            let viz_addr = format!("tcp://{}:{}", config.zmq.host, viz_port);
+            let viz_props = Box::new(FeagiZmqServerPublisherProperties::new(&viz_addr)?);
+            agent_handler.add_publisher_server(viz_props);
+        }
+        info!("    ✓ ZMQ transport servers added ({} agent slots)", ZMQ_AGENT_SLOTS);
     }
 
     // Add WebSocket servers if enabled
@@ -731,10 +769,21 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     // Wire up bidirectional connections between PNS and BurstLoopRunner
     info!("  Wiring PNS ↔ BurstLoopRunner connections...");
 
-    // Wire agent handler to burst runner for sensory polling
-    burst_runner.write().set_embodiment_poller(Arc::clone(&agent_handler) as Arc<Mutex<dyn feagi_npu_burst_engine::EmbodimentSensoryPoller>>);
-    info!("    ✓ Agent Handler ↔ BurstLoopRunner connections wired");
-    info!("      ✓ Sensory: Handler → BurstLoopRunner (polling)");
+    // Transport-agnostic sensory intake (feagi-io): burst loop consumes from queue; polling loop feeds it
+    let sensory_intake_queue = Arc::new(SensoryIntakeQueue::new());
+    struct SensoryIntakeAdapter {
+        queue: Arc<SensoryIntakeQueue>,
+    }
+    impl SensoryIntake for SensoryIntakeAdapter {
+        fn poll_sensory_data(&mut self) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.queue.poll_next())
+        }
+    }
+    burst_runner.write().set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
+        queue: Arc::clone(&sensory_intake_queue),
+    })) as Arc<Mutex<dyn SensoryIntake>>);
+    info!("    ✓ Sensory intake (feagi-io) wired to BurstLoopRunner");
+    info!("      ✓ Sensory: transports → queue → BurstLoopRunner");
     info!("      ✓ Motor: BurstLoopRunner → Handler (publishing)");
     info!("      ✓ Visualization: BurstLoopRunner → Handler (publishing)");
 
@@ -744,6 +793,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         runtime_service,
         burst_runner,
         agent_handler,
+        sensory_intake_queue,
         plasticity_executor,
         memory_stats_cache,
         use_post_burst_processor,

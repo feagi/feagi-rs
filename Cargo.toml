@@ -121,7 +121,7 @@ name = "profile_storage"
 path = "tests/profile_storage.rs"
 
 [features]
-default = ["cli", "plasticity", "feagi-agent"]
+default = ["cli", "plasticity", "feagi-agent", "zmq-transport"]
 gpu = ["feagi-npu-burst-engine/gpu"]
 plasticity = ["feagi-services/plasticity"]  # Neuroplasticity and STDP support (wires service-layer runtime updates)
 cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
