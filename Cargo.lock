@@ -1097,10 +1097,10 @@ dependencies = [
  "feagi-npu-runtime",
  "feagi-observability",
  "feagi-sensorimotor",
- "feagi-serialization 0.0.1-beta.9",
+ "feagi-serialization",
  "feagi-services",
  "feagi-state-manager",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-structures",
  "log",
  "parking_lot",
  "serde_json",
@@ -1114,13 +1114,13 @@ dependencies = [
 
 [[package]]
 name = "feagi-agent"
-version = "0.0.1-beta.9"
+version = "0.0.1-beta.17"
 dependencies = [
  "base64 0.22.1",
  "feagi-io",
  "feagi-sensorimotor",
- "feagi-serialization 0.0.1-beta.8",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-serialization",
+ "feagi-structures",
  "log",
  "serde",
  "serde_json",
@@ -1128,7 +1128,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-api"
-version = "0.0.1-beta.10"
+version = "0.0.1-beta.17"
 dependencies = [
  "async-trait",
  "axum",
@@ -1143,10 +1143,10 @@ dependencies = [
  "feagi-npu-neural",
  "feagi-npu-plasticity",
  "feagi-observability",
- "feagi-serialization 0.0.1-beta.8",
+ "feagi-serialization",
  "feagi-services",
  "feagi-state-manager",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-structures",
  "http-body-util",
  "hyper 1.8.1",
  "parking_lot",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-brain-development"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "ahash",
  "chrono",
@@ -1177,7 +1177,7 @@ dependencies = [
  "feagi-npu-plasticity",
  "feagi-observability",
  "feagi-state-manager",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-structures",
  "getrandom 0.2.17",
  "ndarray",
  "once_cell",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-config"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -1203,12 +1203,12 @@ dependencies = [
 
 [[package]]
 name = "feagi-evolutionary"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "chrono",
  "feagi-npu-neural",
  "feagi-observability",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-structures",
  "js-sys",
  "rand 0.8.5",
  "serde",
@@ -1222,9 +1222,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-io"
-version = "0.0.1-beta.12"
+version = "0.0.1-beta.17"
 dependencies = [
- "feagi-serialization 0.0.1-beta.8",
+ "feagi-serialization",
  "serde",
  "tungstenite",
  "zmq",
@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-burst-engine"
-version = "0.0.1-beta.12"
+version = "0.0.1-beta.17"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1240,9 +1240,9 @@ dependencies = [
  "feagi-npu-neural",
  "feagi-npu-runtime",
  "feagi-observability",
- "feagi-serialization 0.0.1-beta.8",
+ "feagi-serialization",
  "feagi-state-manager",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-structures",
  "memmap2",
  "ndarray",
  "parking_lot",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-neural"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "ahash",
  "serde",
@@ -1267,7 +1267,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-plasticity"
-version = "0.0.1-beta.12"
+version = "0.0.1-beta.17"
 dependencies = [
  "ahash",
  "feagi-npu-burst-engine",
@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-runtime"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "ahash",
  "feagi-npu-neural",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-observability"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1306,10 +1306,10 @@ dependencies = [
 
 [[package]]
 name = "feagi-sensorimotor"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
- "feagi-serialization 0.0.1-beta.8",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-serialization",
+ "feagi-structures",
  "image",
  "ndarray",
  "paste",
@@ -1321,29 +1321,18 @@ dependencies = [
 
 [[package]]
 name = "feagi-serialization"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "byteorder",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-structures",
  "getrandom 0.2.17",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "feagi-serialization"
-version = "0.0.1-beta.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5953d61a6a74692ec5d10f0869ee0a3d9e694ff3c1f9577a33073c3dec99bc85"
-dependencies = [
- "byteorder",
- "feagi-structures 0.0.1-beta.9",
- "serde_json",
-]
-
-[[package]]
 name = "feagi-services"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "ahash",
  "async-trait",
@@ -1355,7 +1344,7 @@ dependencies = [
  "feagi-npu-plasticity",
  "feagi-observability",
  "feagi-state-manager",
- "feagi-structures 0.0.1-beta.8",
+ "feagi-structures",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1367,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-state-manager"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "ahash",
  "atomic-polyfill",
@@ -1381,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-structures"
-version = "0.0.1-beta.8"
+version = "0.0.1-beta.17"
 dependencies = [
  "base64 0.22.1",
  "futures-channel",
@@ -1397,21 +1386,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "feagi-structures"
-version = "0.0.1-beta.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3061e4098bdd89947cd798ff59d944cf5ab404463891e1c9979cd12d146c9b72"
-dependencies = [
- "base64 0.22.1",
- "ndarray",
- "paste",
- "rayon",
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -1927,7 +1901,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -4622,23 +4596,10 @@ version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ed2439a290666cd67ecce2b0ffaad89c2a56b976b736e6ece670297897832d"
 dependencies = [
- "windows-implement 0.57.0",
- "windows-interface 0.57.0",
- "windows-result 0.1.2",
+ "windows-implement",
+ "windows-interface",
+ "windows-result",
  "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement 0.60.2",
- "windows-interface 0.59.3",
- "windows-link",
- "windows-result 0.4.1",
- "windows-strings",
 ]
 
 [[package]]
@@ -4653,32 +4614,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-implement"
-version = "0.60.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "windows-interface"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29bee4b38ea3cde66011baa44dba677c432a78593e202392d1e9070cf2a7fca7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "windows-interface"
-version = "0.59.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4698,24 +4637,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e383302e8ec8515204254685643de10811af0ed97ea37210dc26fb0032647f8"
 dependencies = [
  "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-result"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
-dependencies = [
- "windows-link",
-]
-
-[[package]]
-name = "windows-strings"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
-dependencies = [
- "windows-link",
 ]
 
 [[package]]

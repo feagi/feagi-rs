@@ -1,5 +1,5 @@
 [package]
-name = "feagi"
+name = "feagi-rs"
 version = "0.0.9"
 edition = "2021"
 authors = ["Neuraville Inc. <feagi@neuraville.com>"]
