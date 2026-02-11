@@ -293,6 +293,8 @@ async fn main() -> Result<()> {
     let runtime_service_for_polling = components.runtime_service.clone();
     let sensory_intake_queue_for_polling = Arc::clone(&components.sensory_intake_queue);
     let connectome_manager_for_polling = Arc::clone(&components.connectome_manager);
+    let sensory_drain_budget_per_cycle =
+        ((1.0 / config.neural.burst_engine_timestep).ceil() as usize).max(1);
 
     tokio::task::spawn_blocking(move || {
         use std::collections::HashSet;
@@ -330,9 +332,21 @@ async fn main() -> Result<()> {
                     error!("❌ Error polling embodiment motors: {:?}", e);
                 }
 
-                // Feed transport-agnostic sensory intake (any transport that received data)
-                if let Ok(Some(container)) = handler_guard.poll_embodiment_sensors() {
-                    sensory_intake_queue_for_polling.push(container.get_byte_ref().to_vec());
+                // Feed transport-agnostic sensory intake (any transport that received data).
+                // Drain up to a bounded per-cycle budget and keep only the newest payload
+                // so sustained streams do not accumulate stale frames in memory.
+                for _ in 0..sensory_drain_budget_per_cycle {
+                    match handler_guard.poll_embodiment_sensors() {
+                        Ok(Some(container)) => {
+                            sensory_intake_queue_for_polling
+                                .push_latest(container.get_byte_ref().to_vec());
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            error!("❌ Error polling embodiment sensors: {:?}", e);
+                            break;
+                        }
+                    }
                 }
 
                 // Poll broadcast publishers (e.g., visualization on port 9050) to accept new connections

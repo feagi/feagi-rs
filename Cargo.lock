@@ -244,9 +244,9 @@ dependencies = [
 
 [[package]]
 name = "avif-serialize"
-version = "0.8.6"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47c8fbc0f831f4519fe8b810b6a7a91410ec83031b8233f730a0480029f6a23f"
+checksum = "375082f007bd67184fb9c0374614b29f9aaa604ec301635f72338bb65386a53d"
 dependencies = [
  "arrayvec",
 ]
@@ -548,9 +548,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.57"
+version = "4.5.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6899ea499e3fb9305a65d5ebf6e3d2248c5fab291f300ad0a704fbe142eae31a"
+checksum = "63be97961acde393029492ce0be7a1af7e323e6bae9511ebfac33751be5e6806"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -558,9 +558,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.57"
+version = "4.5.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b12c8b680195a62a8364d16b8447b01b6c2c8f9aaf68bee653be34d4245e238"
+checksum = "7f13174bda5dfd69d7e947827e5af4b0f2f94a4a3ee92912fba07a66150f21e2"
 dependencies = [
  "anstream",
  "anstyle",
@@ -582,9 +582,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.7.7"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
+checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "codespan-reporting"
@@ -967,9 +967,9 @@ dependencies = [
 
 [[package]]
 name = "env_filter"
-version = "0.1.4"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bf3c259d255ca70051b30e2e95b5446cdb8949ac4cd22c0d7fd634d89f568e2"
+checksum = "7a1c3cc8e57274ec99de65301228b537f1e4eedc1b8e0f9411c6caac8ae7308f"
 dependencies = [
  "log",
  "regex",
@@ -977,9 +977,9 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.11.8"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13c863f0904021b108aa8b2f55046443e6b1ebde8fd4a15c399893aae4fa069f"
+checksum = "b2daee4ea451f429a58296525ddf28b45a3b64f1acf6587e2067437bb11e218d"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1097,10 +1097,10 @@ dependencies = [
  "feagi-npu-runtime",
  "feagi-observability",
  "feagi-sensorimotor",
- "feagi-serialization",
+ "feagi-serialization 0.0.1-beta.9",
  "feagi-services",
  "feagi-state-manager",
- "feagi-structures",
+ "feagi-structures 0.0.1-beta.8",
  "log",
  "parking_lot",
  "serde_json",
@@ -1119,8 +1119,8 @@ dependencies = [
  "base64 0.22.1",
  "feagi-io",
  "feagi-sensorimotor",
- "feagi-serialization",
- "feagi-structures",
+ "feagi-serialization 0.0.1-beta.8",
+ "feagi-structures 0.0.1-beta.8",
  "log",
  "serde",
  "serde_json",
@@ -1143,10 +1143,10 @@ dependencies = [
  "feagi-npu-neural",
  "feagi-npu-plasticity",
  "feagi-observability",
- "feagi-serialization",
+ "feagi-serialization 0.0.1-beta.8",
  "feagi-services",
  "feagi-state-manager",
- "feagi-structures",
+ "feagi-structures 0.0.1-beta.8",
  "http-body-util",
  "hyper 1.8.1",
  "parking_lot",
@@ -1177,7 +1177,7 @@ dependencies = [
  "feagi-npu-plasticity",
  "feagi-observability",
  "feagi-state-manager",
- "feagi-structures",
+ "feagi-structures 0.0.1-beta.8",
  "getrandom 0.2.17",
  "ndarray",
  "once_cell",
@@ -1208,7 +1208,7 @@ dependencies = [
  "chrono",
  "feagi-npu-neural",
  "feagi-observability",
- "feagi-structures",
+ "feagi-structures 0.0.1-beta.8",
  "js-sys",
  "rand 0.8.5",
  "serde",
@@ -1224,7 +1224,7 @@ dependencies = [
 name = "feagi-io"
 version = "0.0.1-beta.12"
 dependencies = [
- "feagi-serialization",
+ "feagi-serialization 0.0.1-beta.8",
  "serde",
  "tungstenite",
  "zmq",
@@ -1240,9 +1240,9 @@ dependencies = [
  "feagi-npu-neural",
  "feagi-npu-runtime",
  "feagi-observability",
- "feagi-serialization",
+ "feagi-serialization 0.0.1-beta.8",
  "feagi-state-manager",
- "feagi-structures",
+ "feagi-structures 0.0.1-beta.8",
  "memmap2",
  "ndarray",
  "parking_lot",
@@ -1308,8 +1308,8 @@ dependencies = [
 name = "feagi-sensorimotor"
 version = "0.0.1-beta.8"
 dependencies = [
- "feagi-serialization",
- "feagi-structures",
+ "feagi-serialization 0.0.1-beta.8",
+ "feagi-structures 0.0.1-beta.8",
  "image",
  "ndarray",
  "paste",
@@ -1324,9 +1324,20 @@ name = "feagi-serialization"
 version = "0.0.1-beta.8"
 dependencies = [
  "byteorder",
- "feagi-structures",
+ "feagi-structures 0.0.1-beta.8",
  "getrandom 0.2.17",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "feagi-serialization"
+version = "0.0.1-beta.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5953d61a6a74692ec5d10f0869ee0a3d9e694ff3c1f9577a33073c3dec99bc85"
+dependencies = [
+ "byteorder",
+ "feagi-structures 0.0.1-beta.9",
  "serde_json",
 ]
 
@@ -1344,7 +1355,7 @@ dependencies = [
  "feagi-npu-plasticity",
  "feagi-observability",
  "feagi-state-manager",
- "feagi-structures",
+ "feagi-structures 0.0.1-beta.8",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1386,6 +1397,21 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "feagi-structures"
+version = "0.0.1-beta.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3061e4098bdd89947cd798ff59d944cf5ab404463891e1c9979cd12d146c9b72"
+dependencies = [
+ "base64 0.22.1",
+ "ndarray",
+ "paste",
+ "rayon",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -2250,9 +2276,9 @@ checksum = "459427e2af2b9c839b132acb702a1c654d95e10f8c326bfc2ad11310e458b1c5"
 
 [[package]]
 name = "libfuzzer-sys"
-version = "0.4.10"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5037190e1f70cbeef565bd267599242926f724d3b8a9f510fd7e0b540cfa4404"
+checksum = "f12a681b7dd8ce12bff52488013ba614b869148d54dd79836ab85aafdd53f08d"
 dependencies = [
  "arbitrary",
  "cc",
@@ -2555,9 +2581,9 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "ntapi"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c70f219e21142367c70c0b30c6a9e3a14d55b4d12a204d897fbec83a0363f081"
+checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
 dependencies = [
  "winapi",
 ]
