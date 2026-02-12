@@ -12,12 +12,21 @@ pub struct FeagiNetworkConnectionInfoProvider {
     pub api_port: u16,
     pub agent_handler: Arc<Mutex<FeagiAgentHandler>>,
     pub viz_transport_policy: String,
+    pub zmq_enabled: bool,
+    pub zmq_registration_port: u16,
+    pub zmq_sensory_port: u16,
+    pub zmq_motor_port: u16,
+    pub zmq_visualization_port: u16,
+    pub websocket_enabled: bool,
+    pub websocket_registration_port: u16,
+    pub websocket_sensory_port: u16,
+    pub websocket_motor_port: u16,
+    pub websocket_visualization_port: u16,
+    pub websocket_rest_api_port: u16,
 }
 
 impl NetworkConnectionInfoProvider for FeagiNetworkConnectionInfoProvider {
     fn get(&self) -> NetworkConnectionInfo {
-        // TODO: Extract actual endpoint information from agent handler
-        // For now, return placeholder info - needs proper implementation
         NetworkConnectionInfo {
             api: feagi_api::v1::ConnectionInfoApi {
                 enabled: true,
@@ -27,37 +36,43 @@ impl NetworkConnectionInfoProvider for FeagiNetworkConnectionInfoProvider {
                 swagger_url: format!("http://{}:{}/swagger-ui/", self.api_host, self.api_port),
             },
             zmq: feagi_api::v1::ConnectionInfoZmq {
-                enabled: true,
+                enabled: self.zmq_enabled,
                 host: self.api_host.clone(),
                 ports: feagi_api::v1::ConnectionInfoZmqPorts {
-                    registration: 5550,
-                    sensory: 5551,
-                    motor: 5552,
-                    visualization: 5553,
+                    registration: self.zmq_registration_port,
+                    sensory: self.zmq_sensory_port,
+                    motor: self.zmq_motor_port,
+                    visualization: self.zmq_visualization_port,
                     api_control: 5554,
                 },
                 endpoints: feagi_api::v1::ConnectionInfoZmqEndpoints {
-                    registration: format!("tcp://{}:5550", self.api_host),
-                    sensory: format!("tcp://{}:5551", self.api_host),
-                    motor: format!("tcp://{}:5552", self.api_host),
-                    visualization: format!("tcp://{}:5553", self.api_host),
+                    registration: format!("tcp://{}:{}", self.api_host, self.zmq_registration_port),
+                    sensory: format!("tcp://{}:{}", self.api_host, self.zmq_sensory_port),
+                    motor: format!("tcp://{}:{}", self.api_host, self.zmq_motor_port),
+                    visualization: format!("tcp://{}:{}", self.api_host, self.zmq_visualization_port),
                 },
             },
             websocket: feagi_api::v1::ConnectionInfoWebSocket {
-                enabled: true,
+                enabled: self.websocket_enabled,
                 host: self.api_host.clone(),
                 ports: feagi_api::v1::ConnectionInfoWebSocketPorts {
-                    registration: 9050,
-                    sensory: 9051,
-                    motor: 9052,
-                    visualization: 9053,
-                    rest_api: 9054,
+                    registration: self.websocket_registration_port,
+                    sensory: self.websocket_sensory_port,
+                    motor: self.websocket_motor_port,
+                    visualization: self.websocket_visualization_port,
+                    rest_api: self.websocket_rest_api_port,
                 },
                 endpoints: feagi_api::v1::ConnectionInfoWebSocketEndpoints {
-                    registration: format!("ws://{}:9050", self.api_host),
-                    sensory: format!("ws://{}:9051", self.api_host),
-                    motor: format!("ws://{}:9052", self.api_host),
-                    visualization: format!("ws://{}:9053", self.api_host),
+                    registration: format!(
+                        "ws://{}:{}",
+                        self.api_host, self.websocket_registration_port
+                    ),
+                    sensory: format!("ws://{}:{}", self.api_host, self.websocket_sensory_port),
+                    motor: format!("ws://{}:{}", self.api_host, self.websocket_motor_port),
+                    visualization: format!(
+                        "ws://{}:{}",
+                        self.api_host, self.websocket_visualization_port
+                    ),
                 },
             },
             shm: feagi_api::v1::ConnectionInfoShm {

@@ -13,7 +13,7 @@ use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::FeagiConfig;
-use feagi_io::SensoryIntakeQueue;
+use feagi_io::{AgentID, SensoryIntakeQueue};
 use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU, SensoryIntake, TracingMutex};
 use feagi_services::impls::{AgentServiceImpl, SystemServiceImpl};
@@ -229,9 +229,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr)
                 .context("Failed to create WebSocket visualization publisher properties")?
         );
-        agent_handler.add_and_start_broadcast_publisher(ws_viz_props)
-            .context("Failed to start WebSocket visualization publisher")?;
-        info!("      ✓ WebSocket visualization publisher: {} (broadcast mode)", ws_viz_addr);
+        agent_handler.add_publisher_server(ws_viz_props);
+        info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
     }
 
     let agent_handler = Arc::new(Mutex::new(agent_handler));
@@ -280,28 +279,20 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
                 }
             }
 
-            // Serialize to raw bytes (Type 11 format)
-            use feagi_serialization::FeagiSerializable;
-            let num_bytes = cortical_mapped.get_number_of_bytes_needed();
-            let mut raw_bytes = vec![0u8; num_bytes];
-            cortical_mapped.try_serialize_struct_to_byte_slice(&mut raw_bytes)
-                .map_err(|e| format!("Failed to serialize visualization: {:?}", e))?;
+            let agent_id = AgentID::try_from_base64(agent_id)
+                .map_err(|e| format!("Invalid visualization agent_id '{}': {:?}", agent_id, e))?;
 
-            // Try to find SessionID for embodiment agents
-            if let Some(session_id) = handler_guard.find_session_by_agent_id(agent_id) {
-                // Embodiment agent - properly wrap in FeagiByteContainer
-                let mut container = FeagiByteContainer::new_empty();
-                let _ = container.set_session_id(session_id);
-                container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
-                    .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
-                handler_guard.send_visualization_data(session_id, &container)
-                    .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
-            } else {
-                // Visualization-only agent - send raw Type 11 data (BV expects unwrapped format)
-                tracing::trace!("[VIZ-PUBLISHER] Broadcasting {} raw bytes to visualization-only clients (agent_id={})", raw_bytes.len(), agent_id);
-                handler_guard.broadcast_raw_visualization_data(&raw_bytes)
-                    .map_err(|e| format!("Failed to broadcast visualization: {:?}", e))?;
-            }
+            // Wrap visualization payload in a FEAGI byte container and route by AgentID.
+            let mut container = FeagiByteContainer::new_empty();
+            container
+                .set_agent_identifier(agent_id)
+                .map_err(|e| format!("Failed to set visualization agent identifier: {:?}", e))?;
+            container
+                .overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
+            handler_guard
+                .send_visualization_data(agent_id, &container)
+                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
 
             Ok(())
         }
@@ -320,14 +311,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
 
             let mut handler_guard = self.handler.lock().unwrap();
             
-            // Find SessionID for this agent
-            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
-                Some(sid) => sid,
-                None => {
-                    // Agent not connected, skip silently
-                    return Ok(());
-                }
-            };
+            let agent_id = AgentID::try_from_base64(agent_id)
+                .map_err(|e| format!("Invalid motor agent_id '{}': {:?}", agent_id, e))?;
 
             // Motor data is already encoded as FeagiByteContainer bytes
             use feagi_serialization::FeagiByteContainer;
@@ -337,7 +322,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
                 .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
 
             // Send via handler
-            handler_guard.send_motor_data(session_id, &container)
+            handler_guard.send_motor_data(agent_id, &container)
                 .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
 
             Ok(())
@@ -466,6 +451,18 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         api_port,
         agent_handler: Arc::clone(&components.agent_handler),
         viz_transport_policy: config.visualization.transport.clone(),
+        // feagi-rs currently always exposes ZMQ agent endpoints via config.agent.* ports.
+        zmq_enabled: true,
+        zmq_registration_port: config.agent.registration_port,
+        zmq_sensory_port: config.agent.sensory_port,
+        zmq_motor_port: config.agent.motor_port,
+        zmq_visualization_port: config.ports.zmq_visualization_port,
+        websocket_enabled: config.websocket.enabled,
+        websocket_registration_port: config.websocket.registration_port,
+        websocket_sensory_port: config.websocket.sensory_port,
+        websocket_motor_port: config.websocket.motor_port,
+        websocket_visualization_port: config.websocket.visualization_port,
+        websocket_rest_api_port: config.websocket.rest_api_port,
     }) as Arc<dyn NetworkConnectionInfoProvider>;
 
     let api_state = ApiState {

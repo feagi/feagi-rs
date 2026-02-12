@@ -31,7 +31,7 @@ use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_brain_development::ConnectomeManager;
 use feagi_brain_development::models::cortical_area::CorticalAreaExt;
 use feagi_config::{load_config, validate_config, FeagiConfig};
-use feagi_io::SensoryIntakeQueue;
+use feagi_io::{AgentID, SensoryIntakeQueue};
 use feagi_npu_burst_engine::backend::GpuConfig;
 use feagi_npu_burst_engine::{BurstLoopRunner, SensoryIntake, TracingMutex};
 use feagi_observability::{init_logging_default, parse_debug_flags};
@@ -298,8 +298,8 @@ async fn main() -> Result<()> {
 
     tokio::task::spawn_blocking(move || {
         use std::collections::HashSet;
-        let mut known_motor_sessions: HashSet<feagi_serialization::SessionID> = HashSet::new();
-        let mut known_visualization_sessions: HashSet<feagi_serialization::SessionID> =
+        let mut known_motor_sessions: HashSet<AgentID> = HashSet::new();
+        let mut known_visualization_sessions: HashSet<AgentID> =
             HashSet::new();
         
         loop {
@@ -328,18 +328,24 @@ async fn main() -> Result<()> {
                     }
                 }
                 
-                if let Err(e) = handler_guard.poll_embodiment_motors() {
+                if let Err(e) = handler_guard.poll_agent_motors() {
                     error!("❌ Error polling embodiment motors: {:?}", e);
+                }
+
+                // Keep visualization publishers polled so WebSocket clients can complete handshake
+                // even before visualization payloads are emitted.
+                if let Err(e) = handler_guard.poll_agent_visualizers() {
+                    error!("❌ Error polling embodiment visualizers: {:?}", e);
                 }
 
                 // Feed transport-agnostic sensory intake (any transport that received data).
                 // Drain up to a bounded per-cycle budget and keep only the newest payload
                 // so sustained streams do not accumulate stale frames in memory.
                 for _ in 0..sensory_drain_budget_per_cycle {
-                    match handler_guard.poll_embodiment_sensors() {
+                    match handler_guard.poll_agent_sensors() {
                         Ok(Some(container)) => {
                             sensory_intake_queue_for_polling
-                                .push_latest(container.get_byte_ref().to_vec());
+                                .push(container.get_byte_ref().to_vec());
                         }
                         Ok(None) => break,
                         Err(e) => {
@@ -349,23 +355,10 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                // Poll broadcast publishers (e.g., visualization on port 9050) to accept new connections
-                handler_guard.poll_broadcast_publishers();
-                
                 // Check for new WebSocket agent registrations with visualization capability
-                let registered_agents = handler_guard.get_registered_agents();
-                for (session_id, _agent_descriptor) in registered_agents.iter() {
-                    // Resolve canonical agent_id from the live session descriptor.
-                    let Some(agent_descriptor) = handler_guard.get_agent_descriptor(*session_id) else {
-                        warn!(
-                            "⚠️ [WS-REGISTRATION] Missing agent descriptor for session {:?}",
-                            session_id
-                        );
-                        known_motor_sessions.insert(*session_id);
-                        known_visualization_sessions.insert(*session_id);
-                        continue;
-                    };
-                    let agent_id = agent_descriptor.as_base64();
+                let registered_agents = handler_guard.get_all_registered_agents();
+                for (session_id, (agent_descriptor, capabilities)) in registered_agents.iter() {
+                    let agent_id = session_id.to_base64();
 
                     if !known_motor_sessions.contains(session_id) {
                         // Register motor subscriptions for this agent:
@@ -454,14 +447,45 @@ async fn main() -> Result<()> {
                         }
                     }
 
-                    // Check if this session has visualization capability (from prior REST registration)
+                    // Register visualization subscriptions.
+                    // Prefer explicit per-agent visualization settings from device registrations;
+                    // otherwise fall back to capability presence with runtime burst frequency.
                     if !known_visualization_sessions.contains(session_id) {
-                        if let Some((viz_agent_id, rate_hz)) =
-                            handler_guard.get_visualization_info_for_session(*session_id)
+                        let mut viz_registration: Option<(String, f64)> =
+                            handler_guard.get_visualization_info_for_agent(*session_id);
+
+                        if viz_registration.is_none()
+                            && capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveNeuronVisualizations)
                         {
+                            viz_registration = Some((agent_id.clone(), 0.0));
+                        }
+
+                        if let Some((viz_agent_id, requested_rate_hz)) = viz_registration {
                             known_visualization_sessions.insert(*session_id);
                             let runtime_svc = runtime_service_for_polling.clone();
                             tokio::spawn(async move {
+                                let rate_hz = if requested_rate_hz > 0.0 {
+                                    requested_rate_hz
+                                } else {
+                                    match runtime_svc.get_status().await {
+                                        Ok(status) if status.frequency_hz > 0.0 => status.frequency_hz,
+                                        Ok(status) => {
+                                            warn!(
+                                                "⚠️ [WS-REGISTRATION] Invalid runtime frequency {}Hz for visualization registration",
+                                                status.frequency_hz
+                                            );
+                                            return;
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                "⚠️ [WS-REGISTRATION] Failed to read runtime status for visualization registration: {}",
+                                                e
+                                            );
+                                            return;
+                                        }
+                                    }
+                                };
+
                                 match runtime_svc
                                     .register_visualization_subscriptions(&viz_agent_id, rate_hz)
                                     .await
@@ -702,8 +726,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         
         let ws_viz_addr = format!("{}:{}", config.websocket.host, config.websocket.visualization_port);
         let ws_viz_props = Box::new(FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr)?);
-        agent_handler.add_and_start_broadcast_publisher(ws_viz_props)?;
-        info!("      ✓ WebSocket visualization publisher: {} (broadcast mode)", ws_viz_addr);
+        agent_handler.add_publisher_server(ws_viz_props);
+        info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
         
         info!("    ✓ WebSocket transport servers added");
     }
@@ -753,29 +777,19 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 }
             }
 
-            // Serialize to raw Type 11 bytes for BV, wrap properly for embodiment
-            use feagi_serialization::FeagiSerializable;
-            let num_bytes = cortical_mapped.get_number_of_bytes_needed();
-            let mut raw_bytes = vec![0u8; num_bytes];
-            cortical_mapped.try_serialize_struct_to_byte_slice(&mut raw_bytes)
-                .map_err(|e| format!("Failed to serialize visualization: {:?}", e))?;
+            let agent_id = AgentID::try_from_base64(agent_id)
+                .map_err(|e| format!("Invalid visualization agent_id '{}': {:?}", agent_id, e))?;
 
-            // Try to find SessionID for embodiment agents
-            if let Some(session_id) = handler_guard.find_session_by_agent_id(agent_id) {
-                // Embodiment agent - properly wrap using overwrite method
-                let mut container = FeagiByteContainer::new_empty();
-                let _ = container.set_session_id(session_id);
-                container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
-                    .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
-                handler_guard.send_visualization_data(session_id, &container)
-                    .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
-                tracing::trace!("[VIZ-PUBLISHER] Sent to embodiment agent {} (session {:?})", agent_id, session_id);
-            } else {
-                // Visualization-only agent - send raw Type 11 data (BV expects unwrapped format)
-                tracing::trace!("[VIZ-PUBLISHER] Broadcasting {} raw bytes to visualization-only clients (agent_id={})", raw_bytes.len(), agent_id);
-                handler_guard.broadcast_raw_visualization_data(&raw_bytes)
-                    .map_err(|e| format!("Failed to broadcast visualization: {:?}", e))?;
-            }
+            let mut container = FeagiByteContainer::new_empty();
+            container
+                .set_agent_identifier(agent_id)
+                .map_err(|e| format!("Failed to set visualization agent identifier: {:?}", e))?;
+            container
+                .overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
+            handler_guard
+                .send_visualization_data(agent_id, &container)
+                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
 
             Ok(())
         }
@@ -794,17 +808,15 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
             let mut handler_guard = self.handler.lock().unwrap();
             
-            let session_id = match handler_guard.find_session_by_agent_id(agent_id) {
-                Some(sid) => sid,
-                None => return Ok(()),
-            };
+            let agent_id = AgentID::try_from_base64(agent_id)
+                .map_err(|e| format!("Invalid motor agent_id '{}': {:?}", agent_id, e))?;
 
             use feagi_serialization::FeagiByteContainer;
             let mut container = FeagiByteContainer::new_empty();
             container.try_write_data_by_copy_and_verify(data)
                 .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
 
-            handler_guard.send_motor_data(session_id, &container)
+            handler_guard.send_motor_data(agent_id, &container)
                 .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
 
             Ok(())
@@ -1043,6 +1055,18 @@ async fn start_services(
         api_port,
         agent_handler: Arc::clone(&components.agent_handler),
         viz_transport_policy: config.visualization.transport.clone(),
+        // feagi-rs currently always exposes ZMQ agent endpoints via config.agent.* ports.
+        zmq_enabled: true,
+        zmq_registration_port: config.agent.registration_port,
+        zmq_sensory_port: config.agent.sensory_port,
+        zmq_motor_port: config.agent.motor_port,
+        zmq_visualization_port: config.ports.zmq_visualization_port,
+        websocket_enabled: config.websocket.enabled,
+        websocket_registration_port: config.websocket.registration_port,
+        websocket_sensory_port: config.websocket.sensory_port,
+        websocket_motor_port: config.websocket.motor_port,
+        websocket_visualization_port: config.websocket.visualization_port,
+        websocket_rest_api_port: config.websocket.rest_api_port,
     }) as Arc<dyn NetworkConnectionInfoProvider>;
 
     let api_state = ApiState {
