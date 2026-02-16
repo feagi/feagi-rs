@@ -111,7 +111,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             config.agent.host, config.agent.registration_port
         );
         let router_props = Box::new(
-            FeagiZmqServerRouterProperties::new(&registration_addr)
+            FeagiZmqServerRouterProperties::new(&registration_addr, &registration_addr)
                 .context("Failed to create ZMQ router properties")?
         );
         agent_handler
@@ -144,21 +144,21 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
 
             let sensory_addr = format!("tcp://{}:{}", config.zmq.host, sensory_port);
             let sensory_props = Box::new(
-                FeagiZmqServerPullerProperties::new(&sensory_addr)
+                FeagiZmqServerPullerProperties::new(&sensory_addr, &sensory_addr)
                     .context("Failed to create ZMQ sensory puller properties")?
             );
             agent_handler.add_puller_server(sensory_props);
 
             let motor_addr = format!("tcp://{}:{}", config.zmq.host, motor_port);
             let motor_props = Box::new(
-                FeagiZmqServerPublisherProperties::new(&motor_addr)
+                FeagiZmqServerPublisherProperties::new(&motor_addr, &motor_addr)
                     .context("Failed to create ZMQ motor publisher properties")?
             );
             agent_handler.add_publisher_server(motor_props);
 
             let viz_addr = format!("tcp://{}:{}", config.zmq.host, viz_port);
             let viz_props = Box::new(
-                FeagiZmqServerPublisherProperties::new(&viz_addr)
+                FeagiZmqServerPublisherProperties::new(&viz_addr, &viz_addr)
                     .context("Failed to create ZMQ visualization publisher properties")?
             );
             agent_handler.add_publisher_server(viz_props);
@@ -214,7 +214,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             config.websocket.host, config.websocket.motor_port
         );
         let ws_motor_props = Box::new(
-            FeagiWebSocketServerPublisherProperties::new(&ws_motor_addr)
+            FeagiWebSocketServerPublisherProperties::new(&ws_motor_addr, &ws_motor_addr)
                 .context("Failed to create WebSocket motor publisher properties")?
         );
         agent_handler.add_publisher_server(ws_motor_props);
@@ -226,7 +226,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             config.websocket.host, config.websocket.visualization_port
         );
         let ws_viz_props = Box::new(
-            FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr)
+            FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr, &ws_viz_addr)
                 .context("Failed to create WebSocket visualization publisher properties")?
         );
         agent_handler.add_publisher_server(ws_viz_props);

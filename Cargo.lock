@@ -1085,6 +1085,7 @@ dependencies = [
  "feagi-structures",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

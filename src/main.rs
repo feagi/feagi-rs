@@ -671,7 +671,10 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     #[cfg(feature = "zmq-transport")]
     {
         let registration_addr = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
-        let router_props = Box::new(FeagiZmqServerRouterProperties::new(&registration_addr)?);
+        let router_props = Box::new(FeagiZmqServerRouterProperties::new(
+            &registration_addr,
+            &registration_addr,
+        )?);
         agent_handler.add_and_start_command_control_server(router_props)?;
 
         const ZMQ_AGENT_SLOTS: u16 = 8;
@@ -696,15 +699,21 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             };
 
             let sensory_addr = format!("tcp://{}:{}", config.zmq.host, sensory_port);
-            let sensory_props = Box::new(FeagiZmqServerPullerProperties::new(&sensory_addr)?);
+            let sensory_props = Box::new(FeagiZmqServerPullerProperties::new(
+                &sensory_addr,
+                &sensory_addr,
+            )?);
             agent_handler.add_puller_server(sensory_props);
 
             let motor_addr = format!("tcp://{}:{}", config.zmq.host, motor_port);
-            let motor_props = Box::new(FeagiZmqServerPublisherProperties::new(&motor_addr)?);
+            let motor_props = Box::new(FeagiZmqServerPublisherProperties::new(
+                &motor_addr,
+                &motor_addr,
+            )?);
             agent_handler.add_publisher_server(motor_props);
 
             let viz_addr = format!("tcp://{}:{}", config.zmq.host, viz_port);
-            let viz_props = Box::new(FeagiZmqServerPublisherProperties::new(&viz_addr)?);
+            let viz_props = Box::new(FeagiZmqServerPublisherProperties::new(&viz_addr, &viz_addr)?);
             agent_handler.add_publisher_server(viz_props);
         }
         info!("    ✓ ZMQ transport servers added ({} agent slots)", ZMQ_AGENT_SLOTS);
@@ -721,11 +730,14 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         agent_handler.add_puller_server(ws_sensory_props);
         
         let ws_motor_addr = format!("{}:{}", config.websocket.host, config.websocket.motor_port);
-        let ws_motor_props = Box::new(FeagiWebSocketServerPublisherProperties::new(&ws_motor_addr)?);
+        let ws_motor_props = Box::new(FeagiWebSocketServerPublisherProperties::new(
+            &ws_motor_addr,
+            &ws_motor_addr,
+        )?);
         agent_handler.add_publisher_server(ws_motor_props);
         
         let ws_viz_addr = format!("{}:{}", config.websocket.host, config.websocket.visualization_port);
-        let ws_viz_props = Box::new(FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr)?);
+        let ws_viz_props = Box::new(FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr, &ws_viz_addr)?);
         agent_handler.add_publisher_server(ws_viz_props);
         info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
         
