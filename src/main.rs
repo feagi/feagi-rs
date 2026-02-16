@@ -397,12 +397,10 @@ async fn main() -> Result<()> {
                                 session_id
                             );
                         } else {
-                            known_motor_sessions.insert(*session_id);
-
                             let runtime_svc = runtime_service_for_polling.clone();
                             let agent_id_for_motor = agent_id.clone();
                             let motor_cortical_ids_for_task = motor_cortical_ids.clone();
-                            tokio::spawn(async move {
+                            let registration_ok = tokio::runtime::Handle::current().block_on(async move {
                                 let runtime_status = runtime_svc.get_status().await;
                                 let motor_rate_hz = match runtime_status {
                                     Ok(status) if status.frequency_hz > 0.0 => status.frequency_hz,
@@ -411,14 +409,14 @@ async fn main() -> Result<()> {
                                             "⚠️ [WS-REGISTRATION] Invalid runtime frequency {}Hz for motor registration",
                                             status.frequency_hz
                                         );
-                                        return;
+                                        return false;
                                     }
                                     Err(e) => {
                                         warn!(
                                             "⚠️ [WS-REGISTRATION] Failed to read runtime status for motor registration: {}",
                                             e
                                         );
-                                        return;
+                                        return false;
                                     }
                                 };
 
@@ -435,15 +433,20 @@ async fn main() -> Result<()> {
                                             "✅ [WS-REGISTRATION] Registered motor subscriptions for agent '{}' at {}Hz",
                                             agent_id_for_motor, motor_rate_hz
                                         );
+                                        true
                                     }
                                     Err(e) => {
                                         warn!(
                                             "⚠️ [WS-REGISTRATION] Failed to register motor subscriptions for agent '{}': {}",
                                             agent_id_for_motor, e
                                         );
+                                        false
                                     }
                                 }
                             });
+                            if registration_ok {
+                                known_motor_sessions.insert(*session_id);
+                            }
                         }
                     }
 
@@ -461,9 +464,8 @@ async fn main() -> Result<()> {
                         }
 
                         if let Some((viz_agent_id, requested_rate_hz)) = viz_registration {
-                            known_visualization_sessions.insert(*session_id);
                             let runtime_svc = runtime_service_for_polling.clone();
-                            tokio::spawn(async move {
+                            let registration_ok = tokio::runtime::Handle::current().block_on(async move {
                                 let rate_hz = if requested_rate_hz > 0.0 {
                                     requested_rate_hz
                                 } else {
@@ -474,14 +476,14 @@ async fn main() -> Result<()> {
                                                 "⚠️ [WS-REGISTRATION] Invalid runtime frequency {}Hz for visualization registration",
                                                 status.frequency_hz
                                             );
-                                            return;
+                                            return false;
                                         }
                                         Err(e) => {
                                             warn!(
                                                 "⚠️ [WS-REGISTRATION] Failed to read runtime status for visualization registration: {}",
                                                 e
                                             );
-                                            return;
+                                            return false;
                                         }
                                     }
                                 };
@@ -495,15 +497,20 @@ async fn main() -> Result<()> {
                                             "✅ [WS-REGISTRATION] Registered visualization for agent at {}Hz",
                                             rate_hz
                                         );
+                                        true
                                     }
                                     Err(e) => {
                                         warn!(
                                             "⚠️  [WS-REGISTRATION] Failed to register visualization: {}",
                                             e
                                         );
+                                        false
                                     }
                                 }
                             });
+                            if registration_ok {
+                                known_visualization_sessions.insert(*session_id);
+                            }
                         }
                     }
                 }
