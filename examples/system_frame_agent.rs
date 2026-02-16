@@ -21,15 +21,21 @@
 //! - FEAGI_TEST_GAZE_X (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_GAZE_Y (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_GAZE_MODULATION (default: 0.5, range: 0.0-1.0)
+//! - FEAGI_TEST_DIFF_THRESHOLD (default: 15; higher drops more unchanged pixels)
+//! - FEAGI_TEST_SENSORY_RATE_HZ (optional: requested sensory rate in Hz)
+//! - FEAGI_TEST_SENSORY_RATE_STRICT (default: false; true => fail if FEAGI cannot honor rate)
+//! - FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT (default: false; true => allow changing FEAGI burst rate)
 
 use anyhow::{Context, Result};
 use feagi_agent::clients::async_helpers::tokio_generic_implementations::{
-    TokioDriverConfig, TokioEmbodimentAgent,
+    SensoryRateNegotiationConfig, SensoryRateNegotiationPolicy, TokioDriverConfig,
+    TokioEmbodimentAgent,
 };
 use feagi_agent::clients::SessionTimingConfig;
 use feagi_agent::{AgentCapabilities, AgentDescriptor, AuthToken};
 use feagi_config::{load_config, FeagiConfig};
 use feagi_io::protocol_implementations::zmq::FeagiZmqClientRequesterProperties;
+use feagi_sensorimotor::data_pipeline::PipelineStageProperties;
 use feagi_sensorimotor::data_types::descriptors::{
     ColorChannelLayout, ColorSpace, ImageXYResolution,
     SegmentedImageFrameProperties, SegmentedXYImageResolutions,
@@ -55,6 +61,10 @@ struct ExampleSettings {
     gaze_x: f32,
     gaze_y: f32,
     gaze_modulation: f32,
+    diff_threshold: u8,
+    requested_sensory_rate_hz: Option<f64>,
+    sensory_rate_strict: bool,
+    allow_feagi_rate_upshift: bool,
 }
 
 fn main() -> Result<()> {
@@ -85,8 +95,32 @@ where
     }
 }
 
+/// Parse an optional environment variable.
+fn parse_optional_env<T>(name: &str) -> Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    match env::var(name) {
+        Ok(raw) => raw
+            .parse::<T>()
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!("{name} must be a valid value; got '{raw}'; error: {e}")),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Load example settings from environment variables.
 fn load_example_settings() -> Result<ExampleSettings> {
+    let requested_sensory_rate_hz = parse_optional_env::<f64>("FEAGI_TEST_SENSORY_RATE_HZ")?;
+    if let Some(rate_hz) = requested_sensory_rate_hz {
+        if !rate_hz.is_finite() || rate_hz <= 0.0 {
+            return Err(anyhow::anyhow!(
+                "FEAGI_TEST_SENSORY_RATE_HZ must be a finite value > 0, got {}",
+                rate_hz
+            ));
+        }
+    }
     Ok(ExampleSettings {
         cortical_unit_id: 0,
         color_space: ColorSpace::Gamma,
@@ -95,6 +129,13 @@ fn load_example_settings() -> Result<ExampleSettings> {
         gaze_x: parse_env_or_default("FEAGI_TEST_GAZE_X", 0.5)?,
         gaze_y: parse_env_or_default("FEAGI_TEST_GAZE_Y", 0.5)?,
         gaze_modulation: parse_env_or_default("FEAGI_TEST_GAZE_MODULATION", 0.5)?,
+        diff_threshold: parse_env_or_default("FEAGI_TEST_DIFF_THRESHOLD", 15)?,
+        requested_sensory_rate_hz,
+        sensory_rate_strict: parse_env_or_default("FEAGI_TEST_SENSORY_RATE_STRICT", false)?,
+        allow_feagi_rate_upshift: parse_env_or_default(
+            "FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT",
+            false,
+        )?,
     })
 }
 
@@ -247,13 +288,35 @@ fn create_connected_embodiment(
     .map_err(|e| anyhow::anyhow!("{e}"))
     .context("service_startup timeout out of range")?;
 
+    if settings.requested_sensory_rate_hz.is_some() && !settings.allow_feagi_rate_upshift {
+        eprintln!(
+            "[system_frame_agent] FEAGI_TEST_SENSORY_RATE_HZ set but FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT=false; keeping FEAGI burst rate unchanged."
+        );
+    }
+
     let driver = TokioDriverConfig {
         poll_interval: Duration::from_secs_f64(config.neural.burst_engine_timestep),
         timing: SessionTimingConfig {
             heartbeat_interval_ms: config.zmq.client_heartbeat_timeout,
             registration_deadline_ms: Some(registration_deadline_ms),
         },
-        sensory_rate_negotiation: None,
+        sensory_rate_negotiation: if settings.allow_feagi_rate_upshift {
+            settings
+                .requested_sensory_rate_hz
+                .map(|requested_sensory_rate_hz| SensoryRateNegotiationConfig {
+                    requested_sensory_rate_hz,
+                    feagi_api_host: config.api.advertised_host.clone(),
+                    feagi_api_port: config.api.port,
+                    api_timeout: Duration::from_secs_f64(config.timeouts.service_startup),
+                    policy: if settings.sensory_rate_strict {
+                        SensoryRateNegotiationPolicy::Strict
+                    } else {
+                        SensoryRateNegotiationPolicy::CapAndWarn
+                    },
+                })
+        } else {
+            None
+        },
     };
 
     let mut embodiment = TokioEmbodimentAgent::new_unconnected(
@@ -312,12 +375,34 @@ fn register_vision_device(
             unit_index,
             channel_count,
             frame_change_handling,
-            image_props,
-            segmented_props,
-            initial_gaze,
+            image_props.clone(),
+            segmented_props.clone(),
+            initial_gaze.clone(),
         )
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("Failed to register segmented vision device")?;
+
+    // Align example behavior with desktop controller: quick-diff before segmentation.
+    // This avoids near-full-frame sensory injection that can overwhelm FEAGI.
+    let quick_diff_stage = PipelineStageProperties::new_image_quick_diff(
+        settings.diff_threshold..=u8::MAX,
+        Percentage::new_from_0_1(0.0).context("Invalid activity lower bound")?
+            ..=Percentage::new_from_0_1(1.0).context("Invalid activity upper bound")?,
+        image_props,
+    );
+    let segmentator_stage = PipelineStageProperties::new_image_frame_segmentator(
+        image_props,
+        segmented_props,
+        initial_gaze,
+    );
+    sensor_cache
+        .segmented_vision_replace_all_stages(
+            unit_index,
+            CorticalChannelIndex::from(0u32),
+            vec![quick_diff_stage, segmentator_stage],
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("Failed to install segmented vision quick-diff pipeline")?;
 
     Ok(())
 }
