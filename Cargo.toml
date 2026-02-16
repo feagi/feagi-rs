@@ -36,7 +36,7 @@ feagi-evolutionary = { version = "^0.0.1-beta.8" }
 feagi-services = { version = "^0.0.1-beta.8" }
 feagi-api = { version = "^0.0.1-beta.10", features = ["services"] }
 feagi-io = { version = "^0.0.1-beta.12", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
-feagi-agent = { version = "^0.0.1-beta.9", features = ["agent-server"] }
+feagi-agent = { version = "^0.0.1-beta.9", features = ["agent-server", "agent-client-asynchelper-tokio"] }
 feagi-state-manager = { version = "^0.0.1-beta.8" }
 feagi-npu-plasticity = { version = "^0.0.1-beta.12" }
 feagi-serialization = { version = "^0.0.1-beta.8" }

@@ -23,27 +23,31 @@
 //! - FEAGI_TEST_GAZE_MODULATION (default: 0.5, range: 0.0-1.0)
 
 use anyhow::{Context, Result};
-use feagi_agent::sdk::registration::{AgentRegistrar, FeagiApiConfig};
-use feagi_agent::sdk::types::{
-    ColorSpace, CorticalChannelCount, CorticalChannelIndex, CorticalUnitIndex, FrameChangeHandling,
-    GazeProperties, ImageFrame, SegmentedImageFrameProperties,
+use feagi_agent::clients::async_helpers::tokio_generic_implementations::{
+    TokioDriverConfig, TokioEmbodimentAgent,
 };
-use feagi_agent::sdk::{AgentDescriptor, ConnectorAgent};
-use feagi_agent::{AgentClient, AgentConfig, AgentType};
+use feagi_agent::clients::SessionTimingConfig;
+use feagi_agent::{AgentCapabilities, AgentDescriptor, AuthToken};
 use feagi_config::{load_config, FeagiConfig};
-use feagi_io::SensoryUnit;
-use feagi_sensorimotor::data_types::descriptors::SegmentedXYImageResolutions;
-use feagi_sensorimotor::data_types::{Percentage, Percentage2D};
+use feagi_io::protocol_implementations::zmq::FeagiZmqClientRequesterProperties;
+use feagi_sensorimotor::data_types::descriptors::{
+    ColorChannelLayout, ColorSpace, ImageXYResolution,
+    SegmentedImageFrameProperties, SegmentedXYImageResolutions,
+};
+use feagi_sensorimotor::data_types::{GazeProperties, ImageFrame, Percentage, Percentage2D};
+use feagi_sensorimotor::wrapped_io_data::WrappedIOData;
+use feagi_structures::genomic::cortical_area::descriptors::{
+    CorticalChannelCount, CorticalChannelIndex, CorticalUnitIndex,
+};
+use feagi_structures::genomic::cortical_area::io_cortical_area_configuration_flag::FrameChangeHandling;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::time::{Duration, Instant};
-use tokio::runtime::Runtime;
+use std::time::Duration;
 
 /// Example settings sourced from environment variables.
 struct ExampleSettings {
-    agent_id: String,
     cortical_unit_id: u8,
     color_space: ColorSpace,
     frame_dir: PathBuf,
@@ -83,11 +87,7 @@ where
 
 /// Load example settings from environment variables.
 fn load_example_settings() -> Result<ExampleSettings> {
-    let descriptor = AgentDescriptor::new(1, "feagi", "system-frame-test", 1)
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("Failed to build AgentDescriptor")?;
     Ok(ExampleSettings {
-        agent_id: descriptor.to_base64(),
         cortical_unit_id: 0,
         color_space: ColorSpace::Gamma,
         frame_dir: PathBuf::from(require_env("FEAGI_TEST_FRAME_DIR")?),
@@ -160,23 +160,20 @@ fn load_image_frame(path: &Path, color_space: &ColorSpace) -> Result<ImageFrame>
         }
     };
 
-    let frame = frame_result.map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    Ok(frame)
+    frame_result
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("Failed to decode frame bytes")
 }
 
 /// Load frames and validate consistent dimensions.
-fn load_frame_sequence(
-    frame_paths: &[PathBuf],
-    color_space: &ColorSpace,
-) -> Result<Vec<ImageFrame>> {
+fn load_frame_sequence(frame_paths: &[PathBuf], color_space: &ColorSpace) -> Result<Vec<ImageFrame>> {
     if frame_paths.is_empty() {
         return Err(anyhow::anyhow!("No frame paths provided"));
     }
 
     let mut frames = Vec::with_capacity(frame_paths.len());
-    let mut expected_resolution: Option<feagi_agent::sdk::types::ImageXYResolution> = None;
-    let mut expected_layout = None;
+    let mut expected_resolution: Option<ImageXYResolution> = None;
+    let mut expected_layout: Option<ColorChannelLayout> = None;
 
     for path in frame_paths {
         let frame = load_image_frame(path, color_space)?;
@@ -225,86 +222,65 @@ fn format_tcp_endpoint(host: &str, port: u16) -> String {
     }
 }
 
-/// Build the agent configuration from FEAGI config and settings.
-fn build_agent_config(
+/// Create and connect the embodiment agent using current `feagi-agent` APIs.
+fn create_connected_embodiment(
     config: &FeagiConfig,
     settings: &ExampleSettings,
-    resolution: (u32, u32),
-) -> Result<AgentConfig> {
-    let (width, height) = resolution;
-    let timestep = config.neural.burst_engine_timestep;
-    if timestep <= 0.0 {
-        return Err(anyhow::anyhow!(
-            "config.neural.burst_engine_timestep must be > 0"
-        ));
-    }
+    first_frame: &ImageFrame,
+) -> Result<TokioEmbodimentAgent> {
+    let agent_descriptor = AgentDescriptor::new("feagi", "system-frame-agent", 1)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("Failed to create agent descriptor")?;
+    let auth_token = AuthToken::new([0u8; 32]);
 
-    let service_startup_ms = config.timeouts.service_startup * 1000.0;
-    let connect_timeout_ms = config.zmq.socket_connect_timeout;
-    if connect_timeout_ms == 0 {
-        return Err(anyhow::anyhow!(
-            "config.zmq.socket_connect_timeout must be > 0"
-        ));
-    }
-    let registration_retries = (service_startup_ms / connect_timeout_ms as f64).ceil() as u32;
-    if registration_retries == 0 {
-        return Err(anyhow::anyhow!(
-            "Derived feagi_registration_retries must be > 0"
-        ));
-    }
-
-    let sensory_hwm = i32::try_from(config.zmq.streams.sensory.receive_high_water_mark)
-        .context("sensory receive_high_water_mark must fit into i32")?;
-    let sensory_linger = i32::try_from(config.zmq.streams.sensory.linger_ms)
-        .context("sensory linger_ms must fit into i32")?;
-
-    let registration_endpoint = format_tcp_endpoint(
-        &config.agent.advertised_host,
-        config.agent.registration_port,
+    let registration_endpoint =
+        format_tcp_endpoint(&config.agent.advertised_host, config.agent.registration_port);
+    let registration_properties = Box::new(
+        FeagiZmqClientRequesterProperties::new(&registration_endpoint)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context("Failed to create registration endpoint properties")?,
     );
-    let sensory_endpoint =
-        format_tcp_endpoint(&config.zmq.advertised_host, config.ports.zmq_sensory_port);
-    let motor_endpoint =
-        format_tcp_endpoint(&config.zmq.advertised_host, config.ports.zmq_motor_port);
-    let viz_endpoint = format_tcp_endpoint(
-        &config.zmq.advertised_host,
-        config.ports.zmq_visualization_port,
-    );
-    let control_endpoint =
-        format_tcp_endpoint(&config.zmq.advertised_host, config.ports.zmq_rest_port);
 
-    Ok(
-        AgentConfig::new(settings.agent_id.clone(), AgentType::Sensory)
-            .with_vision_unit(
-                "segmented-vision",
-                (width as usize, height as usize),
-                3,
-                SensoryUnit::SegmentedVision,
-                settings.cortical_unit_id,
-            )
-            .with_registration_endpoint(registration_endpoint)
-            .with_sensory_endpoint(sensory_endpoint)
-            .with_motor_endpoint(motor_endpoint)
-            .with_visualization_endpoint(viz_endpoint)
-            .with_control_endpoint(control_endpoint)
-            .with_sensory_socket_config(
-                sensory_hwm,
-                sensory_linger,
-                config.zmq.streams.sensory.immediate,
-            )
-            .with_heartbeat_interval(config.zmq.client_heartbeat_timeout as f64 / 1000.0)
-            .with_connection_timeout_ms(connect_timeout_ms)
-            .with_registration_retries(registration_retries),
+    let registration_deadline_ms = u64::try_from(
+        Duration::from_secs_f64(config.timeouts.service_startup).as_millis(),
     )
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .context("service_startup timeout out of range")?;
+
+    let driver = TokioDriverConfig {
+        poll_interval: Duration::from_secs_f64(config.neural.burst_engine_timestep),
+        timing: SessionTimingConfig {
+            heartbeat_interval_ms: config.zmq.client_heartbeat_timeout,
+            registration_deadline_ms: Some(registration_deadline_ms),
+        },
+        sensory_rate_negotiation: None,
+    };
+
+    let mut embodiment = TokioEmbodimentAgent::new_unconnected(
+        registration_properties,
+        agent_descriptor,
+        auth_token,
+        vec![
+            AgentCapabilities::SendSensorData,
+            AgentCapabilities::ReceiveMotorData,
+        ],
+        driver,
+    );
+
+    register_vision_device(&mut embodiment, settings, first_frame)?;
+    embodiment
+        .connect_and_register_spin()
+        .context("Failed to connect/register agent")?;
+    Ok(embodiment)
 }
 
-/// Register the vision device for this example using the SDK connector cache.
+/// Register segmented vision device in the connector cache.
 fn register_vision_device(
-    connector: &mut ConnectorAgent,
+    embodiment: &mut TokioEmbodimentAgent,
     settings: &ExampleSettings,
     frame: &ImageFrame,
 ) -> Result<()> {
-    let mut sensor_cache = connector.get_sensor_cache();
+    let mut sensor_cache = embodiment.get_embodiment_mut().get_sensor_cache();
     let unit_index = CorticalUnitIndex::from(settings.cortical_unit_id);
     let channel_count = CorticalChannelCount::new(1).context("CorticalChannelCount must be > 0")?;
     let frame_change_handling = FrameChangeHandling::Absolute;
@@ -346,16 +322,20 @@ fn register_vision_device(
     Ok(())
 }
 
-/// Build an AgentRegistrar for the FEAGI HTTP API.
-fn build_registrar(config: &FeagiConfig) -> Result<AgentRegistrar> {
-    let timeout = Duration::from_secs_f64(config.timeouts.service_startup);
-    AgentRegistrar::new(FeagiApiConfig::new(
-        config.api.advertised_host.clone(),
-        config.api.port,
-        timeout,
-    ))
-    .map_err(|e| anyhow::anyhow!("{e}"))
-    .context("Failed to create AgentRegistrar")
+/// Write the next frame into the sensor cache.
+fn write_frame(
+    embodiment: &mut TokioEmbodimentAgent,
+    settings: &ExampleSettings,
+    frame: &ImageFrame,
+) -> Result<()> {
+    let unit_index = CorticalUnitIndex::from(settings.cortical_unit_id);
+    let channel_index = CorticalChannelIndex::from(0u32);
+    let wrapped = WrappedIOData::ImageFrame(frame.clone());
+    let mut sensor_cache = embodiment.get_embodiment_mut().get_sensor_cache();
+    sensor_cache
+        .segmented_vision_write(unit_index, channel_index, wrapped)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("Failed to write segmented vision frame")
 }
 
 fn run_example() -> Result<()> {
@@ -368,82 +348,15 @@ fn run_example() -> Result<()> {
         .first()
         .context("Loaded frames list is empty after validation")?;
 
-    let resolution = first_frame.get_xy_resolution();
-    let agent_config =
-        build_agent_config(&config, &settings, (resolution.width, resolution.height))?;
-
-    let agent_descriptor = AgentDescriptor::try_from_base64(&settings.agent_id)
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("Invalid FEAGI_TEST_AGENT_ID_BASE64")?;
-    let mut connector = ConnectorAgent::new_empty(agent_descriptor);
-    register_vision_device(&mut connector, &settings, first_frame)?;
-
-    let mut client = AgentClient::new(agent_config).context("Failed to create AgentClient")?;
-    client.connect().context("Failed to connect to FEAGI")?;
-
-    let registrar = build_registrar(&config)?;
-    let device_registrations = connector
-        .get_device_registration_json()
-        .context("Failed to export device registrations")?;
-
-    let runtime = Runtime::new().context("Failed to create Tokio runtime")?;
-    runtime
-        .block_on(registrar.sync_device_registrations(device_registrations, &settings.agent_id))
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("Failed to sync device registrations to FEAGI")?;
-
+    let mut embodiment = create_connected_embodiment(&config, &settings, first_frame)?;
     let frame_interval = Duration::from_secs_f64(config.neural.burst_engine_timestep);
-    let reconnect_delay = Duration::from_millis(config.zmq.socket_connect_timeout);
-    let retry_window_ms = config.timeouts.service_startup * 1000.0;
-    let mut registration_retries =
-        (retry_window_ms / config.zmq.socket_connect_timeout as f64).ceil() as u32;
-    if registration_retries == 0 {
-        registration_retries = 1;
-    }
-    let unit_index = CorticalUnitIndex::from(settings.cortical_unit_id);
-    let channel_index = CorticalChannelIndex::from(0u32);
+
     for _ in 0..settings.frame_loops {
-        for frame in frames.iter() {
-            let encoded = {
-                let mut sensor_cache = connector.get_sensor_cache();
-                sensor_cache
-                    .segmented_vision_write(unit_index, channel_index, frame.clone().into())
-                    .map_err(|e| anyhow::anyhow!("{e}"))
-                    .context("Failed to write segmented vision frame")?;
-                sensor_cache
-                    .encode_all_sensors_to_neurons(Instant::now())
-                    .map_err(|e| anyhow::anyhow!("{e}"))
-                    .context("Failed to encode sensors to neurons")?;
-                sensor_cache
-                    .encode_neurons_to_bytes()
-                    .map_err(|e| anyhow::anyhow!("{e}"))
-                    .context("Failed to encode neurons to bytes")?;
-                sensor_cache
-                    .get_feagi_byte_container()
-                    .get_byte_ref()
-                    .to_vec()
-            };
-            let mut sent = client
-                .try_send_sensory_bytes(&encoded)
-                .map_err(|e| anyhow::anyhow!("{e}"))
-                .context("Failed to send sensory bytes")?;
-            if !sent {
-                for _ in 0..registration_retries {
-                    std::thread::sleep(reconnect_delay);
-                    sent = client
-                        .try_send_sensory_bytes(&encoded)
-                        .map_err(|e| anyhow::anyhow!("{e}"))
-                        .context("Failed to send sensory bytes")?;
-                    if sent {
-                        break;
-                    }
-                }
-            }
-            if !sent {
-                return Err(anyhow::anyhow!(
-                    "Sensory stream not connected after retries; frame dropped"
-                ));
-            }
+        for frame in &frames {
+            write_frame(&mut embodiment, &settings, frame)?;
+            embodiment
+                .send_stored_sensor_data()
+                .context("Failed to encode/send sensory frame")?;
             std::thread::sleep(frame_interval);
         }
     }
