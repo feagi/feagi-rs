@@ -670,10 +670,17 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     // Add ZMQ servers (multiple slots so multiple agents can register)
     #[cfg(feature = "zmq-transport")]
     {
-        let registration_addr = format!("tcp://{}:{}", config.agent.host, config.agent.registration_port);
+        let registration_addr = format!(
+            "tcp://{}:{}",
+            config.agent.bind_host, config.agent.registration_port
+        );
+        let registration_adv_addr = format!(
+            "tcp://{}:{}",
+            config.agent.advertised_host, config.agent.registration_port
+        );
         let router_props = Box::new(FeagiZmqServerRouterProperties::new(
             &registration_addr,
-            &registration_addr,
+            &registration_adv_addr,
         )?);
         agent_handler.add_and_start_command_control_server(router_props)?;
 
@@ -698,22 +705,29 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 )
             };
 
-            let sensory_addr = format!("tcp://{}:{}", config.zmq.host, sensory_port);
+            let sensory_addr = format!("tcp://{}:{}", config.zmq.bind_host, sensory_port);
+            let sensory_adv_addr =
+                format!("tcp://{}:{}", config.zmq.advertised_host, sensory_port);
             let sensory_props = Box::new(FeagiZmqServerPullerProperties::new(
                 &sensory_addr,
-                &sensory_addr,
+                &sensory_adv_addr,
             )?);
             agent_handler.add_puller_server(sensory_props);
 
-            let motor_addr = format!("tcp://{}:{}", config.zmq.host, motor_port);
+            let motor_addr = format!("tcp://{}:{}", config.zmq.bind_host, motor_port);
+            let motor_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, motor_port);
             let motor_props = Box::new(FeagiZmqServerPublisherProperties::new(
                 &motor_addr,
-                &motor_addr,
+                &motor_adv_addr,
             )?);
             agent_handler.add_publisher_server(motor_props);
 
-            let viz_addr = format!("tcp://{}:{}", config.zmq.host, viz_port);
-            let viz_props = Box::new(FeagiZmqServerPublisherProperties::new(&viz_addr, &viz_addr)?);
+            let viz_addr = format!("tcp://{}:{}", config.zmq.bind_host, viz_port);
+            let viz_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, viz_port);
+            let viz_props = Box::new(FeagiZmqServerPublisherProperties::new(
+                &viz_addr,
+                &viz_adv_addr,
+            )?);
             agent_handler.add_publisher_server(viz_props);
         }
         info!("    ✓ ZMQ transport servers added ({} agent slots)", ZMQ_AGENT_SLOTS);
@@ -721,23 +735,56 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
     // Add WebSocket servers if enabled
     if config.websocket.enabled {
-        let ws_registration_addr = format!("{}:{}", config.websocket.host, config.websocket.registration_port);
-        let ws_router_props = Box::new(FeagiWebSocketServerRouterProperties::new(&ws_registration_addr)?);
+        let ws_registration_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.registration_port
+        );
+        let ws_registration_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.registration_port
+        );
+        let ws_router_props = Box::new(FeagiWebSocketServerRouterProperties::new_with_remote(
+            &ws_registration_addr,
+            &ws_registration_adv_addr,
+        )?);
         agent_handler.add_and_start_command_control_server(ws_router_props)?;
         
-        let ws_sensory_addr = format!("{}:{}", config.websocket.host, config.websocket.sensory_port);
-        let ws_sensory_props = Box::new(FeagiWebSocketServerPullerProperties::new(&ws_sensory_addr)?);
+        let ws_sensory_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.sensory_port
+        );
+        let ws_sensory_adv_addr =
+            format!("{}:{}", config.websocket.advertised_host, config.websocket.sensory_port);
+        let ws_sensory_props = Box::new(FeagiWebSocketServerPullerProperties::new_with_remote(
+            &ws_sensory_addr,
+            &ws_sensory_adv_addr,
+        )?);
         agent_handler.add_puller_server(ws_sensory_props);
         
-        let ws_motor_addr = format!("{}:{}", config.websocket.host, config.websocket.motor_port);
+        let ws_motor_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.motor_port
+        );
+        let ws_motor_adv_addr =
+            format!("{}:{}", config.websocket.advertised_host, config.websocket.motor_port);
         let ws_motor_props = Box::new(FeagiWebSocketServerPublisherProperties::new(
             &ws_motor_addr,
-            &ws_motor_addr,
+            &ws_motor_adv_addr,
         )?);
         agent_handler.add_publisher_server(ws_motor_props);
         
-        let ws_viz_addr = format!("{}:{}", config.websocket.host, config.websocket.visualization_port);
-        let ws_viz_props = Box::new(FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr, &ws_viz_addr)?);
+        let ws_viz_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.visualization_port
+        );
+        let ws_viz_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.visualization_port
+        );
+        let ws_viz_props = Box::new(FeagiWebSocketServerPublisherProperties::new(
+            &ws_viz_addr,
+            &ws_viz_adv_addr,
+        )?);
         agent_handler.add_publisher_server(ws_viz_props);
         info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
         
@@ -1061,19 +1108,24 @@ async fn start_services(
     info!("    ✓ FEAGI session timestamp: {}", feagi_session_timestamp);
 
     let api_port = args.api_port.unwrap_or(config.api.port);
-    let api_host = config.api.host.clone();
+    let api_bind_host = config.api.bind_host.clone();
+    let api_advertised_host = config.api.advertised_host.clone();
     let network_provider = Arc::new(FeagiNetworkConnectionInfoProvider {
-        api_host: api_host.clone(),
+        api_advertised_host: api_advertised_host.clone(),
         api_port,
         agent_handler: Arc::clone(&components.agent_handler),
         viz_transport_policy: config.visualization.transport.clone(),
-        // feagi-rs currently always exposes ZMQ agent endpoints via config.agent.* ports.
+        // Registration endpoint is from agent config; data endpoints are from ZMQ ports config.
         zmq_enabled: true,
+        zmq_registration_advertised_host: config.agent.advertised_host.clone(),
+        zmq_advertised_host: config.zmq.advertised_host.clone(),
         zmq_registration_port: config.agent.registration_port,
-        zmq_sensory_port: config.agent.sensory_port,
-        zmq_motor_port: config.agent.motor_port,
+        zmq_sensory_port: config.ports.zmq_sensory_port,
+        zmq_motor_port: config.ports.zmq_motor_port,
         zmq_visualization_port: config.ports.zmq_visualization_port,
+        zmq_api_control_port: config.ports.zmq_rest_port,
         websocket_enabled: config.websocket.enabled,
+        websocket_advertised_host: config.websocket.advertised_host.clone(),
         websocket_registration_port: config.websocket.registration_port,
         websocket_sensory_port: config.websocket.sensory_port,
         websocket_motor_port: config.websocket.motor_port,
@@ -1108,9 +1160,12 @@ async fn start_services(
     info!("  ✓ Agent handler control streams active (registration ready)");
 
     // Start HTTP API server (before genome load in case it hangs)
-    info!("  Starting HTTP API server on {}:{}...", api_host, api_port);
+    info!(
+        "  Starting HTTP API server on {}:{} (advertised as {}:{})...",
+        api_bind_host, api_port, api_advertised_host, api_port
+    );
     let app = create_http_server(api_state);
-    let addr = format!("{}:{}", api_host, api_port);
+    let addr = format!("{}:{}", api_bind_host, api_port);
 
     info!("  API routes registered, binding to {}...", addr);
 
@@ -1341,7 +1396,10 @@ async fn start_services(
 
     info!("");
     info!("🚀 FEAGI server is running!");
-    info!("   REST API: http://{}:{}", config.api.host, api_port);
+    info!(
+        "   REST API (advertised): http://{}:{}",
+        config.api.advertised_host, api_port
+    );
     info!("   Press Ctrl+C to stop");
     info!("");
 
@@ -1403,8 +1461,14 @@ async fn start_services(
 /// Log configuration summary
 fn log_config_summary(config: &FeagiConfig) {
     info!("Configuration Summary:");
-    info!("  API: {}:{}", config.api.host, config.api.port);
-    info!("  ZMQ Host: {}", config.zmq.host);
+    info!(
+        "  API bind: {}:{} (advertised: {}:{})",
+        config.api.bind_host, config.api.port, config.api.advertised_host, config.api.port
+    );
+    info!(
+        "  ZMQ bind host: {} (advertised host: {})",
+        config.zmq.bind_host, config.zmq.advertised_host
+    );
     info!("  Ports:");
     info!("    - Sensory: {}", config.ports.zmq_sensory_port);
     info!("    - Motor: {}", config.ports.zmq_motor_port);

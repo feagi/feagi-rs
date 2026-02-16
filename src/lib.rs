@@ -111,7 +111,10 @@ impl FeagiInstance {
             .build()
             .context("Failed to create Tokio runtime")?;
 
-        let http_server_url = format!("http://{}:{}", config.api.host, config.api.port);
+        let http_server_url = format!(
+            "http://{}:{}",
+            config.api.advertised_host, config.api.port
+        );
 
         info!("🦀 FEAGI Instance created (embedded mode)");
         info!("   HTTP API will be available at: {}", http_server_url);

@@ -258,12 +258,20 @@ fn build_agent_config(
     let sensory_linger = i32::try_from(config.zmq.streams.sensory.linger_ms)
         .context("sensory linger_ms must fit into i32")?;
 
-    let registration_endpoint =
-        format_tcp_endpoint(&config.agent.host, config.agent.registration_port);
-    let sensory_endpoint = format_tcp_endpoint(&config.zmq.host, config.ports.zmq_sensory_port);
-    let motor_endpoint = format_tcp_endpoint(&config.zmq.host, config.ports.zmq_motor_port);
-    let viz_endpoint = format_tcp_endpoint(&config.zmq.host, config.ports.zmq_visualization_port);
-    let control_endpoint = format_tcp_endpoint(&config.zmq.host, config.ports.zmq_rest_port);
+    let registration_endpoint = format_tcp_endpoint(
+        &config.agent.advertised_host,
+        config.agent.registration_port,
+    );
+    let sensory_endpoint =
+        format_tcp_endpoint(&config.zmq.advertised_host, config.ports.zmq_sensory_port);
+    let motor_endpoint =
+        format_tcp_endpoint(&config.zmq.advertised_host, config.ports.zmq_motor_port);
+    let viz_endpoint = format_tcp_endpoint(
+        &config.zmq.advertised_host,
+        config.ports.zmq_visualization_port,
+    );
+    let control_endpoint =
+        format_tcp_endpoint(&config.zmq.advertised_host, config.ports.zmq_rest_port);
 
     Ok(
         AgentConfig::new(settings.agent_id.clone(), AgentType::Sensory)
@@ -342,7 +350,7 @@ fn register_vision_device(
 fn build_registrar(config: &FeagiConfig) -> Result<AgentRegistrar> {
     let timeout = Duration::from_secs_f64(config.timeouts.service_startup);
     AgentRegistrar::new(FeagiApiConfig::new(
-        config.api.host.clone(),
+        config.api.advertised_host.clone(),
         config.api.port,
         timeout,
     ))
