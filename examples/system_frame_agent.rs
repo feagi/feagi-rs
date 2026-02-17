@@ -3,24 +3,28 @@
 //! Usage:
 //! 1) Ensure FEAGI is running with a loaded genome.
 //! 2) Put PNG/JPG/BMP/TIFF frames in a directory.
-//! 3) Run this example with the required environment variables.
+//! 3) Run this example with TOML settings, CLI flags, and/or env overrides.
 //!
 //! Example:
-//! FEAGI_TEST_FRAME_DIR="/path/to/frames" \
-//! FEAGI_TEST_FRAME_LOOPS=3 \
-//! FEAGI_TEST_GAZE_X=0.5 \
-//! FEAGI_TEST_GAZE_Y=0.5 \
-//! FEAGI_TEST_GAZE_MODULATION=0.5 \
-//! cargo run --example system_frame_agent
+//! cargo run --example system_frame_agent -- \
+//!   --settings-toml ./examples/system_frame_agent.toml \
+//!   --frame-dir "/path/to/frames" \
+//!   --gaze-x 0.5 --gaze-y 0.5 --gaze-modulation 0.5
 //!
-//! Required environment variables:
-//! - FEAGI_TEST_FRAME_DIR (path to frame directory)
+//! Precedence (lowest to highest):
+//! 1) Built-in defaults
+//! 2) `--settings-toml` values (or root keys if no section is present)
+//! 3) CLI flags
+//! 4) `FEAGI_TEST_*` environment variables
 //!
-//! Optional environment variables (defaults shown):
+//! Environment variable overrides (defaults shown):
+//! - FEAGI_TEST_FRAME_DIR (required unless supplied by TOML/CLI)
 //! - FEAGI_TEST_FRAME_LOOPS (default: 3)
 //! - FEAGI_TEST_GAZE_X (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_GAZE_Y (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_GAZE_MODULATION (default: 0.5, range: 0.0-1.0)
+//! - FEAGI_TEST_BRIGHTNESS (default: 0.5, range: 0.0-1.0)
+//! - FEAGI_TEST_CONTRAST (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_DIFF_THRESHOLD (default: 15; higher drops more unchanged pixels)
 //! - FEAGI_TEST_SEGMENTED_CENTER_WIDTH (default: 128)
 //! - FEAGI_TEST_SEGMENTED_CENTER_HEIGHT (default: 128)
@@ -31,6 +35,7 @@
 //! - FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT (default: false; true => allow changing FEAGI burst rate)
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use feagi_agent::clients::async_helpers::tokio_generic_implementations::{
     SensoryRateNegotiationConfig, SensoryRateNegotiationPolicy, TokioDriverConfig,
     TokioEmbodimentAgent,
@@ -56,7 +61,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-/// Example settings sourced from environment variables.
+/// Final runtime settings after applying all config sources.
 struct ExampleSettings {
     cortical_unit_id: u8,
     color_space: ColorSpace,
@@ -65,6 +70,8 @@ struct ExampleSettings {
     gaze_x: f32,
     gaze_y: f32,
     gaze_modulation: f32,
+    brightness: f32,
+    contrast: f32,
     diff_threshold: u8,
     segmented_center_width: u32,
     segmented_center_height: u32,
@@ -75,32 +82,167 @@ struct ExampleSettings {
     allow_feagi_rate_upshift: bool,
 }
 
+/// CLI overrides for this example.
+#[derive(Debug, Parser)]
+#[command(name = "system_frame_agent")]
+#[command(about = "Stream image frames to FEAGI using segmented vision")]
+struct CliArgs {
+    /// Optional TOML settings file path. Reads [system_frame_agent] if present, else root keys.
+    #[arg(long)]
+    settings_toml: Option<PathBuf>,
+    #[arg(long)]
+    frame_dir: Option<PathBuf>,
+    #[arg(long)]
+    frame_loops: Option<usize>,
+    #[arg(long)]
+    gaze_x: Option<f32>,
+    #[arg(long)]
+    gaze_y: Option<f32>,
+    #[arg(long)]
+    gaze_modulation: Option<f32>,
+    #[arg(long)]
+    brightness: Option<f32>,
+    #[arg(long)]
+    contrast: Option<f32>,
+    #[arg(long)]
+    diff_threshold: Option<u8>,
+    #[arg(long)]
+    segmented_center_width: Option<u32>,
+    #[arg(long)]
+    segmented_center_height: Option<u32>,
+    #[arg(long)]
+    segmented_peripheral_width: Option<u32>,
+    #[arg(long)]
+    segmented_peripheral_height: Option<u32>,
+    #[arg(long)]
+    requested_sensory_rate_hz: Option<f64>,
+    #[arg(long)]
+    sensory_rate_strict: Option<bool>,
+    #[arg(long)]
+    allow_feagi_rate_upshift: Option<bool>,
+}
+
+/// Partial overrides loaded from TOML/CLI/env.
+#[derive(Debug, Default, Clone)]
+struct ExampleSettingsOverrides {
+    frame_dir: Option<PathBuf>,
+    frame_loops: Option<usize>,
+    gaze_x: Option<f32>,
+    gaze_y: Option<f32>,
+    gaze_modulation: Option<f32>,
+    brightness: Option<f32>,
+    contrast: Option<f32>,
+    diff_threshold: Option<u8>,
+    segmented_center_width: Option<u32>,
+    segmented_center_height: Option<u32>,
+    segmented_peripheral_width: Option<u32>,
+    segmented_peripheral_height: Option<u32>,
+    requested_sensory_rate_hz: Option<f64>,
+    sensory_rate_strict: Option<bool>,
+    allow_feagi_rate_upshift: Option<bool>,
+}
+
+/// Mutable settings accumulator with built-in defaults.
+#[derive(Debug)]
+struct ExampleSettingsDraft {
+    frame_dir: Option<PathBuf>,
+    frame_loops: usize,
+    gaze_x: f32,
+    gaze_y: f32,
+    gaze_modulation: f32,
+    brightness: f32,
+    contrast: f32,
+    diff_threshold: u8,
+    segmented_center_width: u32,
+    segmented_center_height: u32,
+    segmented_peripheral_width: u32,
+    segmented_peripheral_height: u32,
+    requested_sensory_rate_hz: Option<f64>,
+    sensory_rate_strict: bool,
+    allow_feagi_rate_upshift: bool,
+}
+
+impl Default for ExampleSettingsDraft {
+    fn default() -> Self {
+        Self {
+            frame_dir: None,
+            frame_loops: 3,
+            gaze_x: 0.5,
+            gaze_y: 0.5,
+            gaze_modulation: 0.5,
+            brightness: 0.5,
+            contrast: 0.5,
+            diff_threshold: 15,
+            segmented_center_width: 128,
+            segmented_center_height: 128,
+            segmented_peripheral_width: 32,
+            segmented_peripheral_height: 32,
+            requested_sensory_rate_hz: None,
+            sensory_rate_strict: false,
+            allow_feagi_rate_upshift: false,
+        }
+    }
+}
+
+impl ExampleSettingsDraft {
+    /// Apply sparse overrides from one source in precedence order.
+    fn apply_overrides(&mut self, overrides: ExampleSettingsOverrides) {
+        if let Some(value) = overrides.frame_dir {
+            self.frame_dir = Some(value);
+        }
+        if let Some(value) = overrides.frame_loops {
+            self.frame_loops = value;
+        }
+        if let Some(value) = overrides.gaze_x {
+            self.gaze_x = value;
+        }
+        if let Some(value) = overrides.gaze_y {
+            self.gaze_y = value;
+        }
+        if let Some(value) = overrides.gaze_modulation {
+            self.gaze_modulation = value;
+        }
+        if let Some(value) = overrides.brightness {
+            self.brightness = value;
+        }
+        if let Some(value) = overrides.contrast {
+            self.contrast = value;
+        }
+        if let Some(value) = overrides.diff_threshold {
+            self.diff_threshold = value;
+        }
+        if let Some(value) = overrides.segmented_center_width {
+            self.segmented_center_width = value;
+        }
+        if let Some(value) = overrides.segmented_center_height {
+            self.segmented_center_height = value;
+        }
+        if let Some(value) = overrides.segmented_peripheral_width {
+            self.segmented_peripheral_width = value;
+        }
+        if let Some(value) = overrides.segmented_peripheral_height {
+            self.segmented_peripheral_height = value;
+        }
+        if let Some(value) = overrides.requested_sensory_rate_hz {
+            self.requested_sensory_rate_hz = Some(value);
+        }
+        if let Some(value) = overrides.sensory_rate_strict {
+            self.sensory_rate_strict = value;
+        }
+        if let Some(value) = overrides.allow_feagi_rate_upshift {
+            self.allow_feagi_rate_upshift = value;
+        }
+    }
+}
+
 fn main() -> Result<()> {
-    run_example()
+    let cli_args = CliArgs::parse();
+    run_example(&cli_args)
 }
 
 /// Load the FEAGI configuration using the standard loader.
 fn load_feagi_config() -> Result<FeagiConfig> {
     load_config(None, None).context("Failed to load FEAGI configuration")
-}
-
-/// Require an environment variable and return its raw string value.
-fn require_env(name: &str) -> Result<String> {
-    env::var(name).with_context(|| format!("{name} must be set"))
-}
-
-/// Parse an environment variable or return a provided default.
-fn parse_env_or_default<T>(name: &str, default_value: T) -> Result<T>
-where
-    T: FromStr + Copy,
-    T::Err: std::fmt::Display,
-{
-    match env::var(name) {
-        Ok(raw) => raw
-            .parse::<T>()
-            .map_err(|e| anyhow::anyhow!("{name} must be a valid value; got '{raw}'; error: {e}")),
-        Err(_) => Ok(default_value),
-    }
 }
 
 /// Parse an optional environment variable.
@@ -118,42 +260,232 @@ where
     }
 }
 
-/// Load example settings from environment variables.
-fn load_example_settings() -> Result<ExampleSettings> {
-    let requested_sensory_rate_hz = parse_optional_env::<f64>("FEAGI_TEST_SENSORY_RATE_HZ")?;
-    if let Some(rate_hz) = requested_sensory_rate_hz {
+fn toml_optional_f32(table: &toml::value::Table, key: &str) -> Result<Option<f32>> {
+    match table.get(key) {
+        Some(value) => {
+            let number = value
+                .as_float()
+                .or_else(|| value.as_integer().map(|val| val as f64))
+                .ok_or_else(|| anyhow::anyhow!("Key '{key}' must be a number"))?;
+            Ok(Some(number as f32))
+        }
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_f64(table: &toml::value::Table, key: &str) -> Result<Option<f64>> {
+    match table.get(key) {
+        Some(value) => {
+            let number = value
+                .as_float()
+                .or_else(|| value.as_integer().map(|val| val as f64))
+                .ok_or_else(|| anyhow::anyhow!("Key '{key}' must be a number"))?;
+            Ok(Some(number))
+        }
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_u8(table: &toml::value::Table, key: &str) -> Result<Option<u8>> {
+    match table.get(key) {
+        Some(value) => {
+            let integer = value
+                .as_integer()
+                .ok_or_else(|| anyhow::anyhow!("Key '{key}' must be an integer"))?;
+            let parsed = u8::try_from(integer)
+                .map_err(|_| anyhow::anyhow!("Key '{key}' out of range for u8: {integer}"))?;
+            Ok(Some(parsed))
+        }
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_u32(table: &toml::value::Table, key: &str) -> Result<Option<u32>> {
+    match table.get(key) {
+        Some(value) => {
+            let integer = value
+                .as_integer()
+                .ok_or_else(|| anyhow::anyhow!("Key '{key}' must be an integer"))?;
+            let parsed = u32::try_from(integer)
+                .map_err(|_| anyhow::anyhow!("Key '{key}' out of range for u32: {integer}"))?;
+            Ok(Some(parsed))
+        }
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_usize(table: &toml::value::Table, key: &str) -> Result<Option<usize>> {
+    match table.get(key) {
+        Some(value) => {
+            let integer = value
+                .as_integer()
+                .ok_or_else(|| anyhow::anyhow!("Key '{key}' must be an integer"))?;
+            let parsed = usize::try_from(integer)
+                .map_err(|_| anyhow::anyhow!("Key '{key}' out of range for usize: {integer}"))?;
+            Ok(Some(parsed))
+        }
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_bool(table: &toml::value::Table, key: &str) -> Result<Option<bool>> {
+    match table.get(key) {
+        Some(value) => value
+            .as_bool()
+            .map(Some)
+            .ok_or_else(|| anyhow::anyhow!("Key '{key}' must be a boolean")),
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_path(table: &toml::value::Table, key: &str) -> Result<Option<PathBuf>> {
+    match table.get(key) {
+        Some(value) => value
+            .as_str()
+            .map(|s| Some(PathBuf::from(s)))
+            .ok_or_else(|| anyhow::anyhow!("Key '{key}' must be a string path")),
+        None => Ok(None),
+    }
+}
+
+/// Load optional settings overrides from TOML.
+fn load_toml_overrides(path: &Path) -> Result<ExampleSettingsOverrides> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read settings TOML: {}", path.display()))?;
+    let parsed: toml::Value = raw
+        .parse()
+        .with_context(|| format!("Failed to parse TOML: {}", path.display()))?;
+    let root = parsed
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("Settings TOML root must be a table"))?;
+    let table = if let Some(section) = root.get("system_frame_agent") {
+        section
+            .as_table()
+            .ok_or_else(|| anyhow::anyhow!("[system_frame_agent] must be a TOML table"))?
+    } else {
+        root
+    };
+
+    Ok(ExampleSettingsOverrides {
+        frame_dir: toml_optional_path(table, "frame_dir")?,
+        frame_loops: toml_optional_usize(table, "frame_loops")?,
+        gaze_x: toml_optional_f32(table, "gaze_x")?,
+        gaze_y: toml_optional_f32(table, "gaze_y")?,
+        gaze_modulation: toml_optional_f32(table, "gaze_modulation")?,
+        brightness: toml_optional_f32(table, "brightness")?,
+        contrast: toml_optional_f32(table, "contrast")?,
+        diff_threshold: toml_optional_u8(table, "diff_threshold")?,
+        segmented_center_width: toml_optional_u32(table, "segmented_center_width")?,
+        segmented_center_height: toml_optional_u32(table, "segmented_center_height")?,
+        segmented_peripheral_width: toml_optional_u32(table, "segmented_peripheral_width")?,
+        segmented_peripheral_height: toml_optional_u32(table, "segmented_peripheral_height")?,
+        requested_sensory_rate_hz: toml_optional_f64(table, "requested_sensory_rate_hz")?,
+        sensory_rate_strict: toml_optional_bool(table, "sensory_rate_strict")?,
+        allow_feagi_rate_upshift: toml_optional_bool(table, "allow_feagi_rate_upshift")?,
+    })
+}
+
+/// Build sparse overrides from CLI arguments.
+fn cli_overrides(cli_args: &CliArgs) -> ExampleSettingsOverrides {
+    ExampleSettingsOverrides {
+        frame_dir: cli_args.frame_dir.clone(),
+        frame_loops: cli_args.frame_loops,
+        gaze_x: cli_args.gaze_x,
+        gaze_y: cli_args.gaze_y,
+        gaze_modulation: cli_args.gaze_modulation,
+        brightness: cli_args.brightness,
+        contrast: cli_args.contrast,
+        diff_threshold: cli_args.diff_threshold,
+        segmented_center_width: cli_args.segmented_center_width,
+        segmented_center_height: cli_args.segmented_center_height,
+        segmented_peripheral_width: cli_args.segmented_peripheral_width,
+        segmented_peripheral_height: cli_args.segmented_peripheral_height,
+        requested_sensory_rate_hz: cli_args.requested_sensory_rate_hz,
+        sensory_rate_strict: cli_args.sensory_rate_strict,
+        allow_feagi_rate_upshift: cli_args.allow_feagi_rate_upshift,
+    }
+}
+
+/// Build sparse overrides from FEAGI_TEST_* env variables.
+fn env_overrides() -> Result<ExampleSettingsOverrides> {
+    Ok(ExampleSettingsOverrides {
+        frame_dir: parse_optional_env::<String>("FEAGI_TEST_FRAME_DIR")?.map(PathBuf::from),
+        frame_loops: parse_optional_env::<usize>("FEAGI_TEST_FRAME_LOOPS")?,
+        gaze_x: parse_optional_env::<f32>("FEAGI_TEST_GAZE_X")?,
+        gaze_y: parse_optional_env::<f32>("FEAGI_TEST_GAZE_Y")?,
+        gaze_modulation: parse_optional_env::<f32>("FEAGI_TEST_GAZE_MODULATION")?,
+        brightness: parse_optional_env::<f32>("FEAGI_TEST_BRIGHTNESS")?,
+        contrast: parse_optional_env::<f32>("FEAGI_TEST_CONTRAST")?,
+        diff_threshold: parse_optional_env::<u8>("FEAGI_TEST_DIFF_THRESHOLD")?,
+        segmented_center_width: parse_optional_env::<u32>("FEAGI_TEST_SEGMENTED_CENTER_WIDTH")?,
+        segmented_center_height: parse_optional_env::<u32>("FEAGI_TEST_SEGMENTED_CENTER_HEIGHT")?,
+        segmented_peripheral_width: parse_optional_env::<u32>(
+            "FEAGI_TEST_SEGMENTED_PERIPHERAL_WIDTH",
+        )?,
+        segmented_peripheral_height: parse_optional_env::<u32>(
+            "FEAGI_TEST_SEGMENTED_PERIPHERAL_HEIGHT",
+        )?,
+        requested_sensory_rate_hz: parse_optional_env::<f64>("FEAGI_TEST_SENSORY_RATE_HZ")?,
+        sensory_rate_strict: parse_optional_env::<bool>("FEAGI_TEST_SENSORY_RATE_STRICT")?,
+        allow_feagi_rate_upshift: parse_optional_env::<bool>("FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT")?,
+    })
+}
+
+/// Load example settings from TOML, CLI, and environment variables.
+fn load_example_settings(cli_args: &CliArgs) -> Result<ExampleSettings> {
+    let mut draft = ExampleSettingsDraft::default();
+
+    if let Some(settings_toml_path) = &cli_args.settings_toml {
+        draft.apply_overrides(load_toml_overrides(settings_toml_path)?);
+    }
+    draft.apply_overrides(cli_overrides(cli_args));
+    draft.apply_overrides(env_overrides()?);
+
+    if let Some(rate_hz) = draft.requested_sensory_rate_hz {
         if !rate_hz.is_finite() || rate_hz <= 0.0 {
             return Err(anyhow::anyhow!(
-                "FEAGI_TEST_SENSORY_RATE_HZ must be a finite value > 0, got {}",
+                "Requested sensory rate must be a finite value > 0, got {}",
                 rate_hz
             ));
         }
     }
+    if !(0.0..=1.0).contains(&draft.brightness) {
+        return Err(anyhow::anyhow!(
+            "Brightness must be in [0.0, 1.0], got {}",
+            draft.brightness
+        ));
+    }
+    if !(0.0..=1.0).contains(&draft.contrast) {
+        return Err(anyhow::anyhow!(
+            "Contrast must be in [0.0, 1.0], got {}",
+            draft.contrast
+        ));
+    }
+
+    let frame_dir = draft.frame_dir.ok_or_else(|| {
+        anyhow::anyhow!(
+            "frame_dir is required (use --frame-dir, FEAGI_TEST_FRAME_DIR, or settings TOML)"
+        )
+    })?;
+
     Ok(ExampleSettings {
         cortical_unit_id: 0,
         color_space: ColorSpace::Gamma,
-        frame_dir: PathBuf::from(require_env("FEAGI_TEST_FRAME_DIR")?),
-        frame_loops: parse_env_or_default("FEAGI_TEST_FRAME_LOOPS", 3)?,
-        gaze_x: parse_env_or_default("FEAGI_TEST_GAZE_X", 0.5)?,
-        gaze_y: parse_env_or_default("FEAGI_TEST_GAZE_Y", 0.5)?,
-        gaze_modulation: parse_env_or_default("FEAGI_TEST_GAZE_MODULATION", 0.5)?,
-        diff_threshold: parse_env_or_default("FEAGI_TEST_DIFF_THRESHOLD", 15)?,
-        segmented_center_width: parse_env_or_default("FEAGI_TEST_SEGMENTED_CENTER_WIDTH", 128)?,
-        segmented_center_height: parse_env_or_default("FEAGI_TEST_SEGMENTED_CENTER_HEIGHT", 128)?,
-        segmented_peripheral_width: parse_env_or_default(
-            "FEAGI_TEST_SEGMENTED_PERIPHERAL_WIDTH",
-            32,
-        )?,
-        segmented_peripheral_height: parse_env_or_default(
-            "FEAGI_TEST_SEGMENTED_PERIPHERAL_HEIGHT",
-            32,
-        )?,
-        requested_sensory_rate_hz,
-        sensory_rate_strict: parse_env_or_default("FEAGI_TEST_SENSORY_RATE_STRICT", false)?,
-        allow_feagi_rate_upshift: parse_env_or_default(
-            "FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT",
-            false,
-        )?,
+        frame_dir,
+        frame_loops: draft.frame_loops,
+        gaze_x: draft.gaze_x,
+        gaze_y: draft.gaze_y,
+        gaze_modulation: draft.gaze_modulation,
+        brightness: draft.brightness,
+        contrast: draft.contrast,
+        diff_threshold: draft.diff_threshold,
+        segmented_center_width: draft.segmented_center_width,
+        segmented_center_height: draft.segmented_center_height,
+        segmented_peripheral_width: draft.segmented_peripheral_width,
+        segmented_peripheral_height: draft.segmented_peripheral_height,
+        requested_sensory_rate_hz: draft.requested_sensory_rate_hz,
+        sensory_rate_strict: draft.sensory_rate_strict,
+        allow_feagi_rate_upshift: draft.allow_feagi_rate_upshift,
     })
 }
 
@@ -434,6 +766,11 @@ fn register_vision_device(
     Ok(())
 }
 
+/// Map normalized brightness [0.0, 1.0] to processor offset [-255, 255].
+fn map_brightness_to_offset(brightness: f32) -> i32 {
+    ((brightness * 2.0 - 1.0) * 255.0).round() as i32
+}
+
 /// Write the next frame into the sensor cache.
 fn write_frame(
     embodiment: &mut TokioEmbodimentAgent,
@@ -442,7 +779,10 @@ fn write_frame(
 ) -> Result<()> {
     let unit_index = CorticalUnitIndex::from(settings.cortical_unit_id);
     let channel_index = CorticalChannelIndex::from(0u32);
-    let wrapped = WrappedIOData::ImageFrame(frame.clone());
+    let mut adjusted_frame = frame.clone();
+    adjusted_frame.change_brightness(map_brightness_to_offset(settings.brightness));
+    adjusted_frame.change_contrast(settings.contrast);
+    let wrapped = WrappedIOData::ImageFrame(adjusted_frame);
     let mut sensor_cache = embodiment.get_embodiment_mut().get_sensor_cache();
     sensor_cache
         .segmented_vision_write(unit_index, channel_index, wrapped)
@@ -450,9 +790,9 @@ fn write_frame(
         .context("Failed to write segmented vision frame")
 }
 
-fn run_example() -> Result<()> {
+fn run_example(cli_args: &CliArgs) -> Result<()> {
     let config = load_feagi_config()?;
-    let settings = load_example_settings()?;
+    let settings = load_example_settings(cli_args)?;
 
     let frame_paths = load_frame_paths(&settings.frame_dir)?;
     let frames = load_frame_sequence(&frame_paths, &settings.color_space)?;
