@@ -22,6 +22,10 @@
 //! - FEAGI_TEST_GAZE_Y (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_GAZE_MODULATION (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_DIFF_THRESHOLD (default: 15; higher drops more unchanged pixels)
+//! - FEAGI_TEST_SEGMENTED_CENTER_WIDTH (default: 128)
+//! - FEAGI_TEST_SEGMENTED_CENTER_HEIGHT (default: 128)
+//! - FEAGI_TEST_SEGMENTED_PERIPHERAL_WIDTH (default: 32)
+//! - FEAGI_TEST_SEGMENTED_PERIPHERAL_HEIGHT (default: 32)
 //! - FEAGI_TEST_SENSORY_RATE_HZ (optional: requested sensory rate in Hz)
 //! - FEAGI_TEST_SENSORY_RATE_STRICT (default: false; true => fail if FEAGI cannot honor rate)
 //! - FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT (default: false; true => allow changing FEAGI burst rate)
@@ -62,6 +66,10 @@ struct ExampleSettings {
     gaze_y: f32,
     gaze_modulation: f32,
     diff_threshold: u8,
+    segmented_center_width: u32,
+    segmented_center_height: u32,
+    segmented_peripheral_width: u32,
+    segmented_peripheral_height: u32,
     requested_sensory_rate_hz: Option<f64>,
     sensory_rate_strict: bool,
     allow_feagi_rate_upshift: bool,
@@ -130,6 +138,16 @@ fn load_example_settings() -> Result<ExampleSettings> {
         gaze_y: parse_env_or_default("FEAGI_TEST_GAZE_Y", 0.5)?,
         gaze_modulation: parse_env_or_default("FEAGI_TEST_GAZE_MODULATION", 0.5)?,
         diff_threshold: parse_env_or_default("FEAGI_TEST_DIFF_THRESHOLD", 15)?,
+        segmented_center_width: parse_env_or_default("FEAGI_TEST_SEGMENTED_CENTER_WIDTH", 128)?,
+        segmented_center_height: parse_env_or_default("FEAGI_TEST_SEGMENTED_CENTER_HEIGHT", 128)?,
+        segmented_peripheral_width: parse_env_or_default(
+            "FEAGI_TEST_SEGMENTED_PERIPHERAL_WIDTH",
+            32,
+        )?,
+        segmented_peripheral_height: parse_env_or_default(
+            "FEAGI_TEST_SEGMENTED_PERIPHERAL_HEIGHT",
+            32,
+        )?,
         requested_sensory_rate_hz,
         sensory_rate_strict: parse_env_or_default("FEAGI_TEST_SENSORY_RATE_STRICT", false)?,
         allow_feagi_rate_upshift: parse_env_or_default(
@@ -348,10 +366,19 @@ fn register_vision_device(
     let channel_count = CorticalChannelCount::new(1).context("CorticalChannelCount must be > 0")?;
     let frame_change_handling = FrameChangeHandling::Absolute;
     let image_props = frame.get_image_frame_properties();
-    let input_resolution = image_props.get_image_resolution();
+    let center_resolution = ImageXYResolution::new(
+        settings.segmented_center_width,
+        settings.segmented_center_height,
+    )
+    .context("Invalid segmented center resolution")?;
+    let peripheral_resolution = ImageXYResolution::new(
+        settings.segmented_peripheral_width,
+        settings.segmented_peripheral_height,
+    )
+    .context("Invalid segmented peripheral resolution")?;
     let segmented_resolutions = SegmentedXYImageResolutions::create_with_same_sized_peripheral(
-        input_resolution,
-        input_resolution,
+        center_resolution,
+        peripheral_resolution,
     );
     let segmented_props = SegmentedImageFrameProperties::new(
         segmented_resolutions,
