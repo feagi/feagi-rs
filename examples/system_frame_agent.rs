@@ -1,15 +1,21 @@
 //! Executable example: register a frame-based agent and stream frames to FEAGI.
 //!
+//! Demo folder structure: each demo has an `assets/` subfolder (images, videos) and
+//! an optional `genome.json`. If genome.json is present, it is loaded on FEAGI via
+//! the REST API before starting sensory streaming.
+//!
 //! Usage:
-//! 1) Ensure FEAGI is running with a loaded genome.
-//! 2) Put PNG/JPG/BMP/TIFF frames in a directory.
-//! 3) Run this example with TOML settings, CLI flags, and/or env overrides.
+//! 1) Ensure FEAGI is running (genome optional if using --demo-dir with genome.json).
+//! 2) Either set --demo-dir to a demo folder (e.g. examples/demo1) or provide --frame-dir.
+//! 3) With --demo-dir, frame_dir defaults to <demo-dir>/assets and genome to <demo-dir>/genome.json.
 //!
 //! Example:
+//! cargo run --example system_frame_agent -- --demo-dir ./examples/demo1
+//!
+//! Or with explicit paths:
 //! cargo run --example system_frame_agent -- \
-//!   --settings-toml ./examples/system_frame_agent.toml \
-//!   --frame-dir "/path/to/frames" \
-//!   --gaze-x 0.5 --gaze-y 0.5 --gaze-modulation 0.5
+//!   --settings-toml ./examples/demo1/settings.toml \
+//!   --frame-dir ./examples/demo1/assets
 //!
 //! Precedence (lowest to highest):
 //! 1) Built-in defaults
@@ -18,7 +24,8 @@
 //! 4) `FEAGI_TEST_*` environment variables
 //!
 //! Environment variable overrides (defaults shown):
-//! - FEAGI_TEST_FRAME_DIR (required unless supplied by TOML/CLI)
+//! - FEAGI_TEST_DEMO_DIR (demo folder; frame_dir defaults to <demo-dir>/assets)
+//! - FEAGI_TEST_FRAME_DIR (required if no demo_dir, or overrides demo assets path)
 //! - FEAGI_TEST_FRAME_LOOPS (default: 3)
 //! - FEAGI_TEST_GAZE_X (default: 0.5, range: 0.0-1.0)
 //! - FEAGI_TEST_GAZE_Y (default: 0.5, range: 0.0-1.0)
@@ -66,6 +73,8 @@ struct ExampleSettings {
     cortical_unit_id: u8,
     color_space: ColorSpace,
     frame_dir: PathBuf,
+    /// If set, load this genome on FEAGI via API before starting sensory streaming.
+    genome_path: Option<PathBuf>,
     frame_loops: usize,
     gaze_x: f32,
     gaze_y: f32,
@@ -90,6 +99,9 @@ struct CliArgs {
     /// Optional TOML settings file path. Reads [system_frame_agent] if present, else root keys.
     #[arg(long)]
     settings_toml: Option<PathBuf>,
+    /// Demo folder (standard structure: assets/, genome.json). Sets frame_dir to <demo-dir>/assets if not overridden.
+    #[arg(long)]
+    demo_dir: Option<PathBuf>,
     #[arg(long)]
     frame_dir: Option<PathBuf>,
     #[arg(long)]
@@ -125,6 +137,7 @@ struct CliArgs {
 /// Partial overrides loaded from TOML/CLI/env.
 #[derive(Debug, Default, Clone)]
 struct ExampleSettingsOverrides {
+    demo_dir: Option<PathBuf>,
     frame_dir: Option<PathBuf>,
     frame_loops: Option<usize>,
     gaze_x: Option<f32>,
@@ -145,6 +158,7 @@ struct ExampleSettingsOverrides {
 /// Mutable settings accumulator with built-in defaults.
 #[derive(Debug)]
 struct ExampleSettingsDraft {
+    demo_dir: Option<PathBuf>,
     frame_dir: Option<PathBuf>,
     frame_loops: usize,
     gaze_x: f32,
@@ -165,6 +179,7 @@ struct ExampleSettingsDraft {
 impl Default for ExampleSettingsDraft {
     fn default() -> Self {
         Self {
+            demo_dir: None,
             frame_dir: None,
             frame_loops: 3,
             gaze_x: 0.5,
@@ -187,6 +202,9 @@ impl Default for ExampleSettingsDraft {
 impl ExampleSettingsDraft {
     /// Apply sparse overrides from one source in precedence order.
     fn apply_overrides(&mut self, overrides: ExampleSettingsOverrides) {
+        if let Some(value) = overrides.demo_dir {
+            self.demo_dir = Some(value);
+        }
         if let Some(value) = overrides.frame_dir {
             self.frame_dir = Some(value);
         }
@@ -367,6 +385,7 @@ fn load_toml_overrides(path: &Path) -> Result<ExampleSettingsOverrides> {
     };
 
     Ok(ExampleSettingsOverrides {
+        demo_dir: toml_optional_path(table, "demo_dir")?,
         frame_dir: toml_optional_path(table, "frame_dir")?,
         frame_loops: toml_optional_usize(table, "frame_loops")?,
         gaze_x: toml_optional_f32(table, "gaze_x")?,
@@ -388,6 +407,7 @@ fn load_toml_overrides(path: &Path) -> Result<ExampleSettingsOverrides> {
 /// Build sparse overrides from CLI arguments.
 fn cli_overrides(cli_args: &CliArgs) -> ExampleSettingsOverrides {
     ExampleSettingsOverrides {
+        demo_dir: cli_args.demo_dir.clone(),
         frame_dir: cli_args.frame_dir.clone(),
         frame_loops: cli_args.frame_loops,
         gaze_x: cli_args.gaze_x,
@@ -409,6 +429,7 @@ fn cli_overrides(cli_args: &CliArgs) -> ExampleSettingsOverrides {
 /// Build sparse overrides from FEAGI_TEST_* env variables.
 fn env_overrides() -> Result<ExampleSettingsOverrides> {
     Ok(ExampleSettingsOverrides {
+        demo_dir: parse_optional_env::<String>("FEAGI_TEST_DEMO_DIR")?.map(PathBuf::from),
         frame_dir: parse_optional_env::<String>("FEAGI_TEST_FRAME_DIR")?.map(PathBuf::from),
         frame_loops: parse_optional_env::<usize>("FEAGI_TEST_FRAME_LOOPS")?,
         gaze_x: parse_optional_env::<f32>("FEAGI_TEST_GAZE_X")?,
@@ -462,16 +483,40 @@ fn load_example_settings(cli_args: &CliArgs) -> Result<ExampleSettings> {
         ));
     }
 
-    let frame_dir = draft.frame_dir.ok_or_else(|| {
-        anyhow::anyhow!(
-            "frame_dir is required (use --frame-dir, FEAGI_TEST_FRAME_DIR, or settings TOML)"
-        )
-    })?;
+    // Resolve frame_dir and genome_path. If frame_dir points to a demo folder (has assets/
+    // subdir), use that folder as demo root: frames from <path>/assets, genome from <path>/genome.json.
+    let (frame_dir, genome_path) = match (&draft.frame_dir, &draft.demo_dir) {
+        (Some(fd), _) if fd.join("assets").is_dir() => {
+            let assets = fd.join("assets");
+            let gp = fd.join("genome.json");
+            (assets, if gp.is_file() { Some(gp) } else { None })
+        }
+        (Some(fd), _) => (
+            fd.clone(),
+            draft.demo_dir.and_then(|d| {
+                let p = d.join("genome.json");
+                if p.is_file() { Some(p) } else { None }
+            }),
+        ),
+        (None, Some(d)) => (
+            d.join("assets"),
+            {
+                let p = d.join("genome.json");
+                if p.is_file() { Some(p) } else { None }
+            },
+        ),
+        (None, None) => {
+            return Err(anyhow::anyhow!(
+                "frame_dir is required (use --demo-dir, --frame-dir, FEAGI_TEST_DEMO_DIR, FEAGI_TEST_FRAME_DIR, or settings TOML)"
+            ));
+        }
+    };
 
     Ok(ExampleSettings {
         cortical_unit_id: 0,
         color_space: ColorSpace::Gamma,
         frame_dir,
+        genome_path,
         frame_loops: draft.frame_loops,
         gaze_x: draft.gaze_x,
         gaze_y: draft.gaze_y,
@@ -611,6 +656,51 @@ fn format_tcp_endpoint(host: &str, port: u16) -> String {
     } else {
         format!("tcp://{host}:{port}")
     }
+}
+
+/// Load a genome file into FEAGI via POST /v1/genome/upload. Blocks until FEAGI sends an explicit
+/// HTTP response (success or error). No client-side timeout: we wait for FEAGI's reply whether it
+/// arrives in milliseconds or minutes. Only on HTTP success do we return and start streaming.
+fn load_genome_via_feagi_api(config: &FeagiConfig, genome_path: &Path) -> Result<()> {
+    let json_str = fs::read_to_string(genome_path)
+        .with_context(|| format!("Failed to read genome file: {}", genome_path.display()))?;
+    let genome_json: serde_json::Value = serde_json::from_str(&json_str)
+        .with_context(|| format!("Invalid JSON in genome file: {}", genome_path.display()))?;
+
+    let host = &config.api.advertised_host;
+    let port = config.api.port;
+    let url = if host.contains(':') {
+        format!("http://[{}]:{}/v1/genome/upload", host, port)
+    } else {
+        format!("http://{}:{}/v1/genome/upload", host, port)
+    };
+
+    let client = reqwest::blocking::Client::builder()
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    eprintln!(
+        "[system_frame_agent] Loading genome from {} into FEAGI at {} (waiting for FEAGI response) ...",
+        genome_path.display(),
+        url
+    );
+    let response = client
+        .post(&url)
+        .json(&genome_json)
+        .send()
+        .with_context(|| format!("Failed to POST genome to {}", url))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "FEAGI genome upload failed: {} {}",
+            status,
+            body
+        ));
+    }
+    eprintln!("[system_frame_agent] FEAGI returned success; starting sensory streaming.");
+    Ok(())
 }
 
 /// Create and connect the embodiment agent using current `feagi-agent` APIs.
@@ -793,6 +883,10 @@ fn write_frame(
 fn run_example(cli_args: &CliArgs) -> Result<()> {
     let config = load_feagi_config()?;
     let settings = load_example_settings(cli_args)?;
+
+    if let Some(ref genome_path) = settings.genome_path {
+        load_genome_via_feagi_api(&config, genome_path)?;
+    }
 
     let frame_paths = load_frame_paths(&settings.frame_dir)?;
     let frames = load_frame_sequence(&frame_paths, &settings.color_space)?;
