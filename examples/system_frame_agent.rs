@@ -184,7 +184,7 @@ impl Default for ExampleSettingsDraft {
             frame_loops: 3,
             gaze_x: 0.5,
             gaze_y: 0.5,
-            gaze_modulation: 0.5,
+            gaze_modulation: 1.0,
             brightness: 0.5,
             contrast: 0.5,
             diff_threshold: 15,

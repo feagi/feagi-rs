@@ -24,5 +24,6 @@ feagi-npu-neural = { path = "../feagi-core/crates/feagi-npu/neural" }
 feagi-npu-runtime = { path = "../feagi-core/crates/feagi-npu/runtime" }
 feagi-npu-burst-engine = { path = "../feagi-core/crates/feagi-npu/burst-engine" }
 feagi-npu-plasticity = { path = "../feagi-core/crates/feagi-npu/plasticity" }
+feagi-serialization = { path = "../feagi-core/crates/feagi-serialization" }
 
 
