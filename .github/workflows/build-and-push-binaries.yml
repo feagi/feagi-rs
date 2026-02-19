@@ -197,7 +197,8 @@ jobs:
             source = pkg.get("source")
             version = str(pkg.get("version", ""))
 
-            if not (isinstance(source, str) and source.startswith("registry+")):
+            # Root package (feagi-rs) has source=None; only dependency sources must be registry
+            if source is not None and not (isinstance(source, str) and source.startswith("registry+")):
               bad_sources.append((name, version, source))
 
           if bad_sources:
@@ -348,7 +349,8 @@ jobs:
             source = pkg.get("source")
             version = str(pkg.get("version", ""))
 
-            if not (isinstance(source, str) and source.startswith("registry+")):
+            # Root package (feagi-rs) has source=None; only dependency sources must be registry
+            if source is not None and not (isinstance(source, str) and source.startswith("registry+")):
               bad_sources.append((name, version, source))
 
           if bad_sources:
@@ -507,7 +509,8 @@ jobs:
             source = pkg.get("source")
             version = str(pkg.get("version", ""))
 
-            if not (isinstance(source, str) and source.startswith("registry+")):
+            # Root package (feagi-rs) has source=None; only dependency sources must be registry
+            if source is not None and not (isinstance(source, str) and source.startswith("registry+")):
               bad_sources.append((name, version, source))
 
           if bad_sources:
@@ -664,7 +667,8 @@ jobs:
             source = pkg.get("source")
             version = str(pkg.get("version", ""))
 
-            if not (isinstance(source, str) and source.startswith("registry+")):
+            # Root package (feagi-rs) has source=None; only dependency sources must be registry
+            if source is not None and not (isinstance(source, str) and source.startswith("registry+")):
               bad_sources.append((name, version, source))
 
           if bad_sources:
@@ -821,7 +825,8 @@ jobs:
             source = pkg.get("source")
             version = str(pkg.get("version", ""))
 
-            if not (isinstance(source, str) and source.startswith("registry+")):
+            # Root package (feagi-rs) has source=None; only dependency sources must be registry
+            if source is not None and not (isinstance(source, str) and source.startswith("registry+")):
               bad_sources.append((name, version, source))
 
           if bad_sources:
