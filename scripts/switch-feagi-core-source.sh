@@ -100,6 +100,7 @@ CRATES=(
   "feagi-observability:crates/feagi-observability"
   "feagi-agent:crates/feagi-agent"
   "feagi-sensorimotor:crates/feagi-sensorimotor"
+  "feagi-serialization:crates/feagi-serialization"
 )
 
 VERSIONS_JSON="{"

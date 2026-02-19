@@ -45,7 +45,7 @@ pub use feagi_npu_burst_engine::RawFireQueueSnapshot;
 
 // Re-export for embedders who need them
 pub use feagi_brain_development::ConnectomeManager;
-pub use feagi_io::IOSystem;
+pub use feagi_agent::server::FeagiAgentHandler;
 pub use feagi_npu_burst_engine::BurstLoopRunner;
 pub use feagi_services::*;
 
@@ -111,7 +111,10 @@ impl FeagiInstance {
             .build()
             .context("Failed to create Tokio runtime")?;
 
-        let http_server_url = format!("http://{}:{}", config.api.host, config.api.port);
+        let http_server_url = format!(
+            "http://{}:{}",
+            config.api.advertised_host, config.api.port
+        );
 
         info!("🦀 FEAGI Instance created (embedded mode)");
         info!("   HTTP API will be available at: {}", http_server_url);
@@ -398,9 +401,9 @@ impl FeagiInstance {
         info!("🧠 Loading genome: {}", genome_path);
 
         self.runtime.block_on(async {
-            components::load_genome_with_pns(
+            components::load_genome_with_agent_handler(
                 &components.connectome_manager,
-                &components.pns,
+                &components.agent_handler,
                 &path,
             )
             .await?;

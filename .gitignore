@@ -24,7 +24,7 @@ feagi.log
 
 # Configuration overrides (keep the template)
 # feagi_configuration.toml should come from parent directory
-/.cargo/config.toml
+#/.cargo/config.toml
 
 # Test artifacts
 *.profdata

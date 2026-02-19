@@ -13,12 +13,26 @@ use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::FeagiConfig;
-use feagi_io::IOSystem;
+use feagi_io::{AgentID, SensoryIntakeQueue};
 use feagi_npu_burst_engine::backend::GpuConfig;
-use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU, TracingMutex};
+use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU, SensoryIntake, TracingMutex};
 use feagi_services::impls::{AgentServiceImpl, SystemServiceImpl};
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::*;
+
+// New architecture imports
+use feagi_agent::server::auth::DummyAuth;
+use feagi_agent::server::FeagiAgentHandler;
+
+#[cfg(feature = "zmq-transport")]
+use feagi_io::protocol_implementations::zmq::{
+    FeagiZmqServerPublisherProperties, FeagiZmqServerPullerProperties,
+    FeagiZmqServerRouterProperties,
+};
+use feagi_io::protocol_implementations::websocket::websocket_std::{
+    FeagiWebSocketServerPublisherProperties, FeagiWebSocketServerPullerProperties,
+    FeagiWebSocketServerRouterProperties,
+};
 
 /// Core FEAGI components
 ///
@@ -28,7 +42,9 @@ pub struct FeagiComponents {
     pub connectome_manager: Arc<RwLock<ConnectomeManager>>,
     pub runtime_service: Arc<RuntimeServiceImpl>,
     pub burst_runner: Arc<RwLock<BurstLoopRunner>>,
-    pub pns: Arc<IOSystem>,
+    pub agent_handler: Arc<Mutex<FeagiAgentHandler>>,
+    /// Transport-agnostic sensory queue (feagi-io); feed from polling loop when agents send sensory
+    pub sensory_intake_queue: Arc<SensoryIntakeQueue>,
 }
 
 /// Initialize all core FEAGI components
@@ -78,93 +94,270 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     manager.write().set_npu(Arc::clone(&npu));
     info!("    ✓ ConnectomeManager initialized");
 
-    // Initialize PNS
-    info!("  Creating PNS (Agent Management)...");
+    // Initialize Agent Handler (new architecture)
+    info!("  Creating Agent Handler (new architecture)...");
 
-    use feagi_io::{IOConfig, WebSocketConfig};
+    let auth_backend = Box::new(DummyAuth {});
+    let mut agent_handler = FeagiAgentHandler::new(auth_backend);
 
-    let io_config = IOConfig {
-        #[cfg(feature = "zmq-transport")]
-        zmq_rest_address: format!(
+    // Add ZMQ servers if enabled
+    #[cfg(feature = "zmq-transport")]
+    {
+        info!("    Adding ZMQ transport servers...");
+        
+        // Registration router (command/control) - single shared router
+        let registration_addr = format!(
             "tcp://{}:{}",
-            config.agent.host, config.agent.registration_port
-        ),
-        #[cfg(feature = "zmq-transport")]
-        zmq_motor_address: format!("tcp://{}:{}", config.zmq.host, config.ports.zmq_motor_port),
-        #[cfg(feature = "zmq-transport")]
-        zmq_viz_address: format!(
+            config.agent.bind_host, config.agent.registration_port
+        );
+        let registration_adv_addr = format!(
             "tcp://{}:{}",
-            config.zmq.host, config.ports.zmq_visualization_port
-        ),
-        #[cfg(feature = "zmq-transport")]
-        zmq_sensory_address: format!(
-            "tcp://{}:{}",
-            config.zmq.host, config.ports.zmq_sensory_port
-        ),
-        websocket: WebSocketConfig {
-            enabled: config.websocket.enabled,
-            host: config.websocket.host.clone(),
-            sensory_port: config.websocket.sensory_port,
-            motor_port: config.websocket.motor_port,
-            visualization_port: config.websocket.visualization_port,
-            registration_port: config.websocket.registration_port,
-            rest_api_port: config.websocket.rest_api_port,
-            connection_timeout_ms: config.websocket.connection_timeout_ms,
-            ping_interval_ms: config.websocket.ping_interval_ms,
-            ping_timeout_ms: config.websocket.ping_timeout_ms,
-            close_timeout_ms: config.websocket.close_timeout_ms,
-            max_message_size: config.websocket.max_message_size,
-            max_connections: config.websocket.max_connections,
-        },
-        ..Default::default()
-    };
+            config.agent.advertised_host, config.agent.registration_port
+        );
+        let router_props = Box::new(
+            FeagiZmqServerRouterProperties::new(&registration_addr, &registration_adv_addr)
+                .context("Failed to create ZMQ router properties")?
+        );
+        agent_handler
+            .add_and_start_command_control_server(router_props)
+            .context("Failed to add ZMQ registration server")?;
+        info!("      ✓ ZMQ registration router: {}", registration_addr);
 
-    let pns = Arc::new(IOSystem::with_config(io_config).context("Failed to create PNS")?);
+        // Multiple agent slots: handler consumes one puller + two publishers per ZMQ agent.
+        // Slot 0 uses config ports; slots 1..N use offset ranges to avoid overlap.
+        const ZMQ_AGENT_SLOTS: u16 = 8;
+        const ZMQ_SENSORY_OFFSET: u16 = 5566;  // slots 1.. use 5566, 5567, ...
+        const ZMQ_MOTOR_OFFSET: u16 = 5574;    // slots 1.. use 5574, 5575, ...
+        const ZMQ_VIZ_OFFSET: u16 = 5582;      // slots 1.. use 5582, 5583, ...
 
-    // Wire dynamic gating callbacks
-    IOSystem::wire_dynamic_gating_callbacks(&pns);
+        for slot in 0..ZMQ_AGENT_SLOTS {
+            let (sensory_port, motor_port, viz_port) = if slot == 0 {
+                (
+                    config.ports.zmq_sensory_port,
+                    config.ports.zmq_motor_port,
+                    config.ports.zmq_visualization_port,
+                )
+            } else {
+                let i = slot;
+                (
+                    ZMQ_SENSORY_OFFSET + i - 1,
+                    ZMQ_MOTOR_OFFSET + i - 1,
+                    ZMQ_VIZ_OFFSET + i - 1,
+                )
+            };
 
-    info!("    ✓ PNS created");
+            let sensory_addr = format!("tcp://{}:{}", config.zmq.bind_host, sensory_port);
+            let sensory_adv_addr =
+                format!("tcp://{}:{}", config.zmq.advertised_host, sensory_port);
+            let sensory_props = Box::new(
+                FeagiZmqServerPullerProperties::new(&sensory_addr, &sensory_adv_addr)
+                    .context("Failed to create ZMQ sensory puller properties")?
+            );
+            agent_handler.add_puller_server(sensory_props);
+
+            let motor_addr = format!("tcp://{}:{}", config.zmq.bind_host, motor_port);
+            let motor_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, motor_port);
+            let motor_props = Box::new(
+                FeagiZmqServerPublisherProperties::new(&motor_addr, &motor_adv_addr)
+                    .context("Failed to create ZMQ motor publisher properties")?
+            );
+            agent_handler.add_publisher_server(motor_props);
+
+            let viz_addr = format!("tcp://{}:{}", config.zmq.bind_host, viz_port);
+            let viz_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, viz_port);
+            let viz_props = Box::new(
+                FeagiZmqServerPublisherProperties::new(&viz_addr, &viz_adv_addr)
+                    .context("Failed to create ZMQ visualization publisher properties")?
+            );
+            agent_handler.add_publisher_server(viz_props);
+        }
+        info!(
+            "      ✓ ZMQ sensory/motor/viz: {} slots (ports 0: {}/{}/{}, 1..: {}-{}/{}-{}/{}-{})",
+            ZMQ_AGENT_SLOTS,
+            config.ports.zmq_sensory_port,
+            config.ports.zmq_motor_port,
+            config.ports.zmq_visualization_port,
+            ZMQ_SENSORY_OFFSET,
+            ZMQ_SENSORY_OFFSET + ZMQ_AGENT_SLOTS - 2,
+            ZMQ_MOTOR_OFFSET,
+            ZMQ_MOTOR_OFFSET + ZMQ_AGENT_SLOTS - 2,
+            ZMQ_VIZ_OFFSET,
+            ZMQ_VIZ_OFFSET + ZMQ_AGENT_SLOTS - 2
+        );
+    }
+
+    // Add WebSocket servers if enabled
+    if config.websocket.enabled {
+        info!("    Adding WebSocket transport servers...");
+
+        // Registration router
+        let ws_registration_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.registration_port
+        );
+        let ws_registration_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.registration_port
+        );
+        let ws_router_props = Box::new(
+            FeagiWebSocketServerRouterProperties::new_with_remote(
+                &ws_registration_addr,
+                &ws_registration_adv_addr,
+            )
+                .context("Failed to create WebSocket router properties")?
+        );
+        agent_handler
+            .add_and_start_command_control_server(ws_router_props)
+            .context("Failed to add WebSocket registration server")?;
+        info!("      ✓ WebSocket registration router: {}", ws_registration_addr);
+
+        // Sensory puller
+        let ws_sensory_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.sensory_port
+        );
+        let ws_sensory_adv_addr =
+            format!("{}:{}", config.websocket.advertised_host, config.websocket.sensory_port);
+        let ws_sensory_props = Box::new(
+            FeagiWebSocketServerPullerProperties::new_with_remote(
+                &ws_sensory_addr,
+                &ws_sensory_adv_addr,
+            )
+                .context("Failed to create WebSocket sensory puller properties")?
+        );
+        agent_handler.add_puller_server(ws_sensory_props);
+        info!("      ✓ WebSocket sensory puller: {}", ws_sensory_addr);
+
+        // Motor publisher
+        let ws_motor_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.motor_port
+        );
+        let ws_motor_adv_addr =
+            format!("{}:{}", config.websocket.advertised_host, config.websocket.motor_port);
+        let ws_motor_props = Box::new(
+            FeagiWebSocketServerPublisherProperties::new(&ws_motor_addr, &ws_motor_adv_addr)
+                .context("Failed to create WebSocket motor publisher properties")?
+        );
+        agent_handler.add_publisher_server(ws_motor_props);
+        info!("      ✓ WebSocket motor publisher: {}", ws_motor_addr);
+
+        // Visualization publisher
+        let ws_viz_addr = format!(
+            "{}:{}",
+            config.websocket.bind_host, config.websocket.visualization_port
+        );
+        let ws_viz_adv_addr =
+            format!("{}:{}", config.websocket.advertised_host, config.websocket.visualization_port);
+        let ws_viz_props = Box::new(
+            FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr, &ws_viz_adv_addr)
+                .context("Failed to create WebSocket visualization publisher properties")?
+        );
+        agent_handler.add_publisher_server(ws_viz_props);
+        info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
+    }
+
+    let agent_handler = Arc::new(Mutex::new(agent_handler));
+    info!("    ✓ Agent Handler created with transports");
 
     // Initialize BurstLoopRunner
     info!("  Initializing BurstLoopRunner...");
     let burst_timestep = config.neural.burst_engine_timestep;
 
-    // Create PNS-backed visualization publisher
-    struct PnsVisualizationPublisher {
-        pns: Arc<IOSystem>,
+    // Create agent-handler-backed publishers
+    struct AgentHandlerVisualizationPublisher {
+        #[allow(dead_code)] // TODO: Use when encoding/sending is implemented
+        handler: Arc<Mutex<FeagiAgentHandler>>,
     }
-
-    impl feagi_npu_burst_engine::VisualizationPublisher for PnsVisualizationPublisher {
-        fn publish_raw_fire_queue(
+    
+    impl feagi_npu_burst_engine::VisualizationPublisher for AgentHandlerVisualizationPublisher {
+        fn publish_raw_fire_queue_for_agent(
             &self,
+            agent_id: &str,
             fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
         ) -> Result<(), String> {
-            self.pns
-                .publish_raw_fire_queue(fire_data)
-                .map_err(|e| format!("PNS viz publish failed: {}", e))
+            if fire_data.is_empty() {
+                return Ok(());
+            }
+
+            let mut handler_guard = self.handler.lock().unwrap();
+            
+            // Convert RawFireQueueSnapshot to CorticalMappedXYZPNeuronVoxels
+            use feagi_structures::neuron_voxels::xyzp::{CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays};
+            use feagi_structures::genomic::cortical_area::CorticalID;
+            use feagi_serialization::FeagiByteContainer;
+            
+            let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
+            
+            for (_area_idx, fire_queue_data) in fire_data {
+                // Parse cortical_id from base64 string
+                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id) {
+                    if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
+                        fire_queue_data.coords_x,
+                        fire_queue_data.coords_y,
+                        fire_queue_data.coords_z,
+                        fire_queue_data.potentials,
+                    ) {
+                        cortical_mapped.insert(cortical_id, neuron_voxels);
+                    }
+                }
+            }
+
+            let agent_id = AgentID::try_from_base64(agent_id)
+                .map_err(|e| format!("Invalid visualization agent_id '{}': {:?}", agent_id, e))?;
+
+            // Wrap visualization payload in a FEAGI byte container and route by AgentID.
+            let mut container = FeagiByteContainer::new_empty();
+            container
+                .set_agent_identifier(agent_id)
+                .map_err(|e| format!("Failed to set visualization agent identifier: {:?}", e))?;
+            container
+                .overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
+            handler_guard
+                .send_visualization_data(agent_id, &container)
+                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
+
+            Ok(())
         }
     }
 
-    // Create PNS-backed motor publisher
-    struct PnsMotorPublisher {
-        pns: Arc<IOSystem>,
+    struct AgentHandlerMotorPublisher {
+        #[allow(dead_code)] // TODO: Use when SessionID lookup is implemented
+        handler: Arc<Mutex<FeagiAgentHandler>>,
     }
-
-    impl feagi_npu_burst_engine::MotorPublisher for PnsMotorPublisher {
+    
+    impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
-            self.pns
-                .publish_motor(agent_id, data)
-                .map_err(|e| format!("PNS motor publish failed: {}", e))
+            if data.is_empty() {
+                return Ok(());
+            }
+
+            let mut handler_guard = self.handler.lock().unwrap();
+            
+            let agent_id = AgentID::try_from_base64(agent_id)
+                .map_err(|e| format!("Invalid motor agent_id '{}': {:?}", agent_id, e))?;
+
+            // Motor data is already encoded as FeagiByteContainer bytes
+            use feagi_serialization::FeagiByteContainer;
+            // Create container by copying existing bytes
+            let mut container = FeagiByteContainer::new_empty();
+            container.try_write_data_by_copy_and_verify(data)
+                .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
+
+            // Send via handler
+            handler_guard.send_motor_data(agent_id, &container)
+                .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
+
+            Ok(())
         }
     }
 
-    let viz_publisher = Arc::new(Mutex::new(PnsVisualizationPublisher {
-        pns: Arc::clone(&pns),
+    let viz_publisher = Arc::new(Mutex::new(AgentHandlerVisualizationPublisher {
+        handler: Arc::clone(&agent_handler),
     }));
-
-    let motor_publisher = Arc::new(Mutex::new(PnsMotorPublisher {
-        pns: Arc::clone(&pns),
+    let motor_publisher = Arc::new(Mutex::new(AgentHandlerMotorPublisher {
+        handler: Arc::clone(&agent_handler),
     }));
 
     let burst_hz = 1.0 / burst_timestep;
@@ -181,51 +374,29 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
     info!("    ✓ Runtime service created");
 
-    // Wire up bidirectional connections
-    info!("  Wiring PNS ↔ BurstLoopRunner connections...");
-
-    let sensory_mgr = burst_runner.read().sensory_manager.clone();
-    pns.set_sensory_agent_manager(sensory_mgr);
-    pns.set_burst_runner(Arc::clone(&burst_runner));
-    pns.set_npu_for_gating(Arc::clone(&npu));
-
-    info!("    ✓ PNS ↔ BurstLoopRunner connections established");
+    // Transport-agnostic sensory intake (feagi-io): burst loop consumes from queue; caller feeds it
+    let sensory_intake_queue = Arc::new(SensoryIntakeQueue::new());
+    struct SensoryIntakeAdapter {
+        queue: Arc<SensoryIntakeQueue>,
+    }
+    impl SensoryIntake for SensoryIntakeAdapter {
+        fn poll_sensory_data(&mut self) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.queue.poll_next())
+        }
+    }
+    burst_runner.write().set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
+        queue: Arc::clone(&sensory_intake_queue),
+    })) as Arc<Mutex<dyn SensoryIntake>>);
+    info!("    ✓ Sensory intake (feagi-io) wired to BurstLoopRunner");
 
     Ok(FeagiComponents {
         npu,
         connectome_manager: manager,
         runtime_service,
         burst_runner,
-        pns,
+        agent_handler,
+        sensory_intake_queue,
     })
-}
-
-/// Wire GenomeService and ConnectomeService to RegistrationHandler
-///
-/// This is REQUIRED for the auto-creation of missing IPU/OPU cortical areas feature.
-/// All FEAGI embedders must call this function after creating services and before
-/// starting the HTTP API server.
-///
-/// # Arguments
-/// * `registration_handler` - The registration handler from PNS
-/// * `genome_service` - The genome service instance
-/// * `connectome_service` - The connectome service instance  
-/// * `auto_create_enabled` - Whether to auto-create missing cortical areas (from config)
-pub fn wire_registration_handler_services(
-    registration_handler: &Arc<parking_lot::Mutex<feagi_io::RegistrationHandler>>,
-    genome_service: &Arc<dyn feagi_services::traits::GenomeService + Send + Sync>,
-    connectome_service: &Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>,
-    auto_create_enabled: bool,
-) -> Result<()> {
-    let mut handler = registration_handler.lock();
-    handler
-        .set_genome_service(Arc::clone(genome_service)
-            as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>);
-    handler.set_connectome_service(Arc::clone(connectome_service)
-        as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>);
-    handler.set_auto_create_missing_areas(auto_create_enabled);
-    info!("    ✓ RegistrationHandler services wired (GenomeService, ConnectomeService, auto-create: {})", auto_create_enabled);
-    Ok(())
 }
 
 /// Start HTTP API server
@@ -272,58 +443,17 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         version_info,
     ));
 
-    let agent_registry = components.pns.get_agent_registry();
-    let registration_handler = components.pns.get_registration_handler();
-
-    // Wire services to RegistrationHandler (required for auto-creation of missing cortical areas)
-    wire_registration_handler_services(
-        &registration_handler,
-        &(genome_service.clone() as Arc<dyn feagi_services::traits::GenomeService + Send + Sync>),
-        &(connectome_service.clone()
-            as Arc<dyn feagi_services::traits::ConnectomeService + Send + Sync>),
-        config.agent.auto_create_missing_cortical_areas,
-    )?;
-
-    // Visualization transport is driven by feagi_configuration.toml (authoritative).
-    {
-        use feagi_io::core::registration::VisualizationShmPolicy;
-        let policy = match config.visualization.transport.as_str() {
-            "auto" => VisualizationShmPolicy::Auto,
-            "websocket" => VisualizationShmPolicy::ForceWebSocket,
-            "shm" => VisualizationShmPolicy::ForceShm,
-            other => {
-                return Err(anyhow::anyhow!(
-                    "Invalid config value visualization.transport='{}' (expected auto/websocket/shm)",
-                    other
-                ));
-            }
-        };
-        registration_handler
-            .lock()
-            .set_visualization_shm_policy(policy);
-    }
-
-    let mut agent_service_impl =
-        AgentServiceImpl::new(Arc::clone(&components.connectome_manager), agent_registry);
-
-    // Convert Arc<Mutex<RegistrationHandler>> to Arc<dyn RegistrationHandlerTrait>
-    use feagi_services::traits::registration_handler::RegistrationHandlerTrait;
-
-    // Wrapper to convert Arc<Mutex<RegistrationHandler>> to trait object
-    struct RegistrationHandlerWrapper(Arc<parking_lot::Mutex<feagi_io::RegistrationHandler>>);
-    impl RegistrationHandlerTrait for RegistrationHandlerWrapper {
-        fn process_registration(
-            &self,
-            request: feagi_services::types::registration::RegistrationRequest,
-        ) -> Result<feagi_services::types::registration::RegistrationResponse, String> {
-            self.0.lock().process_registration(request)
-        }
-    }
-
-    let handler_trait: Arc<dyn RegistrationHandlerTrait> =
-        Arc::new(RegistrationHandlerWrapper(registration_handler));
-    agent_service_impl.set_registration_handler(handler_trait);
+    // TODO: Create agent service with agent registry from handler
+    // For now, create minimal agent service with empty registry
+    use parking_lot::RwLock as PRwLock;
+    // Create empty agent registry with default settings
+    let empty_registry = Arc::new(PRwLock::new(feagi_services::AgentRegistry::new(100, 60000)));
+    let agent_service_impl = AgentServiceImpl::new(
+        Arc::clone(&components.connectome_manager),
+        empty_registry
+    );
     let agent_service = Arc::new(agent_service_impl);
+    
     info!("    ✓ Services created");
 
     // Create snapshot service
@@ -339,12 +469,29 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     info!("    ✓ FEAGI session timestamp: {}", feagi_session_timestamp);
 
     let api_port = config.api.port;
-    let api_host = config.api.host.clone();
+    let api_bind_host = config.api.bind_host.clone();
+    let api_advertised_host = config.api.advertised_host.clone();
     let network_provider = Arc::new(FeagiNetworkConnectionInfoProvider {
-        api_host: api_host.clone(),
+        api_advertised_host: api_advertised_host.clone(),
         api_port,
-        pns: Arc::clone(&components.pns),
+        agent_handler: Arc::clone(&components.agent_handler),
         viz_transport_policy: config.visualization.transport.clone(),
+        // Registration endpoint is from agent config; data endpoints are from ZMQ ports config.
+        zmq_enabled: true,
+        zmq_registration_advertised_host: config.agent.advertised_host.clone(),
+        zmq_advertised_host: config.zmq.advertised_host.clone(),
+        zmq_registration_port: config.agent.registration_port,
+        zmq_sensory_port: config.ports.zmq_sensory_port,
+        zmq_motor_port: config.ports.zmq_motor_port,
+        zmq_visualization_port: config.ports.zmq_visualization_port,
+        zmq_api_control_port: config.ports.zmq_rest_port,
+        websocket_enabled: config.websocket.enabled,
+        websocket_advertised_host: config.websocket.advertised_host.clone(),
+        websocket_registration_port: config.websocket.registration_port,
+        websocket_sensory_port: config.websocket.sensory_port,
+        websocket_motor_port: config.websocket.motor_port,
+        websocket_visualization_port: config.websocket.visualization_port,
+        websocket_rest_api_port: config.websocket.rest_api_port,
     }) as Arc<dyn NetworkConnectionInfoProvider>;
 
     let api_state = ApiState {
@@ -367,13 +514,19 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         #[cfg(not(feature = "plasticity"))]
         memory_stats_cache: None,
         amalgamation_state: ApiState::init_amalgamation_state(),
-        agent_connectors: ApiState::init_agent_connectors(),
+        #[cfg(feature = "feagi-agent")]
+        agent_handler: Some(Arc::clone(&components.agent_handler)),
+        #[cfg(not(feature = "feagi-agent"))]
+        agent_handler: None,
     };
 
     // Start HTTP API server
-    info!("  Starting HTTP API server on {}:{}...", api_host, api_port);
+    info!(
+        "  Starting HTTP API server on {}:{} (advertised as {}:{})...",
+        api_bind_host, api_port, api_advertised_host, api_port
+    );
     let app = create_http_server(api_state);
-    let addr = format!("{}:{}", api_host, api_port);
+    let addr = format!("{}:{}", api_bind_host, api_port);
 
     info!("  Spawning HTTP server task...");
     tokio::spawn(async move {
@@ -408,10 +561,10 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     Ok(())
 }
 
-/// Load genome and notify PNS for dynamic gating
-pub async fn load_genome_with_pns(
+/// Load genome and notify agent handler
+pub async fn load_genome_with_agent_handler(
     manager: &Arc<RwLock<ConnectomeManager>>,
-    pns: &Arc<IOSystem>,
+    _agent_handler: &Arc<Mutex<FeagiAgentHandler>>,
     genome_path: &std::path::Path,
 ) -> Result<()> {
     use feagi_evolutionary::{load_genome_from_file, validate_genome};
@@ -476,9 +629,8 @@ pub async fn load_genome_with_pns(
         result.neurons_created, result.synapses_created
     );
 
-    info!("    [GENOME-LOAD] Step 3: Notifying PNS (triggers dynamic stream evaluation)...");
-    pns.on_genome_loaded();
-    info!("    [GENOME-LOAD] Step 4: PNS notified, dynamic evaluation complete");
+    // TODO: Notify agent handler of genome load for dynamic evaluation
+    info!("    [GENOME-LOAD] ⚠ Agent handler notification not yet implemented");
 
     Ok(())
 }
