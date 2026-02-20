@@ -933,7 +933,8 @@ jobs:
     name: Create PR with Binaries
     needs: [determine-config, build-linux-x86_64, build-linux-aarch64, build-darwin-x86_64, build-darwin-aarch64, build-windows-x86_64]
     runs-on: ubuntu-latest
-    if: always()
+    # Only create PR when all builds succeed; avoid PRs with missing/partial artifacts
+    if: success()
 
     steps:
       - name: Determine source commit
@@ -1016,43 +1017,44 @@ jobs:
         shell: bash
         run: |
           cd public-repo
+          # feagi-core package data lives under feagi-python-sdk/feagi/bin/ (package "feagi" in pyproject.toml)
+          BIN_ROOT="feagi-python-sdk/feagi/bin"
           
-          # Create directories and copy binaries
           if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
-            mkdir -p feagi/bin/linux-x86_64
-            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
-            chmod +x feagi/bin/linux-x86_64/feagi
+            mkdir -p "${BIN_ROOT}/linux-x86_64"
+            cp ../binaries/feagi-linux-x86_64/feagi "${BIN_ROOT}/linux-x86_64/feagi"
+            chmod +x "${BIN_ROOT}/linux-x86_64/feagi"
           fi
           
           if [ -f "../binaries/feagi-linux-aarch64/feagi" ]; then
-            mkdir -p feagi/bin/linux-aarch64
-            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
-            chmod +x feagi/bin/linux-aarch64/feagi
+            mkdir -p "${BIN_ROOT}/linux-aarch64"
+            cp ../binaries/feagi-linux-aarch64/feagi "${BIN_ROOT}/linux-aarch64/feagi"
+            chmod +x "${BIN_ROOT}/linux-aarch64/feagi"
           fi
           
           if [ -f "../binaries/feagi-darwin-x86_64/feagi" ]; then
-            mkdir -p feagi/bin/darwin-x86_64
-            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
-            chmod +x feagi/bin/darwin-x86_64/feagi
+            mkdir -p "${BIN_ROOT}/darwin-x86_64"
+            cp ../binaries/feagi-darwin-x86_64/feagi "${BIN_ROOT}/darwin-x86_64/feagi"
+            chmod +x "${BIN_ROOT}/darwin-x86_64/feagi"
           fi
           
           if [ -f "../binaries/feagi-darwin-aarch64/feagi" ]; then
-            mkdir -p feagi/bin/darwin-aarch64
-            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
-            chmod +x feagi/bin/darwin-aarch64/feagi
+            mkdir -p "${BIN_ROOT}/darwin-aarch64"
+            cp ../binaries/feagi-darwin-aarch64/feagi "${BIN_ROOT}/darwin-aarch64/feagi"
+            chmod +x "${BIN_ROOT}/darwin-aarch64/feagi"
           fi
           
           if [ -f "../binaries/feagi-windows-x86_64/feagi.exe" ]; then
-            mkdir -p feagi/bin/windows-x86_64
-            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
+            mkdir -p "${BIN_ROOT}/windows-x86_64"
+            cp ../binaries/feagi-windows-x86_64/feagi.exe "${BIN_ROOT}/windows-x86_64/feagi.exe"
           fi
 
       - name: Commit changes
         shell: bash
         run: |
           cd public-repo
-          
-          git add -f feagi/bin/
+          BIN_ROOT="feagi-python-sdk/feagi/bin"
+          git add -f "${BIN_ROOT}/"
           
           PLATFORMS_STR="${{ steps.platforms.outputs.platforms }}"
           
@@ -1172,40 +1174,41 @@ jobs:
           # Configure remote URL with token for push operations
           git remote set-url origin https://${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}@github.com/feagi/feagi.git
           
-          # Create directories and copy binaries
+          BIN_ROOT="feagi-python-sdk/feagi/bin"
           if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
-            mkdir -p feagi/bin/linux-x86_64
-            cp ../binaries/feagi-linux-x86_64/feagi feagi/bin/linux-x86_64/feagi
-            chmod +x feagi/bin/linux-x86_64/feagi
+            mkdir -p "${BIN_ROOT}/linux-x86_64"
+            cp ../binaries/feagi-linux-x86_64/feagi "${BIN_ROOT}/linux-x86_64/feagi"
+            chmod +x "${BIN_ROOT}/linux-x86_64/feagi"
           fi
           
           if [ -f "../binaries/feagi-linux-aarch64/feagi" ]; then
-            mkdir -p feagi/bin/linux-aarch64
-            cp ../binaries/feagi-linux-aarch64/feagi feagi/bin/linux-aarch64/feagi
-            chmod +x feagi/bin/linux-aarch64/feagi
+            mkdir -p "${BIN_ROOT}/linux-aarch64"
+            cp ../binaries/feagi-linux-aarch64/feagi "${BIN_ROOT}/linux-aarch64/feagi"
+            chmod +x "${BIN_ROOT}/linux-aarch64/feagi"
           fi
           
           if [ -f "../binaries/feagi-darwin-x86_64/feagi" ]; then
-            mkdir -p feagi/bin/darwin-x86_64
-            cp ../binaries/feagi-darwin-x86_64/feagi feagi/bin/darwin-x86_64/feagi
-            chmod +x feagi/bin/darwin-x86_64/feagi
+            mkdir -p "${BIN_ROOT}/darwin-x86_64"
+            cp ../binaries/feagi-darwin-x86_64/feagi "${BIN_ROOT}/darwin-x86_64/feagi"
+            chmod +x "${BIN_ROOT}/darwin-x86_64/feagi"
           fi
           
           if [ -f "../binaries/feagi-darwin-aarch64/feagi" ]; then
-            mkdir -p feagi/bin/darwin-aarch64
-            cp ../binaries/feagi-darwin-aarch64/feagi feagi/bin/darwin-aarch64/feagi
-            chmod +x feagi/bin/darwin-aarch64/feagi
+            mkdir -p "${BIN_ROOT}/darwin-aarch64"
+            cp ../binaries/feagi-darwin-aarch64/feagi "${BIN_ROOT}/darwin-aarch64/feagi"
+            chmod +x "${BIN_ROOT}/darwin-aarch64/feagi"
           fi
           
           if [ -f "../binaries/feagi-windows-x86_64/feagi.exe" ]; then
-            mkdir -p feagi/bin/windows-x86_64
-            cp ../binaries/feagi-windows-x86_64/feagi.exe feagi/bin/windows-x86_64/feagi.exe
+            mkdir -p "${BIN_ROOT}/windows-x86_64"
+            cp ../binaries/feagi-windows-x86_64/feagi.exe "${BIN_ROOT}/windows-x86_64/feagi.exe"
           fi
 
       - name: Commit and push binaries
         shell: bash
         run: |
           cd public-repo
+          BIN_ROOT="feagi-python-sdk/feagi/bin"
           
           if git diff --quiet && git diff --staged --quiet; then
             echo "No changes to commit - binaries are identical to staging branch"
@@ -1213,14 +1216,14 @@ jobs:
             VERSION="${{ needs.determine-config.outputs.version }}"
             RELEASE_TYPE="${{ needs.determine-config.outputs.release_type }}"
             
-            git add -f feagi/bin/
+            git add -f "${BIN_ROOT}/"
             
             PLATFORMS=()
-            [ -f "feagi/bin/linux-x86_64/feagi" ] && PLATFORMS+=("linux-x86_64")
-            [ -f "feagi/bin/linux-aarch64/feagi" ] && PLATFORMS+=("linux-aarch64")
-            [ -f "feagi/bin/darwin-x86_64/feagi" ] && PLATFORMS+=("darwin-x86_64")
-            [ -f "feagi/bin/darwin-aarch64/feagi" ] && PLATFORMS+=("darwin-aarch64")
-            [ -f "feagi/bin/windows-x86_64/feagi.exe" ] && PLATFORMS+=("windows-x86_64")
+            [ -f "${BIN_ROOT}/linux-x86_64/feagi" ] && PLATFORMS+=("linux-x86_64")
+            [ -f "${BIN_ROOT}/linux-aarch64/feagi" ] && PLATFORMS+=("linux-aarch64")
+            [ -f "${BIN_ROOT}/darwin-x86_64/feagi" ] && PLATFORMS+=("darwin-x86_64")
+            [ -f "${BIN_ROOT}/darwin-aarch64/feagi" ] && PLATFORMS+=("darwin-aarch64")
+            [ -f "${BIN_ROOT}/windows-x86_64/feagi.exe" ] && PLATFORMS+=("windows-x86_64")
             PLATFORMS_STR=$(IFS=', '; echo "${PLATFORMS[*]}")
             
             if [[ "${RELEASE_TYPE}" == "dev" ]]; then
