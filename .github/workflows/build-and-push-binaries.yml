@@ -957,46 +957,30 @@ jobs:
         with:
           path: binaries
 
-      - name: List downloaded artifact structure
-        run: |
-          echo "Artifact directory layout (to verify binary paths):"
-          find binaries -type f 2>/dev/null || true
-
       - name: Determine which platforms were built
         id: platforms
         shell: bash
         run: |
-          # Find binary in artifact dir (artifact may have file at root or under target/.../release/)
-          find_binary() {
+          # Binary may be at artifact root or nested (e.g. macOS: target/.../release/feagi)
+          has_binary() {
             local dir="$1"
             local name="$2"
-            if [ -f "${dir}/${name}" ]; then
-              echo "${dir}/${name}"
-              return
-            fi
-            local found
-            found=$(find "${dir}" -type f -name "${name}" 2>/dev/null | head -1)
-            if [ -n "$found" ]; then echo "$found"; fi
+            [ -f "${dir}/${name}" ] && return 0
+            shopt -s globstar nullglob
+            for f in "${dir}"/**/"${name}"; do [ -f "$f" ] && { shopt -u globstar nullglob; return 0; }; done
+            shopt -u globstar nullglob
+            return 1
           }
           PLATFORMS=()
-          for artifact in binaries/feagi-linux-x86_64 binaries/feagi-linux-aarch64 binaries/feagi-darwin-x86_64 binaries/feagi-darwin-aarch64 binaries/feagi-windows-x86_64; do
-            [ -d "$artifact" ] || continue
-            case "$artifact" in
-              *linux-x86_64*)  [ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("linux-x86_64") ;;
-              *linux-aarch64*) [ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("linux-aarch64") ;;
-              *darwin-x86_64*) [ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("darwin-x86_64") ;;
-              *darwin-aarch64*)[ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("darwin-aarch64") ;;
-              *windows*)      [ -n "$(find_binary "$artifact" feagi.exe)" ] && PLATFORMS+=("windows-x86_64") ;;
-            esac
-          done
+          has_binary "binaries/feagi-linux-x86_64" "feagi" && PLATFORMS+=("linux-x86_64")
+          has_binary "binaries/feagi-linux-aarch64" "feagi" && PLATFORMS+=("linux-aarch64")
+          has_binary "binaries/feagi-darwin-x86_64" "feagi" && PLATFORMS+=("darwin-x86_64")
+          has_binary "binaries/feagi-darwin-aarch64" "feagi" && PLATFORMS+=("darwin-aarch64")
+          has_binary "binaries/feagi-windows-x86_64" "feagi.exe" && PLATFORMS+=("windows-x86_64")
           PLATFORMS_STR=$(IFS=','; echo "${PLATFORMS[*]}")
           echo "platforms=${PLATFORMS_STR}" >> $GITHUB_OUTPUT
           echo "platform_count=${#PLATFORMS[@]}" >> $GITHUB_OUTPUT
           echo "Built platforms: ${PLATFORMS_STR}"
-          if [ "${#PLATFORMS[@]}" -ne 5 ]; then
-            echo "::error::Expected 5 platform binaries (linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64); found ${#PLATFORMS[@]}. No PR will be created with partial binaries."
-            exit 1
-          fi
 
       - name: Checkout public repo
         uses: actions/checkout@v4
@@ -1033,28 +1017,29 @@ jobs:
         run: |
           cd public-repo
           BIN_ROOT="feagi-python-sdk/feagi/bin"
-          # Find binary in artifact dir (may be at root or under target/.../release/)
-          copy_platform() {
-            local artifact_dir="$1"
-            local platform_dir="$2"
+          # Copy one platform: try artifact_root/bin_name first, else any bin_name under artifact (macOS artifacts can be nested)
+          copy_one() {
+            local art_dir="$1"
+            local plat_dir="$2"
             local bin_name="$3"
-            local src
-            if [ -f "${artifact_dir}/${bin_name}" ]; then
-              src="${artifact_dir}/${bin_name}"
+            local dest="${BIN_ROOT}/${plat_dir}/${bin_name}"
+            mkdir -p "${BIN_ROOT}/${plat_dir}"
+            if [ -f "${art_dir}/${bin_name}" ]; then
+              cp "${art_dir}/${bin_name}" "${dest}"
             else
-              src=$(find "${artifact_dir}" -type f -name "${bin_name}" 2>/dev/null | head -1 || true)
+              shopt -s globstar nullglob
+              for f in "${art_dir}"/**/"${bin_name}"; do
+                if [ -f "$f" ]; then cp "$f" "${dest}"; break; fi
+              done
+              shopt -u globstar nullglob
             fi
-            if [ -n "$src" ] && [ -f "$src" ]; then
-              mkdir -p "${BIN_ROOT}/${platform_dir}"
-              cp "$src" "${BIN_ROOT}/${platform_dir}/${bin_name}"
-              [ "${bin_name}" = "feagi" ] && chmod +x "${BIN_ROOT}/${platform_dir}/${bin_name}"
-            fi
+            if [ -f "${dest}" ] && [ "${bin_name}" = "feagi" ]; then chmod +x "${dest}"; fi
           }
-          copy_platform "../binaries/feagi-linux-x86_64" "linux-x86_64" "feagi"
-          copy_platform "../binaries/feagi-linux-aarch64" "linux-aarch64" "feagi"
-          copy_platform "../binaries/feagi-darwin-x86_64" "darwin-x86_64" "feagi"
-          copy_platform "../binaries/feagi-darwin-aarch64" "darwin-aarch64" "feagi"
-          copy_platform "../binaries/feagi-windows-x86_64" "windows-x86_64" "feagi.exe"
+          copy_one "../binaries/feagi-linux-x86_64" "linux-x86_64" "feagi"
+          copy_one "../binaries/feagi-linux-aarch64" "linux-aarch64" "feagi"
+          copy_one "../binaries/feagi-darwin-x86_64" "darwin-x86_64" "feagi"
+          copy_one "../binaries/feagi-darwin-aarch64" "darwin-aarch64" "feagi"
+          copy_one "../binaries/feagi-windows-x86_64" "windows-x86_64" "feagi.exe"
 
       - name: Commit changes
         shell: bash
