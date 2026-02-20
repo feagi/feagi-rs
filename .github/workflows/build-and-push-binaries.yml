@@ -986,7 +986,7 @@ jobs:
         shell: bash
         run: |
           cd public-repo
-          BIN_ROOT="feagi-python-sdk/feagi/bin"
+          BIN_ROOT="feagi/bin"
           PLATFORMS_STR="${{ steps.platforms.outputs.platforms }}"
 
           # Resolve binary path from artifact root or nested path (macOS artifacts can be nested).
@@ -1048,7 +1048,7 @@ jobs:
         shell: bash
         run: |
           cd public-repo
-          BIN_ROOT="feagi-python-sdk/feagi/bin"
+          BIN_ROOT="feagi/bin"
           PLATFORMS_STR="${{ steps.platforms.outputs.platforms }}"
 
           IFS=',' read -r -a BUILT_PLATFORMS <<< "${PLATFORMS_STR}"
@@ -1185,7 +1185,7 @@ jobs:
           # Configure remote URL with token for push operations
           git remote set-url origin https://${{ secrets.FEAGI_PUBLIC_REPO_TOKEN }}@github.com/feagi/feagi.git
           
-          BIN_ROOT="feagi-python-sdk/feagi/bin"
+          BIN_ROOT="feagi/bin"
           if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
             mkdir -p "${BIN_ROOT}/linux-x86_64"
             cp ../binaries/feagi-linux-x86_64/feagi "${BIN_ROOT}/linux-x86_64/feagi"
@@ -1219,7 +1219,7 @@ jobs:
         shell: bash
         run: |
           cd public-repo
-          BIN_ROOT="feagi-python-sdk/feagi/bin"
+          BIN_ROOT="feagi/bin"
           
           if git diff --quiet && git diff --staged --quiet; then
             echo "No changes to commit - binaries are identical to staging branch"
