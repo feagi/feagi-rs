@@ -1017,38 +1017,83 @@ jobs:
         run: |
           cd public-repo
           BIN_ROOT="feagi-python-sdk/feagi/bin"
-          # Copy one platform: try artifact_root/bin_name first, else any bin_name under artifact (macOS artifacts can be nested)
+          PLATFORMS_STR="${{ steps.platforms.outputs.platforms }}"
+
+          # Resolve binary path from artifact root or nested path (macOS artifacts can be nested).
+          resolve_binary_path() {
+            local art_dir="$1"
+            local bin_name="$2"
+            if [ -f "${art_dir}/${bin_name}" ]; then
+              echo "${art_dir}/${bin_name}"
+              return 0
+            fi
+            shopt -s globstar nullglob
+            for f in "${art_dir}"/**/"${bin_name}"; do
+              if [ -f "$f" ]; then
+                shopt -u globstar nullglob
+                echo "$f"
+                return 0
+              fi
+            done
+            shopt -u globstar nullglob
+            return 1
+          }
+
           copy_one() {
             local art_dir="$1"
             local plat_dir="$2"
             local bin_name="$3"
+            local src
             local dest="${BIN_ROOT}/${plat_dir}/${bin_name}"
+            src="$(resolve_binary_path "$art_dir" "$bin_name")" || {
+              echo "::error::Expected binary '${bin_name}' for platform '${plat_dir}' not found in '${art_dir}'"
+              exit 1
+            }
             mkdir -p "${BIN_ROOT}/${plat_dir}"
-            if [ -f "${art_dir}/${bin_name}" ]; then
-              cp "${art_dir}/${bin_name}" "${dest}"
-            else
-              shopt -s globstar nullglob
-              for f in "${art_dir}"/**/"${bin_name}"; do
-                if [ -f "$f" ]; then cp "$f" "${dest}"; break; fi
-              done
-              shopt -u globstar nullglob
+            cp "$src" "${dest}"
+            if [ "${bin_name}" = "feagi" ]; then
+              chmod +x "${dest}"
             fi
-            if [ -f "${dest}" ] && [ "${bin_name}" = "feagi" ]; then chmod +x "${dest}"; fi
+            echo "Copied ${plat_dir}: ${src} -> ${dest}"
           }
-          copy_one "../binaries/feagi-linux-x86_64" "linux-x86_64" "feagi"
-          copy_one "../binaries/feagi-linux-aarch64" "linux-aarch64" "feagi"
-          copy_one "../binaries/feagi-darwin-x86_64" "darwin-x86_64" "feagi"
-          copy_one "../binaries/feagi-darwin-aarch64" "darwin-aarch64" "feagi"
-          copy_one "../binaries/feagi-windows-x86_64" "windows-x86_64" "feagi.exe"
+
+          IFS=',' read -r -a BUILT_PLATFORMS <<< "${PLATFORMS_STR}"
+          if [ "${#BUILT_PLATFORMS[@]}" -eq 0 ]; then
+            echo "::error::No built platforms detected; refusing to create PR"
+            exit 1
+          fi
+
+          for platform in "${BUILT_PLATFORMS[@]}"; do
+            case "$platform" in
+              linux-x86_64)   copy_one "../binaries/feagi-linux-x86_64" "linux-x86_64" "feagi" ;;
+              linux-aarch64)  copy_one "../binaries/feagi-linux-aarch64" "linux-aarch64" "feagi" ;;
+              darwin-x86_64)  copy_one "../binaries/feagi-darwin-x86_64" "darwin-x86_64" "feagi" ;;
+              darwin-aarch64) copy_one "../binaries/feagi-darwin-aarch64" "darwin-aarch64" "feagi" ;;
+              windows-x86_64) copy_one "../binaries/feagi-windows-x86_64" "windows-x86_64" "feagi.exe" ;;
+              *) echo "::error::Unsupported platform '${platform}'"; exit 1 ;;
+            esac
+          done
 
       - name: Commit changes
         shell: bash
         run: |
           cd public-repo
           BIN_ROOT="feagi-python-sdk/feagi/bin"
-          git add -f "${BIN_ROOT}/"
-          
           PLATFORMS_STR="${{ steps.platforms.outputs.platforms }}"
+
+          IFS=',' read -r -a BUILT_PLATFORMS <<< "${PLATFORMS_STR}"
+          for platform in "${BUILT_PLATFORMS[@]}"; do
+            case "$platform" in
+              windows-x86_64) expected="${BIN_ROOT}/windows-x86_64/feagi.exe" ;;
+              *) expected="${BIN_ROOT}/${platform}/feagi" ;;
+            esac
+            if [ ! -f "${expected}" ]; then
+              echo "::error::Expected copied binary missing before commit: ${expected}"
+              exit 1
+            fi
+          done
+
+          git add -f "${BIN_ROOT}/"
           
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             COMMIT_MSG="chore: update FEAGI binaries (manual trigger)
