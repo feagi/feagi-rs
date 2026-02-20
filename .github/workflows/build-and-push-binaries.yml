@@ -230,7 +230,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/x86_64-unknown-linux-gnu
-          key: linux-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          key: linux-x86_64-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/build.rs', '**/*.rs') }}
           restore-keys: |
             linux-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
             linux-x86_64-target-
@@ -263,15 +263,9 @@ jobs:
         shell: bash
         run: |
           BINARY_PATH="target/x86_64-unknown-linux-gnu/release/feagi"
-          
-          if [ -f "$BINARY_PATH" ]; then
-            echo "Binary found in cache - using cached version"
-            ls -lh "$BINARY_PATH"
-          else
-            echo "Building from source..."
-            cargo build --locked --release --target x86_64-unknown-linux-gnu
-            ls -lh "$BINARY_PATH"
-          fi
+          echo "Building from source..."
+          cargo build --locked --release --target x86_64-unknown-linux-gnu
+          ls -lh "$BINARY_PATH"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -388,7 +382,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/aarch64-unknown-linux-gnu
-          key: linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          key: linux-aarch64-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/build.rs', '**/*.rs') }}
           restore-keys: |
             linux-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
             linux-aarch64-target-
@@ -422,16 +416,10 @@ jobs:
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
         run: |
           BINARY_PATH="target/aarch64-unknown-linux-gnu/release/feagi"
-          
-          if [ -f "$BINARY_PATH" ]; then
-            echo "Binary found in cache - using cached version"
-            ls -lh "$BINARY_PATH"
-          else
-            echo "Building from source with vendored OpenSSL..."
-            # Can't use --locked since we modified Cargo.toml
-            cargo build --release --target aarch64-unknown-linux-gnu
-            ls -lh "$BINARY_PATH"
-          fi
+          echo "Building from source with vendored OpenSSL..."
+          # Can't use --locked since we modified Cargo.toml
+          cargo build --release --target aarch64-unknown-linux-gnu
+          ls -lh "$BINARY_PATH"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -542,7 +530,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/x86_64-apple-darwin
-          key: darwin-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          key: darwin-x86_64-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/build.rs', '**/*.rs') }}
           restore-keys: |
             darwin-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
             darwin-x86_64-target-
@@ -581,15 +569,9 @@ jobs:
         shell: bash
         run: |
           BINARY_PATH="target/x86_64-apple-darwin/release/feagi"
-          
-          if [ -f "$BINARY_PATH" ]; then
-            echo "Binary found in cache - using cached version"
-            ls -lh "$BINARY_PATH"
-          else
-            echo "Building from source..."
-            cargo build --locked --release --target x86_64-apple-darwin
-            ls -lh "$BINARY_PATH"
-          fi
+          echo "Building from source..."
+          cargo build --locked --release --target x86_64-apple-darwin
+          ls -lh "$BINARY_PATH"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -700,7 +682,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/aarch64-apple-darwin
-          key: darwin-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          key: darwin-aarch64-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/build.rs', '**/*.rs') }}
           restore-keys: |
             darwin-aarch64-target-${{ hashFiles('**/Cargo.lock') }}-
             darwin-aarch64-target-
@@ -739,15 +721,9 @@ jobs:
         shell: bash
         run: |
           BINARY_PATH="target/aarch64-apple-darwin/release/feagi"
-          
-          if [ -f "$BINARY_PATH" ]; then
-            echo "Binary found in cache - using cached version"
-            ls -lh "$BINARY_PATH"
-          else
-            echo "Building from source..."
-            cargo build --locked --release --target aarch64-apple-darwin
-            ls -lh "$BINARY_PATH"
-          fi
+          echo "Building from source..."
+          cargo build --locked --release --target aarch64-apple-darwin
+          ls -lh "$BINARY_PATH"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -858,7 +834,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/x86_64-pc-windows-msvc
-          key: windows-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          key: windows-x86_64-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/build.rs', '**/*.rs') }}
           restore-keys: |
             windows-x86_64-target-${{ hashFiles('**/Cargo.lock') }}-
             windows-x86_64-target-
@@ -909,15 +885,9 @@ jobs:
         shell: bash
         run: |
           BINARY_PATH="target/x86_64-pc-windows-msvc/release/feagi.exe"
-          
-          if [ -f "$BINARY_PATH" ]; then
-            echo "Binary found in cache - using cached version"
-            ls -lh "$BINARY_PATH"
-          else
-            echo "Building from source..."
-            cargo build --locked --release --target x86_64-pc-windows-msvc
-            ls -lh "$BINARY_PATH"
-          fi
+          echo "Building from source..."
+          cargo build --locked --release --target x86_64-pc-windows-msvc
+          ls -lh "$BINARY_PATH"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
