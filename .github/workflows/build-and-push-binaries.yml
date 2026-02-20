@@ -957,31 +957,46 @@ jobs:
         with:
           path: binaries
 
+      - name: List downloaded artifact structure
+        run: |
+          echo "Artifact directory layout (to verify binary paths):"
+          find binaries -type f 2>/dev/null || true
+
       - name: Determine which platforms were built
         id: platforms
         shell: bash
         run: |
+          # Find binary in artifact dir (artifact may have file at root or under target/.../release/)
+          find_binary() {
+            local dir="$1"
+            local name="$2"
+            if [ -f "${dir}/${name}" ]; then
+              echo "${dir}/${name}"
+              return
+            fi
+            local found
+            found=$(find "${dir}" -type f -name "${name}" 2>/dev/null | head -1)
+            if [ -n "$found" ]; then echo "$found"; fi
+          }
           PLATFORMS=()
-          if [ -f "binaries/feagi-linux-x86_64/feagi" ]; then
-            PLATFORMS+=("linux-x86_64")
-          fi
-          if [ -f "binaries/feagi-linux-aarch64/feagi" ]; then
-            PLATFORMS+=("linux-aarch64")
-          fi
-          if [ -f "binaries/feagi-darwin-x86_64/feagi" ]; then
-            PLATFORMS+=("darwin-x86_64")
-          fi
-          if [ -f "binaries/feagi-darwin-aarch64/feagi" ]; then
-            PLATFORMS+=("darwin-aarch64")
-          fi
-          if [ -f "binaries/feagi-windows-x86_64/feagi.exe" ]; then
-            PLATFORMS+=("windows-x86_64")
-          fi
-          
+          for artifact in binaries/feagi-linux-x86_64 binaries/feagi-linux-aarch64 binaries/feagi-darwin-x86_64 binaries/feagi-darwin-aarch64 binaries/feagi-windows-x86_64; do
+            [ -d "$artifact" ] || continue
+            case "$artifact" in
+              *linux-x86_64*)  [ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("linux-x86_64") ;;
+              *linux-aarch64*) [ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("linux-aarch64") ;;
+              *darwin-x86_64*) [ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("darwin-x86_64") ;;
+              *darwin-aarch64*)[ -n "$(find_binary "$artifact" feagi)" ] && PLATFORMS+=("darwin-aarch64") ;;
+              *windows*)      [ -n "$(find_binary "$artifact" feagi.exe)" ] && PLATFORMS+=("windows-x86_64") ;;
+            esac
+          done
           PLATFORMS_STR=$(IFS=','; echo "${PLATFORMS[*]}")
           echo "platforms=${PLATFORMS_STR}" >> $GITHUB_OUTPUT
           echo "platform_count=${#PLATFORMS[@]}" >> $GITHUB_OUTPUT
           echo "Built platforms: ${PLATFORMS_STR}"
+          if [ "${#PLATFORMS[@]}" -ne 5 ]; then
+            echo "::error::Expected 5 platform binaries (linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64, windows-x86_64); found ${#PLATFORMS[@]}. No PR will be created with partial binaries."
+            exit 1
+          fi
 
       - name: Checkout public repo
         uses: actions/checkout@v4
@@ -1017,37 +1032,29 @@ jobs:
         shell: bash
         run: |
           cd public-repo
-          # feagi-core package data lives under feagi-python-sdk/feagi/bin/ (package "feagi" in pyproject.toml)
           BIN_ROOT="feagi-python-sdk/feagi/bin"
-          
-          if [ -f "../binaries/feagi-linux-x86_64/feagi" ]; then
-            mkdir -p "${BIN_ROOT}/linux-x86_64"
-            cp ../binaries/feagi-linux-x86_64/feagi "${BIN_ROOT}/linux-x86_64/feagi"
-            chmod +x "${BIN_ROOT}/linux-x86_64/feagi"
-          fi
-          
-          if [ -f "../binaries/feagi-linux-aarch64/feagi" ]; then
-            mkdir -p "${BIN_ROOT}/linux-aarch64"
-            cp ../binaries/feagi-linux-aarch64/feagi "${BIN_ROOT}/linux-aarch64/feagi"
-            chmod +x "${BIN_ROOT}/linux-aarch64/feagi"
-          fi
-          
-          if [ -f "../binaries/feagi-darwin-x86_64/feagi" ]; then
-            mkdir -p "${BIN_ROOT}/darwin-x86_64"
-            cp ../binaries/feagi-darwin-x86_64/feagi "${BIN_ROOT}/darwin-x86_64/feagi"
-            chmod +x "${BIN_ROOT}/darwin-x86_64/feagi"
-          fi
-          
-          if [ -f "../binaries/feagi-darwin-aarch64/feagi" ]; then
-            mkdir -p "${BIN_ROOT}/darwin-aarch64"
-            cp ../binaries/feagi-darwin-aarch64/feagi "${BIN_ROOT}/darwin-aarch64/feagi"
-            chmod +x "${BIN_ROOT}/darwin-aarch64/feagi"
-          fi
-          
-          if [ -f "../binaries/feagi-windows-x86_64/feagi.exe" ]; then
-            mkdir -p "${BIN_ROOT}/windows-x86_64"
-            cp ../binaries/feagi-windows-x86_64/feagi.exe "${BIN_ROOT}/windows-x86_64/feagi.exe"
-          fi
+          # Find binary in artifact dir (may be at root or under target/.../release/)
+          copy_platform() {
+            local artifact_dir="$1"
+            local platform_dir="$2"
+            local bin_name="$3"
+            local src
+            if [ -f "${artifact_dir}/${bin_name}" ]; then
+              src="${artifact_dir}/${bin_name}"
+            else
+              src=$(find "${artifact_dir}" -type f -name "${bin_name}" 2>/dev/null | head -1)
+            fi
+            if [ -n "$src" ] && [ -f "$src" ]; then
+              mkdir -p "${BIN_ROOT}/${platform_dir}"
+              cp "$src" "${BIN_ROOT}/${platform_dir}/${bin_name}"
+              [ "${bin_name}" = "feagi" ] && chmod +x "${BIN_ROOT}/${platform_dir}/${bin_name}"
+            fi
+          }
+          copy_platform "../binaries/feagi-linux-x86_64" "linux-x86_64" "feagi"
+          copy_platform "../binaries/feagi-linux-aarch64" "linux-aarch64" "feagi"
+          copy_platform "../binaries/feagi-darwin-x86_64" "darwin-x86_64" "feagi"
+          copy_platform "../binaries/feagi-darwin-aarch64" "darwin-aarch64" "feagi"
+          copy_platform "../binaries/feagi-windows-x86_64" "windows-x86_64" "feagi.exe"
 
       - name: Commit changes
         shell: bash
@@ -1116,6 +1123,10 @@ jobs:
           
           ### Verification
           All ${PLATFORM_COUNT} binary(ies) have been verified to exist in this branch.
+          
+          ### Next steps (required for SDK releases to ship these binaries)
+          - **Merge this PR** into the branch used for SDK releases (e.g. staging or main).
+          - When creating a new SDK release (e.g. v2.1.17), **tag from that branch after the merge** so the published wheel includes the updated binaries for all platforms (including macOS).
           
           ---
           *This PR was automatically created by GitHub Actions*
