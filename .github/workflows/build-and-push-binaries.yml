@@ -1042,7 +1042,7 @@ jobs:
             if [ -f "${artifact_dir}/${bin_name}" ]; then
               src="${artifact_dir}/${bin_name}"
             else
-              src=$(find "${artifact_dir}" -type f -name "${bin_name}" 2>/dev/null | head -1)
+              src=$(find "${artifact_dir}" -type f -name "${bin_name}" 2>/dev/null | head -1 || true)
             fi
             if [ -n "$src" ] && [ -f "$src" ]; then
               mkdir -p "${BIN_ROOT}/${platform_dir}"
