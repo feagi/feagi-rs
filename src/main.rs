@@ -355,52 +355,76 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                // Check for new WebSocket agent registrations with visualization capability
-                let registered_agents = handler_guard.get_all_registered_agents();
-                for (session_id, (agent_descriptor, capabilities)) in registered_agents.iter() {
-                    let agent_id = session_id.to_base64();
+                // Check for new WebSocket agent registrations with visualization capability.
+                // CRITICAL: Collect pending registrations while holding handler lock, then release
+                // before block_on to avoid deadlock (burst loop needs agent_handler for viz publish).
+                let mut pending_motor: Vec<(AgentID, String, Vec<String>)> = Vec::new();
+                let mut pending_viz: Vec<(AgentID, String, f64)> = Vec::new();
 
-                    if !known_motor_sessions.contains(session_id) {
-                        // Register motor subscriptions for this agent:
-                        // 1) Prefer explicit device registrations (exact cortical IDs for the agent)
-                        // 2) If missing, subscribe to all currently known output cortical areas
-                        let motor_cortical_ids: Vec<String> = if let Some(device_regs) =
-                            handler_guard.get_device_registrations_by_descriptor(agent_descriptor)
-                        {
-                            match derive_motor_cortical_ids_from_device_registrations(device_regs) {
-                                Ok(ids) => ids.into_iter().collect(),
-                                Err(e) => {
-                                    warn!(
-                                        "⚠️ [WS-REGISTRATION] Failed deriving motor cortical IDs from device registrations: {}",
-                                        e
-                                    );
-                                    Vec::new()
+                {
+                    let registered_agents = handler_guard.get_all_registered_agents();
+                    for (session_id, (agent_descriptor, capabilities)) in registered_agents.iter() {
+                        let agent_id = session_id.to_base64();
+
+                        if !known_motor_sessions.contains(session_id) {
+                            let motor_cortical_ids: Vec<String> = if let Some(device_regs) =
+                                handler_guard.get_device_registrations_by_descriptor(agent_descriptor)
+                            {
+                                match derive_motor_cortical_ids_from_device_registrations(device_regs) {
+                                    Ok(ids) => ids.into_iter().collect(),
+                                    Err(e) => {
+                                        warn!(
+                                            "⚠️ [WS-REGISTRATION] Failed deriving motor cortical IDs from device registrations: {}",
+                                            e
+                                        );
+                                        Vec::new()
+                                    }
                                 }
-                            }
-                        } else {
-                            let connectome_guard = connectome_manager_for_polling.read();
-                            connectome_guard
-                                .get_cortical_area_ids()
-                                .iter()
-                                .filter_map(|cortical_id| {
-                                    connectome_guard
-                                        .get_cortical_area(cortical_id)
-                                        .filter(|area| area.is_output_area())
-                                        .map(|_| cortical_id.as_base_64())
-                                })
-                                .collect()
-                        };
+                            } else {
+                                let connectome_guard = connectome_manager_for_polling.read();
+                                connectome_guard
+                                    .get_cortical_area_ids()
+                                    .iter()
+                                    .filter_map(|cortical_id| {
+                                        connectome_guard
+                                            .get_cortical_area(cortical_id)
+                                            .filter(|area| area.is_output_area())
+                                            .map(|_| cortical_id.as_base_64())
+                                    })
+                                    .collect()
+                            };
 
-                        if motor_cortical_ids.is_empty() {
-                            debug!(
-                                "⏳ [WS-REGISTRATION] Deferring motor registration for session {:?} (no motor cortical IDs resolved yet)",
-                                session_id
-                            );
-                        } else {
-                            let runtime_svc = runtime_service_for_polling.clone();
-                            let agent_id_for_motor = agent_id.clone();
-                            let motor_cortical_ids_for_task = motor_cortical_ids.clone();
-                            let registration_ok = tokio::runtime::Handle::current().block_on(async move {
+                            if motor_cortical_ids.is_empty() {
+                                debug!(
+                                    "⏳ [WS-REGISTRATION] Deferring motor registration for session {:?} (no motor cortical IDs resolved yet)",
+                                    session_id
+                                );
+                            } else {
+                                pending_motor.push((*session_id, agent_id.clone(), motor_cortical_ids));
+                            }
+                        }
+
+                        if !known_visualization_sessions.contains(session_id) {
+                            let mut viz_registration: Option<(String, f64)> =
+                                handler_guard.get_visualization_info_for_agent(*session_id);
+
+                            if viz_registration.is_none()
+                                && capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveNeuronVisualizations)
+                            {
+                                viz_registration = Some((agent_id, 0.0));
+                            }
+
+                            if let Some((viz_agent_id, requested_rate_hz)) = viz_registration {
+                                pending_viz.push((*session_id, viz_agent_id, requested_rate_hz));
+                            }
+                        }
+                    }
+                }
+                drop(handler_guard); // Release before block_on - burst loop needs agent_handler for viz publish
+
+                for (session_id, agent_id_for_motor, motor_cortical_ids_for_task) in pending_motor {
+                    let runtime_svc = runtime_service_for_polling.clone();
+                    let registration_ok = tokio::runtime::Handle::current().block_on(async move {
                                 let runtime_status = runtime_svc.get_status().await;
                                 let motor_rate_hz = match runtime_status {
                                     Ok(status) if status.frequency_hz > 0.0 => status.frequency_hz,
@@ -420,98 +444,82 @@ async fn main() -> Result<()> {
                                     }
                                 };
 
-                                match runtime_svc
-                                    .register_motor_subscriptions(
-                                        &agent_id_for_motor,
-                                        motor_cortical_ids_for_task,
-                                        motor_rate_hz,
-                                    )
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        info!(
-                                            "✅ [WS-REGISTRATION] Registered motor subscriptions for agent '{}' at {}Hz",
-                                            agent_id_for_motor, motor_rate_hz
-                                        );
-                                        true
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "⚠️ [WS-REGISTRATION] Failed to register motor subscriptions for agent '{}': {}",
-                                            agent_id_for_motor, e
-                                        );
-                                        false
-                                    }
-                                }
-                            });
-                            if registration_ok {
-                                known_motor_sessions.insert(*session_id);
-                            }
-                        }
-                    }
-
-                    // Register visualization subscriptions.
-                    // Prefer explicit per-agent visualization settings from device registrations;
-                    // otherwise fall back to capability presence with runtime burst frequency.
-                    if !known_visualization_sessions.contains(session_id) {
-                        let mut viz_registration: Option<(String, f64)> =
-                            handler_guard.get_visualization_info_for_agent(*session_id);
-
-                        if viz_registration.is_none()
-                            && capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveNeuronVisualizations)
+                        match runtime_svc
+                            .register_motor_subscriptions(
+                                &agent_id_for_motor,
+                                motor_cortical_ids_for_task,
+                                motor_rate_hz,
+                            )
+                            .await
                         {
-                            viz_registration = Some((agent_id.clone(), 0.0));
-                        }
-
-                        if let Some((viz_agent_id, requested_rate_hz)) = viz_registration {
-                            let runtime_svc = runtime_service_for_polling.clone();
-                            let registration_ok = tokio::runtime::Handle::current().block_on(async move {
-                                let rate_hz = if requested_rate_hz > 0.0 {
-                                    requested_rate_hz
-                                } else {
-                                    match runtime_svc.get_status().await {
-                                        Ok(status) if status.frequency_hz > 0.0 => status.frequency_hz,
-                                        Ok(status) => {
-                                            warn!(
-                                                "⚠️ [WS-REGISTRATION] Invalid runtime frequency {}Hz for visualization registration",
-                                                status.frequency_hz
-                                            );
-                                            return false;
-                                        }
-                                        Err(e) => {
-                                            warn!(
-                                                "⚠️ [WS-REGISTRATION] Failed to read runtime status for visualization registration: {}",
-                                                e
-                                            );
-                                            return false;
-                                        }
-                                    }
-                                };
-
-                                match runtime_svc
-                                    .register_visualization_subscriptions(&viz_agent_id, rate_hz)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        info!(
-                                            "✅ [WS-REGISTRATION] Registered visualization for agent at {}Hz",
-                                            rate_hz
-                                        );
-                                        true
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "⚠️  [WS-REGISTRATION] Failed to register visualization: {}",
-                                            e
-                                        );
-                                        false
-                                    }
-                                }
-                            });
-                            if registration_ok {
-                                known_visualization_sessions.insert(*session_id);
+                            Ok(_) => {
+                                info!(
+                                    "✅ [WS-REGISTRATION] Registered motor subscriptions for agent '{}' at {}Hz",
+                                    agent_id_for_motor, motor_rate_hz
+                                );
+                                true
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "⚠️ [WS-REGISTRATION] Failed to register motor subscriptions for agent '{}': {}",
+                                    agent_id_for_motor, e
+                                );
+                                false
                             }
                         }
+                    });
+                    if registration_ok {
+                        known_motor_sessions.insert(session_id);
+                    }
+                }
+
+                for (session_id, viz_agent_id, requested_rate_hz) in pending_viz {
+                    let runtime_svc = runtime_service_for_polling.clone();
+                    let registration_ok = tokio::runtime::Handle::current().block_on(async move {
+                        let rate_hz = if requested_rate_hz > 0.0 {
+                            requested_rate_hz
+                        } else {
+                            match runtime_svc.get_status().await {
+                                Ok(status) if status.frequency_hz > 0.0 => status.frequency_hz,
+                                Ok(status) => {
+                                    warn!(
+                                        "⚠️ [WS-REGISTRATION] Invalid runtime frequency {}Hz for visualization registration",
+                                        status.frequency_hz
+                                    );
+                                    return false;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "⚠️ [WS-REGISTRATION] Failed to read runtime status for visualization registration: {}",
+                                        e
+                                    );
+                                    return false;
+                                }
+                            }
+                        };
+
+                        match runtime_svc
+                            .register_visualization_subscriptions(&viz_agent_id, rate_hz)
+                            .await
+                        {
+                            Ok(_) => {
+                                info!(
+                                    "✅ [WS-REGISTRATION] Registered visualization for agent at {}Hz",
+                                    rate_hz
+                                );
+                                true
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "⚠️  [WS-REGISTRATION] Failed to register visualization: {}",
+                                    e
+                                );
+                                false
+                            }
+                        }
+                    });
+                    if registration_ok {
+                        known_visualization_sessions.insert(session_id);
                     }
                 }
             }
@@ -1259,6 +1267,44 @@ async fn start_services(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
     info!("    ✓ Burst engine running");
+
+    // NPU lock watchdog: detect possible deadlock when burst loop stops making progress
+    let runtime_svc_watchdog = components.runtime_service.clone();
+    let shutdown_for_watchdog = shutdown_flag.clone();
+    std::thread::Builder::new()
+        .name("feagi-npu-watchdog".to_string())
+        .spawn(move || {
+            let rt = tokio::runtime::Handle::current();
+            let mut last_burst: u64 = 0;
+            let mut last_progress_at = std::time::Instant::now();
+            let stall_threshold = std::time::Duration::from_secs(15);
+            let check_interval = std::time::Duration::from_secs(5);
+
+            while shutdown_for_watchdog.load(Ordering::SeqCst) {
+                std::thread::sleep(check_interval);
+                if !shutdown_for_watchdog.load(Ordering::SeqCst) {
+                    break;
+                }
+                match rt.block_on(runtime_svc_watchdog.get_status()) {
+                    Ok(status) if status.is_running => {
+                        let current = status.burst_count;
+                        if current != last_burst {
+                            last_burst = current;
+                            last_progress_at = std::time::Instant::now();
+                        } else if last_burst > 0 && last_progress_at.elapsed() > stall_threshold {
+                            warn!(
+                                "[NPU-WATCHDOG] Burst loop stalled: no progress for {:.1}s (burst_count={}) - possible deadlock or NPU lock contention",
+                                last_progress_at.elapsed().as_secs_f64(),
+                                last_burst
+                            );
+                            last_progress_at = std::time::Instant::now();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .expect("Failed to spawn NPU watchdog thread");
 
     // Start plasticity executor and command processing loop (if enabled)
     #[cfg(feature = "plasticity")]
