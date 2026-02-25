@@ -53,8 +53,8 @@ use feagi_config::{load_config, FeagiConfig};
 use feagi_io::protocol_implementations::zmq::FeagiZmqClientRequesterProperties;
 use feagi_sensorimotor::data_pipeline::PipelineStageProperties;
 use feagi_sensorimotor::data_types::descriptors::{
-    ColorChannelLayout, ColorSpace, ImageXYResolution,
-    SegmentedImageFrameProperties, SegmentedXYImageResolutions,
+    ColorChannelLayout, ColorSpace, ImageXYResolution, SegmentedImageFrameProperties,
+    SegmentedXYImageResolutions,
 };
 use feagi_sensorimotor::data_types::{GazeProperties, ImageFrame, Percentage, Percentage2D};
 use feagi_sensorimotor::wrapped_io_data::WrappedIOData;
@@ -448,7 +448,9 @@ fn env_overrides() -> Result<ExampleSettingsOverrides> {
         )?,
         requested_sensory_rate_hz: parse_optional_env::<f64>("FEAGI_TEST_SENSORY_RATE_HZ")?,
         sensory_rate_strict: parse_optional_env::<bool>("FEAGI_TEST_SENSORY_RATE_STRICT")?,
-        allow_feagi_rate_upshift: parse_optional_env::<bool>("FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT")?,
+        allow_feagi_rate_upshift: parse_optional_env::<bool>(
+            "FEAGI_TEST_ALLOW_FEAGI_RATE_UPSHIFT",
+        )?,
     })
 }
 
@@ -495,16 +497,21 @@ fn load_example_settings(cli_args: &CliArgs) -> Result<ExampleSettings> {
             fd.clone(),
             draft.demo_dir.and_then(|d| {
                 let p = d.join("genome.json");
-                if p.is_file() { Some(p) } else { None }
+                if p.is_file() {
+                    Some(p)
+                } else {
+                    None
+                }
             }),
         ),
-        (None, Some(d)) => (
-            d.join("assets"),
-            {
-                let p = d.join("genome.json");
-                if p.is_file() { Some(p) } else { None }
-            },
-        ),
+        (None, Some(d)) => (d.join("assets"), {
+            let p = d.join("genome.json");
+            if p.is_file() {
+                Some(p)
+            } else {
+                None
+            }
+        }),
         (None, None) => {
             return Err(anyhow::anyhow!(
                 "frame_dir is required (use --demo-dir, --frame-dir, FEAGI_TEST_DEMO_DIR, FEAGI_TEST_FRAME_DIR, or settings TOML)"
@@ -602,7 +609,10 @@ fn load_image_frame(path: &Path, color_space: &ColorSpace) -> Result<ImageFrame>
 }
 
 /// Load frames and validate consistent dimensions.
-fn load_frame_sequence(frame_paths: &[PathBuf], color_space: &ColorSpace) -> Result<Vec<ImageFrame>> {
+fn load_frame_sequence(
+    frame_paths: &[PathBuf],
+    color_space: &ColorSpace,
+) -> Result<Vec<ImageFrame>> {
     if frame_paths.is_empty() {
         return Err(anyhow::anyhow!("No frame paths provided"));
     }
@@ -714,19 +724,20 @@ fn create_connected_embodiment(
         .context("Failed to create agent descriptor")?;
     let auth_token = AuthToken::new([0u8; 32]);
 
-    let registration_endpoint =
-        format_tcp_endpoint(&config.agent.advertised_host, config.agent.registration_port);
+    let registration_endpoint = format_tcp_endpoint(
+        &config.agent.advertised_host,
+        config.agent.registration_port,
+    );
     let registration_properties = Box::new(
         FeagiZmqClientRequesterProperties::new(&registration_endpoint)
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Failed to create registration endpoint properties")?,
     );
 
-    let registration_deadline_ms = u64::try_from(
-        Duration::from_secs_f64(config.timeouts.service_startup).as_millis(),
-    )
-    .map_err(|e| anyhow::anyhow!("{e}"))
-    .context("service_startup timeout out of range")?;
+    let registration_deadline_ms =
+        u64::try_from(Duration::from_secs_f64(config.timeouts.service_startup).as_millis())
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context("service_startup timeout out of range")?;
 
     if settings.requested_sensory_rate_hz.is_some() && !settings.allow_feagi_rate_upshift {
         eprintln!(

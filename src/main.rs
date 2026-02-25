@@ -25,14 +25,14 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use feagi::network_provider::FeagiNetworkConnectionInfoProvider;
-use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::common::agent_registration::{
     auto_create_cortical_areas_from_device_registrations,
     derive_motor_cortical_ids_from_device_registrations,
 };
+use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
-use feagi_brain_development::ConnectomeManager;
 use feagi_brain_development::models::cortical_area::CorticalAreaExt;
+use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_io::{AgentID, SensoryIntakeQueue};
 use feagi_npu_burst_engine::backend::GpuConfig;
@@ -270,7 +270,7 @@ async fn main() -> Result<()> {
 
     // Create shutdown flag early (needed for polling loop)
     let shutdown_flag = Arc::new(AtomicBool::new(true));
-    
+
     // Setup signal handler for graceful shutdown
     let shutdown_flag_for_signal = shutdown_flag.clone();
     tokio::spawn(async move {
@@ -301,8 +301,7 @@ async fn main() -> Result<()> {
 
     // Holder for ApiState so polling loop can call auto_create when device_registrations arrive.
     // Set by start_services when genome/connectome services are ready.
-    let api_state_holder: Arc<Mutex<Option<Arc<ApiState>>>> =
-        Arc::new(Mutex::new(None));
+    let api_state_holder: Arc<Mutex<Option<Arc<ApiState>>>> = Arc::new(Mutex::new(None));
     let api_state_holder_for_polling = Arc::clone(&api_state_holder);
     let rt_handle = tokio::runtime::Handle::current();
 
@@ -328,12 +327,15 @@ async fn main() -> Result<()> {
                 info!("✓ Agent handler polling loop shutting down");
                 break;
             }
-            
+
             {
                 let mut handler_guard = agent_handler_for_loop.lock().unwrap();
                 match handler_guard.poll_command_and_control() {
                     Ok(Some((session_id, message))) => {
-                        info!("📨 Received message from session {:?}: {:?}", session_id, message);
+                        info!(
+                            "📨 Received message from session {:?}: {:?}",
+                            session_id, message
+                        );
                         match handler_guard.send_message_to_agent(session_id, message, 0) {
                             Ok(()) => {
                                 info!("✅ Sent response to session {:?}", session_id);
@@ -348,7 +350,7 @@ async fn main() -> Result<()> {
                         error!("❌ Error polling command/control: {:?}", e);
                     }
                 }
-                
+
                 if let Err(e) = handler_guard.poll_agent_motors() {
                     error!("❌ Error polling embodiment motors: {:?}", e);
                 }
@@ -425,8 +427,7 @@ async fn main() -> Result<()> {
                         AgentID,
                         String,
                         feagi_agent::AgentDescriptor,
-                    )> =
-                        Vec::new();
+                    )> = Vec::new();
 
                     for (session_id, (agent_descriptor, capabilities)) in registered_agents.iter() {
                         let agent_id = session_id.to_base64();
@@ -434,7 +435,9 @@ async fn main() -> Result<()> {
                         // Collect device_regs for auto_create from any agent that has them.
                         if let Some(device_regs) = handler_guard
                             .get_device_registrations_by_descriptor(agent_descriptor)
-                            .or_else(|| handler_guard.get_device_registrations_by_agent(*session_id))
+                            .or_else(|| {
+                                handler_guard.get_device_registrations_by_agent(*session_id)
+                            })
                         {
                             let already_marked_complete = auto_created_descriptors
                                 .lock()
@@ -446,9 +449,12 @@ async fn main() -> Result<()> {
                                 // Genome reload/reset can remove previously auto-created areas while
                                 // the descriptor remains connected. Re-run auto-create when expected
                                 // motor IDs are no longer present.
-                                match derive_motor_cortical_ids_from_device_registrations(device_regs) {
+                                match derive_motor_cortical_ids_from_device_registrations(
+                                    device_regs,
+                                ) {
                                     Ok(expected_motor_ids) => {
-                                        let connectome_guard = connectome_manager_for_polling.read();
+                                        let connectome_guard =
+                                            connectome_manager_for_polling.read();
                                         !expected_motor_ids.iter().all(|id_b64| {
                                             feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
                                                 .ok()
@@ -474,12 +480,18 @@ async fn main() -> Result<()> {
                             ));
                         }
 
-                        if !known_visualization_sessions.lock().unwrap().contains(session_id) {
+                        if !known_visualization_sessions
+                            .lock()
+                            .unwrap()
+                            .contains(session_id)
+                        {
                             let mut viz_registration: Option<(String, f64)> =
                                 handler_guard.get_visualization_info_for_agent(*session_id);
 
                             if viz_registration.is_none()
-                                && capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveNeuronVisualizations)
+                                && capabilities.contains(
+                                    &feagi_agent::AgentCapabilities::ReceiveNeuronVisualizations,
+                                )
                             {
                                 viz_registration = Some((agent_id, 0.0));
                             }
@@ -498,16 +510,19 @@ async fn main() -> Result<()> {
                                 device_regs_to_auto_create.len()
                             );
                             for (descriptor, device_regs) in &device_regs_to_auto_create {
-                                let expected_motor_ids = match derive_motor_cortical_ids_from_device_registrations(device_regs) {
-                                    Ok(ids) => ids,
-                                    Err(e) => {
-                                        debug!(
+                                let expected_motor_ids =
+                                    match derive_motor_cortical_ids_from_device_registrations(
+                                        device_regs,
+                                    ) {
+                                        Ok(ids) => ids,
+                                        Err(e) => {
+                                            debug!(
                                             "[MOTOR-REG] Could not derive motor IDs before auto_create for descriptor {:?}: {}",
                                             descriptor, e
                                         );
-                                        std::collections::HashSet::new()
-                                    }
-                                };
+                                            std::collections::HashSet::new()
+                                        }
+                                    };
                                 rt_handle.block_on(
                                     auto_create_cortical_areas_from_device_registrations(
                                         api.as_ref(),
@@ -553,37 +568,34 @@ async fn main() -> Result<()> {
                                 .or_else(|| {
                                     handler_guard.get_device_registrations_by_agent(session_id)
                                 }) {
-                                match derive_motor_cortical_ids_from_device_registrations(device_regs)
-                                {
-                                    Ok(ids) => {
-                                        ids.into_iter().collect()
-                                    }
-                                    Err(e) => {
-                                        warn!(
+                            match derive_motor_cortical_ids_from_device_registrations(device_regs) {
+                                Ok(ids) => ids.into_iter().collect(),
+                                Err(e) => {
+                                    warn!(
                                             "⚠️ [WS-REGISTRATION] Failed deriving motor cortical IDs from device registrations: {}",
                                             e
                                         );
-                                        Vec::new()
-                                    }
+                                    Vec::new()
                                 }
-                            } else {
-                                debug!(
+                            }
+                        } else {
+                            debug!(
                                     "[MOTOR-REG] No device registrations for agent '{}' (descriptor {:?}); using connectome output areas as fallback",
                                     agent_id,
                                     agent_descriptor
                                 );
-                                let connectome_guard = connectome_manager_for_polling.read();
-                                connectome_guard
-                                    .get_cortical_area_ids()
-                                    .iter()
-                                    .filter_map(|cortical_id| {
-                                        connectome_guard
-                                            .get_cortical_area(cortical_id)
-                                            .filter(|area| area.is_output_area())
-                                            .map(|_| cortical_id.as_base_64())
-                                    })
-                                    .collect()
-                            };
+                            let connectome_guard = connectome_manager_for_polling.read();
+                            connectome_guard
+                                .get_cortical_area_ids()
+                                .iter()
+                                .filter_map(|cortical_id| {
+                                    connectome_guard
+                                        .get_cortical_area(cortical_id)
+                                        .filter(|area| area.is_output_area())
+                                        .map(|_| cortical_id.as_base_64())
+                                })
+                                .collect()
+                        };
 
                         if motor_cortical_ids.is_empty() {
                             info!(
@@ -599,8 +611,9 @@ async fn main() -> Result<()> {
                                 .get(&session_id)
                                 .cloned()
                                 .unwrap_or_default();
-                            let needs_update = !known_motor_sessions.lock().unwrap().contains(&session_id)
-                                || current_set != desired_set;
+                            let needs_update =
+                                !known_motor_sessions.lock().unwrap().contains(&session_id)
+                                    || current_set != desired_set;
                             if needs_update {
                                 debug!(
                                     "[MOTOR-REG] Scheduling motor subscription update for agent '{}' with {} cortical IDs",
@@ -631,7 +644,8 @@ async fn main() -> Result<()> {
                         "[WS-REGISTRATION] Unregistering stale visualization subscription for '{}'",
                         agent_id_b64
                     );
-                    runtime_service_for_polling.unregister_visualization_subscriptions(&agent_id_b64);
+                    runtime_service_for_polling
+                        .unregister_visualization_subscriptions(&agent_id_b64);
                     known_visualization_sessions.lock().unwrap().remove(sid);
                 }
 
@@ -735,11 +749,11 @@ async fn main() -> Result<()> {
                     });
                 }
             }
-            
+
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     });
-    
+
     info!("    ✓ Agent handler polling loop started - servers ready for connections");
 
     // Start services
@@ -876,16 +890,16 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
     // Initialize agent handler and burst runner (from components.rs pattern)
     info!("  Creating Agent Handler (new architecture)...");
-    
+
     use feagi_agent::server::auth::DummyAuth;
     use feagi_agent::server::FeagiAgentHandler;
-    
+
     #[cfg(feature = "zmq-transport")]
     use feagi_io::protocol_implementations::zmq::{
         FeagiZmqServerPublisherProperties, FeagiZmqServerPullerProperties,
         FeagiZmqServerRouterProperties,
     };
-    
+
     use feagi_io::protocol_implementations::websocket::websocket_std::{
         FeagiWebSocketServerPublisherProperties, FeagiWebSocketServerPullerProperties,
         FeagiWebSocketServerRouterProperties,
@@ -933,8 +947,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             };
 
             let sensory_addr = format!("tcp://{}:{}", config.zmq.bind_host, sensory_port);
-            let sensory_adv_addr =
-                format!("tcp://{}:{}", config.zmq.advertised_host, sensory_port);
+            let sensory_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, sensory_port);
             let sensory_props = Box::new(FeagiZmqServerPullerProperties::new(
                 &sensory_addr,
                 &sensory_adv_addr,
@@ -957,7 +970,10 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             )?);
             agent_handler.add_publisher_server(viz_props);
         }
-        info!("    ✓ ZMQ transport servers added ({} agent slots)", ZMQ_AGENT_SLOTS);
+        info!(
+            "    ✓ ZMQ transport servers added ({} agent slots)",
+            ZMQ_AGENT_SLOTS
+        );
     }
 
     // Add WebSocket servers if enabled
@@ -975,31 +991,35 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             &ws_registration_adv_addr,
         )?);
         agent_handler.add_and_start_command_control_server(ws_router_props)?;
-        
+
         let ws_sensory_addr = format!(
             "{}:{}",
             config.websocket.bind_host, config.websocket.sensory_port
         );
-        let ws_sensory_adv_addr =
-            format!("{}:{}", config.websocket.advertised_host, config.websocket.sensory_port);
+        let ws_sensory_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.sensory_port
+        );
         let ws_sensory_props = Box::new(FeagiWebSocketServerPullerProperties::new_with_remote(
             &ws_sensory_addr,
             &ws_sensory_adv_addr,
         )?);
         agent_handler.add_puller_server(ws_sensory_props);
-        
+
         let ws_motor_addr = format!(
             "{}:{}",
             config.websocket.bind_host, config.websocket.motor_port
         );
-        let ws_motor_adv_addr =
-            format!("{}:{}", config.websocket.advertised_host, config.websocket.motor_port);
+        let ws_motor_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.motor_port
+        );
         let ws_motor_props = Box::new(FeagiWebSocketServerPublisherProperties::new(
             &ws_motor_addr,
             &ws_motor_adv_addr,
         )?);
         agent_handler.add_publisher_server(ws_motor_props);
-        
+
         let ws_viz_addr = format!(
             "{}:{}",
             config.websocket.bind_host, config.websocket.visualization_port
@@ -1014,7 +1034,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         )?);
         agent_handler.add_publisher_server(ws_viz_props);
         info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
-        
+
         info!("    ✓ WebSocket transport servers added");
     }
 
@@ -1031,7 +1051,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         #[allow(dead_code)] // TODO: Use when encoding is implemented
         handler: Arc<Mutex<feagi_agent::server::FeagiAgentHandler>>,
     }
-    
+
     impl feagi_npu_burst_engine::VisualizationPublisher for AgentHandlerVisualizationPublisher {
         fn publish_raw_fire_queue_for_agent(
             &self,
@@ -1043,15 +1063,18 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             }
 
             let mut handler_guard = self.handler.lock().unwrap();
-            
-            use feagi_structures::neuron_voxels::xyzp::{CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays};
-            use feagi_structures::genomic::cortical_area::CorticalID;
+
             use feagi_serialization::FeagiByteContainer;
-            
+            use feagi_structures::genomic::cortical_area::CorticalID;
+            use feagi_structures::neuron_voxels::xyzp::{
+                CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays,
+            };
+
             let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
-            
+
             for (_area_idx, fire_queue_data) in fire_data {
-                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id) {
+                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id)
+                {
                     if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
                         fire_queue_data.coords_x,
                         fire_queue_data.coords_y,
@@ -1085,7 +1108,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         #[allow(dead_code)] // TODO: Use when SessionID lookup is implemented
         handler: Arc<Mutex<feagi_agent::server::FeagiAgentHandler>>,
     }
-    
+
     impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
             if data.is_empty() {
@@ -1093,16 +1116,18 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             }
 
             let mut handler_guard = self.handler.lock().unwrap();
-            
+
             let agent_id = AgentID::try_from_base64(agent_id)
                 .map_err(|e| format!("Invalid motor agent_id '{}': {:?}", agent_id, e))?;
 
             use feagi_serialization::FeagiByteContainer;
             let mut container = FeagiByteContainer::new_empty();
-            container.try_write_data_by_copy_and_verify(data)
+            container
+                .try_write_data_by_copy_and_verify(data)
                 .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
 
-            handler_guard.send_motor_data(agent_id, &container)
+            handler_guard
+                .send_motor_data(agent_id, &container)
                 .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
 
             Ok(())
@@ -1199,9 +1224,11 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             Ok(self.queue.poll_next())
         }
     }
-    burst_runner.write().set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
-        queue: Arc::clone(&sensory_intake_queue),
-    })) as Arc<Mutex<dyn SensoryIntake>>);
+    burst_runner
+        .write()
+        .set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
+            queue: Arc::clone(&sensory_intake_queue),
+        })) as Arc<Mutex<dyn SensoryIntake>>);
     info!("    ✓ Sensory intake (feagi-io) wired to BurstLoopRunner");
     info!("      ✓ Sensory: transports → queue → BurstLoopRunner");
     info!("      ✓ Motor: BurstLoopRunner → Handler (publishing)");
@@ -1315,10 +1342,8 @@ async fn start_services(
 
     // Wire GenomeService and ConnectomeService to RegistrationHandler (required for auto-creation feature)
     // Create agent service with empty registry (new architecture)
-    let agent_service_impl = AgentServiceImpl::new(
-        Arc::clone(&components.connectome_manager),
-        empty_registry
-    );
+    let agent_service_impl =
+        AgentServiceImpl::new(Arc::clone(&components.connectome_manager), empty_registry);
     let agent_service = Arc::new(agent_service_impl);
     info!("    ✓ Agent service created");
 
@@ -1440,7 +1465,13 @@ async fn start_services(
             "  Loading genome from: {} (API is already online)",
             genome_path.display()
         );
-        match load_genome_with_agent_handler(&genome_service, &components.agent_handler, genome_path).await {
+        match load_genome_with_agent_handler(
+            &genome_service,
+            &components.agent_handler,
+            genome_path,
+        )
+        .await
+        {
             Ok(Some(genome_timestep)) => {
                 info!("    ✓ Genome loaded via GenomeService (RuntimeGenome stored)");
                 info!("    ✓ Dynamic stream evaluation triggered");

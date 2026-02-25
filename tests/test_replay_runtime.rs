@@ -11,8 +11,8 @@ use feagi_brain_development::models::CorticalAreaExt;
 use feagi_brain_development::ConnectomeManager;
 use feagi_npu_burst_engine::backend::CPUBackend;
 use feagi_npu_burst_engine::{
-    BurstLoopRunner, DynamicNPU, MemoryReplayFrame, MotorPublisher, TracingMutex,
-    VisualizationPublisher,
+    BurstLoopRunner, DynamicNPU, MemoryReplayFrame, MotorPublisher, RawFireQueueSnapshot,
+    TracingMutex, VisualizationPublisher,
 };
 use feagi_npu_plasticity::{
     create_memory_stats_cache, AsyncPlasticityExecutor, PlasticityConfig, PlasticityExecutor,
@@ -80,9 +80,10 @@ fn wait_for_twin_fire_ledger(
 struct NoopViz;
 
 impl VisualizationPublisher for NoopViz {
-    fn publish_raw_fire_queue(
+    fn publish_raw_fire_queue_for_agent(
         &self,
-        _fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
+        _agent_id: &str,
+        _fire_data: RawFireQueueSnapshot,
     ) -> Result<(), String> {
         Ok(())
     }
