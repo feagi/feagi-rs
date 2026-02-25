@@ -24,14 +24,14 @@ use feagi_services::*;
 use feagi_agent::server::auth::DummyAuth;
 use feagi_agent::server::FeagiAgentHandler;
 
+use feagi_io::protocol_implementations::websocket::websocket_std::{
+    FeagiWebSocketServerPublisherProperties, FeagiWebSocketServerPullerProperties,
+    FeagiWebSocketServerRouterProperties,
+};
 #[cfg(feature = "zmq-transport")]
 use feagi_io::protocol_implementations::zmq::{
     FeagiZmqServerPublisherProperties, FeagiZmqServerPullerProperties,
     FeagiZmqServerRouterProperties,
-};
-use feagi_io::protocol_implementations::websocket::websocket_std::{
-    FeagiWebSocketServerPublisherProperties, FeagiWebSocketServerPullerProperties,
-    FeagiWebSocketServerRouterProperties,
 };
 
 /// Core FEAGI components
@@ -104,7 +104,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     #[cfg(feature = "zmq-transport")]
     {
         info!("    Adding ZMQ transport servers...");
-        
+
         // Registration router (command/control) - single shared router
         let registration_addr = format!(
             "tcp://{}:{}",
@@ -116,7 +116,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         );
         let router_props = Box::new(
             FeagiZmqServerRouterProperties::new(&registration_addr, &registration_adv_addr)
-                .context("Failed to create ZMQ router properties")?
+                .context("Failed to create ZMQ router properties")?,
         );
         agent_handler
             .add_and_start_command_control_server(router_props)
@@ -126,9 +126,9 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         // Multiple agent slots: handler consumes one puller + two publishers per ZMQ agent.
         // Slot 0 uses config ports; slots 1..N use offset ranges to avoid overlap.
         const ZMQ_AGENT_SLOTS: u16 = 8;
-        const ZMQ_SENSORY_OFFSET: u16 = 5566;  // slots 1.. use 5566, 5567, ...
-        const ZMQ_MOTOR_OFFSET: u16 = 5574;    // slots 1.. use 5574, 5575, ...
-        const ZMQ_VIZ_OFFSET: u16 = 5582;      // slots 1.. use 5582, 5583, ...
+        const ZMQ_SENSORY_OFFSET: u16 = 5566; // slots 1.. use 5566, 5567, ...
+        const ZMQ_MOTOR_OFFSET: u16 = 5574; // slots 1.. use 5574, 5575, ...
+        const ZMQ_VIZ_OFFSET: u16 = 5582; // slots 1.. use 5582, 5583, ...
 
         for slot in 0..ZMQ_AGENT_SLOTS {
             let (sensory_port, motor_port, viz_port) = if slot == 0 {
@@ -147,11 +147,10 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             };
 
             let sensory_addr = format!("tcp://{}:{}", config.zmq.bind_host, sensory_port);
-            let sensory_adv_addr =
-                format!("tcp://{}:{}", config.zmq.advertised_host, sensory_port);
+            let sensory_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, sensory_port);
             let sensory_props = Box::new(
                 FeagiZmqServerPullerProperties::new(&sensory_addr, &sensory_adv_addr)
-                    .context("Failed to create ZMQ sensory puller properties")?
+                    .context("Failed to create ZMQ sensory puller properties")?,
             );
             agent_handler.add_puller_server(sensory_props);
 
@@ -159,7 +158,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             let motor_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, motor_port);
             let motor_props = Box::new(
                 FeagiZmqServerPublisherProperties::new(&motor_addr, &motor_adv_addr)
-                    .context("Failed to create ZMQ motor publisher properties")?
+                    .context("Failed to create ZMQ motor publisher properties")?,
             );
             agent_handler.add_publisher_server(motor_props);
 
@@ -167,7 +166,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             let viz_adv_addr = format!("tcp://{}:{}", config.zmq.advertised_host, viz_port);
             let viz_props = Box::new(
                 FeagiZmqServerPublisherProperties::new(&viz_addr, &viz_adv_addr)
-                    .context("Failed to create ZMQ visualization publisher properties")?
+                    .context("Failed to create ZMQ visualization publisher properties")?,
             );
             agent_handler.add_publisher_server(viz_props);
         }
@@ -204,26 +203,31 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
                 &ws_registration_addr,
                 &ws_registration_adv_addr,
             )
-                .context("Failed to create WebSocket router properties")?
+            .context("Failed to create WebSocket router properties")?,
         );
         agent_handler
             .add_and_start_command_control_server(ws_router_props)
             .context("Failed to add WebSocket registration server")?;
-        info!("      ✓ WebSocket registration router: {}", ws_registration_addr);
+        info!(
+            "      ✓ WebSocket registration router: {}",
+            ws_registration_addr
+        );
 
         // Sensory puller
         let ws_sensory_addr = format!(
             "{}:{}",
             config.websocket.bind_host, config.websocket.sensory_port
         );
-        let ws_sensory_adv_addr =
-            format!("{}:{}", config.websocket.advertised_host, config.websocket.sensory_port);
+        let ws_sensory_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.sensory_port
+        );
         let ws_sensory_props = Box::new(
             FeagiWebSocketServerPullerProperties::new_with_remote(
                 &ws_sensory_addr,
                 &ws_sensory_adv_addr,
             )
-                .context("Failed to create WebSocket sensory puller properties")?
+            .context("Failed to create WebSocket sensory puller properties")?,
         );
         agent_handler.add_puller_server(ws_sensory_props);
         info!("      ✓ WebSocket sensory puller: {}", ws_sensory_addr);
@@ -233,11 +237,13 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             "{}:{}",
             config.websocket.bind_host, config.websocket.motor_port
         );
-        let ws_motor_adv_addr =
-            format!("{}:{}", config.websocket.advertised_host, config.websocket.motor_port);
+        let ws_motor_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.motor_port
+        );
         let ws_motor_props = Box::new(
             FeagiWebSocketServerPublisherProperties::new(&ws_motor_addr, &ws_motor_adv_addr)
-                .context("Failed to create WebSocket motor publisher properties")?
+                .context("Failed to create WebSocket motor publisher properties")?,
         );
         agent_handler.add_publisher_server(ws_motor_props);
         info!("      ✓ WebSocket motor publisher: {}", ws_motor_addr);
@@ -247,11 +253,13 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             "{}:{}",
             config.websocket.bind_host, config.websocket.visualization_port
         );
-        let ws_viz_adv_addr =
-            format!("{}:{}", config.websocket.advertised_host, config.websocket.visualization_port);
+        let ws_viz_adv_addr = format!(
+            "{}:{}",
+            config.websocket.advertised_host, config.websocket.visualization_port
+        );
         let ws_viz_props = Box::new(
             FeagiWebSocketServerPublisherProperties::new(&ws_viz_addr, &ws_viz_adv_addr)
-                .context("Failed to create WebSocket visualization publisher properties")?
+                .context("Failed to create WebSocket visualization publisher properties")?,
         );
         agent_handler.add_publisher_server(ws_viz_props);
         info!("      ✓ WebSocket visualization publisher: {}", ws_viz_addr);
@@ -269,7 +277,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         #[allow(dead_code)] // TODO: Use when encoding/sending is implemented
         handler: Arc<Mutex<FeagiAgentHandler>>,
     }
-    
+
     impl feagi_npu_burst_engine::VisualizationPublisher for AgentHandlerVisualizationPublisher {
         fn publish_raw_fire_queue_for_agent(
             &self,
@@ -281,17 +289,20 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             }
 
             let mut handler_guard = self.handler.lock().unwrap();
-            
+
             // Convert RawFireQueueSnapshot to CorticalMappedXYZPNeuronVoxels
-            use feagi_structures::neuron_voxels::xyzp::{CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays};
-            use feagi_structures::genomic::cortical_area::CorticalID;
             use feagi_serialization::FeagiByteContainer;
-            
+            use feagi_structures::genomic::cortical_area::CorticalID;
+            use feagi_structures::neuron_voxels::xyzp::{
+                CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays,
+            };
+
             let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
-            
+
             for (_area_idx, fire_queue_data) in fire_data {
                 // Parse cortical_id from base64 string
-                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id) {
+                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id)
+                {
                     if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
                         fire_queue_data.coords_x,
                         fire_queue_data.coords_y,
@@ -326,7 +337,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         #[allow(dead_code)] // TODO: Use when SessionID lookup is implemented
         handler: Arc<Mutex<FeagiAgentHandler>>,
     }
-    
+
     impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
         fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
             if data.is_empty() {
@@ -334,7 +345,7 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             }
 
             let mut handler_guard = self.handler.lock().unwrap();
-            
+
             let agent_id = AgentID::try_from_base64(agent_id)
                 .map_err(|e| format!("Invalid motor agent_id '{}': {:?}", agent_id, e))?;
 
@@ -342,11 +353,13 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             use feagi_serialization::FeagiByteContainer;
             // Create container by copying existing bytes
             let mut container = FeagiByteContainer::new_empty();
-            container.try_write_data_by_copy_and_verify(data)
+            container
+                .try_write_data_by_copy_and_verify(data)
                 .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
 
             // Send via handler
-            handler_guard.send_motor_data(agent_id, &container)
+            handler_guard
+                .send_motor_data(agent_id, &container)
                 .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
 
             Ok(())
@@ -384,9 +397,11 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
             Ok(self.queue.poll_next())
         }
     }
-    burst_runner.write().set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
-        queue: Arc::clone(&sensory_intake_queue),
-    })) as Arc<Mutex<dyn SensoryIntake>>);
+    burst_runner
+        .write()
+        .set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
+            queue: Arc::clone(&sensory_intake_queue),
+        })) as Arc<Mutex<dyn SensoryIntake>>);
     info!("    ✓ Sensory intake (feagi-io) wired to BurstLoopRunner");
 
     Ok(FeagiComponents {
@@ -448,12 +463,10 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     use parking_lot::RwLock as PRwLock;
     // Create empty agent registry with default settings
     let empty_registry = Arc::new(PRwLock::new(feagi_services::AgentRegistry::new(100, 60000)));
-    let agent_service_impl = AgentServiceImpl::new(
-        Arc::clone(&components.connectome_manager),
-        empty_registry
-    );
+    let agent_service_impl =
+        AgentServiceImpl::new(Arc::clone(&components.connectome_manager), empty_registry);
     let agent_service = Arc::new(agent_service_impl);
-    
+
     info!("    ✓ Services created");
 
     // Create snapshot service

@@ -1,6 +1,6 @@
 [package]
 name = "feagi-rs"
-version = "0.0.9"
+version = "0.0.17"
 edition = "2021"
 authors = ["Neuraville Inc. <feagi@neuraville.com>"]
 license = "Apache-2.0"
@@ -25,21 +25,21 @@ required-features = ["cli"]
 # - Use ^ to pick up latest compatible; run `cargo update` to refresh.
 # - Local dev: override via `feagi-rs/.cargo/config.toml` [patch.crates-io].
 # - CI/release: pin with `cargo build --locked` and Cargo.lock.
-feagi-npu-neural = { version = "^0.0.1-beta.18" }
-feagi-structures = { version = "^0.0.1-beta.18" }
-feagi-npu-runtime = { version = "^0.0.1-beta.18", features = ["std"] }
-feagi-config = { version = "^0.0.1-beta.18" }
+feagi-npu-neural = { version = "^0.0.1-beta.19" }
+feagi-structures = { version = "^0.0.1-beta.19" }
+feagi-npu-runtime = { version = "^0.0.1-beta.19", features = ["std"] }
+feagi-config = { version = "^0.0.1-beta.19" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "^0.0.1-beta.18" }
-feagi-brain-development = { version = "^0.0.1-beta.18" }
-feagi-evolutionary = { version = "^0.0.1-beta.18" }
-feagi-services = { version = "^0.0.1-beta.18" }
-feagi-api = { version = "^0.0.1-beta.18", features = ["services"] }
-feagi-io = { version = "^0.0.1-beta.18", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
-feagi-agent = { version = "^0.0.1-beta.18", features = ["agent-server", "agent-client-asynchelper-tokio"] }
-feagi-state-manager = { version = "^0.0.1-beta.18" }
-feagi-npu-plasticity = { version = "^0.0.1-beta.18" }
-feagi-serialization = { version = "^0.0.1-beta.18" }
+feagi-npu-burst-engine = { version = "^0.0.1-beta.19" }
+feagi-brain-development = { version = "^0.0.1-beta.19" }
+feagi-evolutionary = { version = "^0.0.1-beta.19" }
+feagi-services = { version = "^0.0.1-beta.19" }
+feagi-api = { version = "^0.0.1-beta.19", features = ["services"] }
+feagi-io = { version = "^0.0.1-beta.19", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
+feagi-agent = { version = "^0.0.1-beta.19", features = ["agent-server", "agent-client-asynchelper-tokio"] }
+feagi-state-manager = { version = "^0.0.1-beta.19" }
+feagi-npu-plasticity = { version = "^0.0.1-beta.19" }
+feagi-serialization = { version = "^0.0.1-beta.19" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -49,7 +49,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "^0.0.1-beta.18" }
+feagi-observability = { version = "^0.0.1-beta.19" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
@@ -65,6 +65,9 @@ ctrlc = "3.0"
 
 # Concurrency
 parking_lot = "0.12"
+
+# JSON (used by agent registration / device_registrations)
+serde_json = "1.0"
 
 [dev-dependencies]
 # Benchmarking
@@ -83,7 +86,7 @@ tempfile = "3.8"
 serde_json = "1.0"
 
 # Example dependencies
-feagi-sensorimotor = { version = "^0.0.1-beta.18" }
+feagi-sensorimotor = { version = "^0.0.1-beta.19" }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [profile.release]

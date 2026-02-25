@@ -2,9 +2,9 @@
 //!
 //! Builds NetworkConnectionInfo from FeagiConfig and FeagiAgentHandler snapshots.
 
+use feagi_agent::server::FeagiAgentHandler;
 use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::v1::NetworkConnectionInfo;
-use feagi_agent::server::FeagiAgentHandler;
 use std::sync::{Arc, Mutex};
 
 pub struct FeagiNetworkConnectionInfoProvider {
@@ -57,7 +57,10 @@ impl NetworkConnectionInfoProvider for FeagiNetworkConnectionInfoProvider {
                         "tcp://{}:{}",
                         self.zmq_registration_advertised_host, self.zmq_registration_port
                     ),
-                    sensory: format!("tcp://{}:{}", self.zmq_advertised_host, self.zmq_sensory_port),
+                    sensory: format!(
+                        "tcp://{}:{}",
+                        self.zmq_advertised_host, self.zmq_sensory_port
+                    ),
                     motor: format!("tcp://{}:{}", self.zmq_advertised_host, self.zmq_motor_port),
                     visualization: format!(
                         "tcp://{}:{}",
@@ -128,9 +131,7 @@ mod tests {
 
     #[test]
     fn connection_info_uses_advertised_hosts() {
-        let agent_handler = Arc::new(Mutex::new(FeagiAgentHandler::new(Box::new(
-            DummyAuth {},
-        ))));
+        let agent_handler = Arc::new(Mutex::new(FeagiAgentHandler::new(Box::new(DummyAuth {}))));
 
         let provider = FeagiNetworkConnectionInfoProvider {
             api_advertised_host: "127.0.0.1".to_string(),
@@ -157,7 +158,10 @@ mod tests {
         let info = provider.get();
         assert_eq!(info.api.host, "127.0.0.1");
         assert_eq!(info.websocket.host, "127.0.0.1");
-        assert_eq!(info.websocket.endpoints.visualization, "ws://127.0.0.1:9050");
+        assert_eq!(
+            info.websocket.endpoints.visualization,
+            "ws://127.0.0.1:9050"
+        );
         assert_eq!(info.zmq.endpoints.registration, "tcp://127.0.0.1:30001");
         assert_eq!(info.zmq.ports.api_control, 5563);
     }
