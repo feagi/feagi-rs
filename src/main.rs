@@ -1519,10 +1519,11 @@ async fn start_services(
     // NPU lock watchdog: detect possible deadlock when burst loop stops making progress
     let runtime_svc_watchdog = components.runtime_service.clone();
     let shutdown_for_watchdog = shutdown_flag.clone();
+    let rt_handle_for_watchdog = tokio::runtime::Handle::current();
     std::thread::Builder::new()
         .name("feagi-npu-watchdog".to_string())
         .spawn(move || {
-            let rt = tokio::runtime::Handle::current();
+            let rt = rt_handle_for_watchdog;
             let mut last_burst: u64 = 0;
             let mut last_progress_at = std::time::Instant::now();
             let stall_threshold = std::time::Duration::from_secs(15);
