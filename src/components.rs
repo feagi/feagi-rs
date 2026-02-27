@@ -314,8 +314,26 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
                 }
             }
 
-            let agent_id = AgentID::try_from_base64(agent_id)
-                .map_err(|e| format!("Invalid visualization agent_id '{}': {:?}", agent_id, e))?;
+            let agent_id = match AgentID::try_from_base64(agent_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    static WARNED_VIZ: std::sync::OnceLock<
+                        std::sync::Mutex<std::collections::HashSet<String>>,
+                    > = std::sync::OnceLock::new();
+                    let warned = WARNED_VIZ.get_or_init(|| {
+                        std::sync::Mutex::new(std::collections::HashSet::new())
+                    });
+                    let mut warned = warned.lock().unwrap();
+                    if warned.insert(agent_id.to_string()) {
+                        tracing::warn!(
+                            "Visualization agent_id '{}' is not valid base64 AgentID ({}). \
+                             Skipping viz publish. Ensure agents register with base64-encoded AgentDescriptor.",
+                            agent_id, e
+                        );
+                    }
+                    return Ok(());
+                }
+            };
 
             // Wrap visualization payload in a FEAGI byte container and route by AgentID.
             let mut container = FeagiByteContainer::new_empty();
@@ -346,8 +364,26 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
 
             let mut handler_guard = self.handler.lock().unwrap();
 
-            let agent_id = AgentID::try_from_base64(agent_id)
-                .map_err(|e| format!("Invalid motor agent_id '{}': {:?}", agent_id, e))?;
+            let agent_id = match AgentID::try_from_base64(agent_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    static WARNED_MOTOR: std::sync::OnceLock<
+                        std::sync::Mutex<std::collections::HashSet<String>>,
+                    > = std::sync::OnceLock::new();
+                    let warned = WARNED_MOTOR.get_or_init(|| {
+                        std::sync::Mutex::new(std::collections::HashSet::new())
+                    });
+                    let mut warned = warned.lock().unwrap();
+                    if warned.insert(agent_id.to_string()) {
+                        tracing::warn!(
+                            "Motor agent_id '{}' is not valid base64 AgentID ({}). \
+                             Skipping motor publish. Ensure agents register with base64-encoded AgentDescriptor.",
+                            agent_id, e
+                        );
+                    }
+                    return Ok(());
+                }
+            };
 
             // Motor data is already encoded as FeagiByteContainer bytes
             use feagi_serialization::FeagiByteContainer;

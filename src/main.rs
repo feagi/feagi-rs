@@ -315,6 +315,10 @@ async fn main() -> Result<()> {
             Arc::new(Mutex::new(HashMap::new()));
         let known_visualization_sessions: Arc<Mutex<HashSet<AgentID>>> =
             Arc::new(Mutex::new(HashSet::new()));
+        // Maps session_id -> viz_agent_id used at registration. Required so we unregister
+        // with the same key (e.g. "brain-visualizer" from old BV) that was used to register.
+        let session_id_to_viz_agent_id: Arc<Mutex<HashMap<AgentID, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         // Track descriptors that already had auto-create applied successfully.
         // This prevents per-cycle re-check spam while still retrying until first success.
         let auto_created_descriptors: Arc<Mutex<HashSet<feagi_agent::AgentDescriptor>>> =
@@ -639,13 +643,17 @@ async fn main() -> Result<()> {
                     known_motor_subscriptions.lock().unwrap().remove(sid);
                 }
                 for sid in &stale_viz {
-                    let agent_id_b64 = sid.to_base64();
+                    let viz_agent_id = session_id_to_viz_agent_id
+                        .lock()
+                        .unwrap()
+                        .remove(sid)
+                        .unwrap_or_else(|| sid.to_base64());
                     info!(
                         "[WS-REGISTRATION] Unregistering stale visualization subscription for '{}'",
-                        agent_id_b64
+                        viz_agent_id
                     );
                     runtime_service_for_polling
-                        .unregister_visualization_subscriptions(&agent_id_b64);
+                        .unregister_visualization_subscriptions(&viz_agent_id);
                     known_visualization_sessions.lock().unwrap().remove(sid);
                 }
 
@@ -706,6 +714,8 @@ async fn main() -> Result<()> {
                 for (session_id, viz_agent_id, requested_rate_hz) in pending_viz {
                     let runtime_svc = runtime_service_for_polling.clone();
                     let sessions = Arc::clone(&known_visualization_sessions);
+                    let viz_id_map = Arc::clone(&session_id_to_viz_agent_id);
+                    let viz_agent_id_for_map = viz_agent_id.clone();
                     tokio::runtime::Handle::current().spawn(async move {
                         let rate_hz = if requested_rate_hz > 0.0 {
                             requested_rate_hz
@@ -738,6 +748,10 @@ async fn main() -> Result<()> {
                                     rate_hz
                                 );
                                 sessions.lock().unwrap().insert(session_id);
+                                viz_id_map
+                                    .lock()
+                                    .unwrap()
+                                    .insert(session_id, viz_agent_id_for_map);
                             }
                             Err(e) => {
                                 warn!(
@@ -1086,8 +1100,26 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 }
             }
 
-            let agent_id = AgentID::try_from_base64(agent_id)
-                .map_err(|e| format!("Invalid visualization agent_id '{}': {:?}", agent_id, e))?;
+            let agent_id = match AgentID::try_from_base64(agent_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    static WARNED_VIZ: std::sync::OnceLock<
+                        std::sync::Mutex<std::collections::HashSet<String>>,
+                    > = std::sync::OnceLock::new();
+                    let warned = WARNED_VIZ.get_or_init(|| {
+                        std::sync::Mutex::new(std::collections::HashSet::new())
+                    });
+                    let mut warned = warned.lock().unwrap();
+                    if warned.insert(agent_id.to_string()) {
+                        tracing::warn!(
+                            "Visualization agent_id '{}' is not valid base64 AgentID ({}). \
+                             Skipping viz publish. Ensure agents register with base64-encoded AgentDescriptor.",
+                            agent_id, e
+                        );
+                    }
+                    return Ok(());
+                }
+            };
 
             let mut container = FeagiByteContainer::new_empty();
             container
@@ -1117,8 +1149,26 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
             let mut handler_guard = self.handler.lock().unwrap();
 
-            let agent_id = AgentID::try_from_base64(agent_id)
-                .map_err(|e| format!("Invalid motor agent_id '{}': {:?}", agent_id, e))?;
+            let agent_id = match AgentID::try_from_base64(agent_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    static WARNED_MOTOR: std::sync::OnceLock<
+                        std::sync::Mutex<std::collections::HashSet<String>>,
+                    > = std::sync::OnceLock::new();
+                    let warned = WARNED_MOTOR.get_or_init(|| {
+                        std::sync::Mutex::new(std::collections::HashSet::new())
+                    });
+                    let mut warned = warned.lock().unwrap();
+                    if warned.insert(agent_id.to_string()) {
+                        tracing::warn!(
+                            "Motor agent_id '{}' is not valid base64 AgentID ({}). \
+                             Skipping motor publish. Ensure agents register with base64-encoded AgentDescriptor.",
+                            agent_id, e
+                        );
+                    }
+                    return Ok(());
+                }
+            };
 
             use feagi_serialization::FeagiByteContainer;
             let mut container = FeagiByteContainer::new_empty();
