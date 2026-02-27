@@ -939,9 +939,9 @@ dependencies = [
 
 [[package]]
 name = "dispatch2"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
+checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.11.0",
  "block2",
@@ -1086,9 +1086,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-agent"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aabd9c0c11392a775186e20eda7dda71d1718838b1c25b98f3cba92c6fcc0408"
+checksum = "860caf816324ec17991db8c314c6d0cb5b2e624dd50afb3c415dc7d9fc14d9d7"
 dependencies = [
  "base64 0.22.1",
  "feagi-io",
@@ -1104,9 +1104,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-api"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ae2d1345d76e337461c60bafc59ee0cb341d8471ec26201e185b0b1cba7502b"
+checksum = "377e19eac2f4a9c006a8672b0107c18bb7c7bad4f0702790edf843ddec9111c9"
 dependencies = [
  "async-trait",
  "axum",
@@ -1145,9 +1145,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-brain-development"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c696c1183360ea7b9aebac8fd0f40a7efc2db320ca8f6151952ebec182514e08"
+checksum = "6dfe600055454423bb58f9f58e35f02e475105b35c97d63b34004651110e5d4e"
 dependencies = [
  "ahash",
  "chrono",
@@ -1174,9 +1174,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-config"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84c63d3aee2e565fc355b7b92fe0c75feafabe58ca58e637e1754b185b445b21"
+checksum = "8e91e9f84d4f092cd2ab90533ec3ff331f72a880ae47f7b8b2bc9c162c1b6fcb"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -1185,9 +1185,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-evolutionary"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99b210f704b5f2cc3bb4116b996fd2abcae4f8b8430e9d98f286324752eec1f0"
+checksum = "08afb83dd1f8d28b208e43e1161028fca54ee58bc1966927e52c7b933577d8b5"
 dependencies = [
  "chrono",
  "feagi-npu-neural",
@@ -1206,9 +1206,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-io"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75aac1c78c0ec789200cf23708fdcd4df53b028ec6eee6fbd348cd38b9aeef4f"
+checksum = "e54488695bb1e1ff051e6690b215a4911e0523f7d9f76a96e0b9ab17688b7a01"
 dependencies = [
  "base64 0.22.1",
  "feagi-serialization",
@@ -1220,9 +1220,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-burst-engine"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3b0419f25fc1ff3d05ed5c82cf9762b586db641de1e8bb8dd75e4274321d45d"
+checksum = "ba5371a688ca6a9d33e6f4875d63d98cefc9548b80e2e858f633162ae989696e"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1247,9 +1247,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-neural"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5fe4acb77b57568c7cdf24f049ce69e4e752c04113fbfbede2e28fa5113d64"
+checksum = "184e33fb3321d9e8a8afa935b52cf6f08764082e76839112e302ecc5bb8f0ff6"
 dependencies = [
  "ahash",
  "serde",
@@ -1259,9 +1259,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-plasticity"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e15ddd5b418a236d7ce09cc90e42323bb2f3a2eacba3effc49d5300adde323bf"
+checksum = "210ab3f2b4cbd10423dfff3653b1b303aebfd7707c560850091dc0a9e93ef5f0"
 dependencies = [
  "ahash",
  "feagi-npu-burst-engine",
@@ -1278,9 +1278,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-runtime"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "970899b5847b8e55f64cebe62caad68de0df3ed7f2754c50bbe38f1fd997eee1"
+checksum = "46d31af97af721aad807fd3a3a0d856c24b56b3e4d049c96233f6044e74fed3e"
 dependencies = [
  "ahash",
  "feagi-npu-neural",
@@ -1290,9 +1290,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-observability"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f17d5cf8ca6b5a906588820632b8b47e3bf3ca9377fe95402cadc0bb294d95a2"
+checksum = "56261d41a69e7c13a1eb0bbd1c02b024886364da7bd54e1b496290e4a0b5601b"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-rs"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "anyhow",
  "axum",
@@ -1344,9 +1344,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-sensorimotor"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d65668d28b64a2472d741861d105923bb933f3946d12ae82f508cec4876f0fd"
+checksum = "4b69773d91ecaa744a8b11854c54c443a4b2f8df927ad9fe9a0e99da947794d9"
 dependencies = [
  "feagi-serialization",
  "feagi-structures",
@@ -1361,9 +1361,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-serialization"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67325c617c3711baaf8341f61019f91eabbae26adce869937a985c4249b4250"
+checksum = "06e58e57a5b73e5a9fa33aa31796ef035ba4d802c72cc6d2e8e97b68a1b4fbf1"
 dependencies = [
  "byteorder",
  "feagi-structures",
@@ -1373,9 +1373,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-services"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d23eb64a38a3f68b3ab07617922992130286662ac23032ffd0efa8e9dd95ea9"
+checksum = "8c0893a5135074ef78df3e390e880e2c526e04a6a641483e791f7ee23e4d1d7a"
 dependencies = [
  "ahash",
  "async-trait",
@@ -1399,9 +1399,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-state-manager"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c9623d83d3468d29c6c4fb7fc879b8e7cd7b90957002a7aa7b6a4ea28529347"
+checksum = "982df9d5cfbadbd1f6c0bc44fa02770e97d615628709c44614e4eabe8764ff49"
 dependencies = [
  "ahash",
  "atomic-polyfill",
@@ -1415,9 +1415,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-structures"
-version = "0.0.1-beta.20"
+version = "0.0.1-beta.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80a69b68e030843dff327959404118c7e5ffa90aa681a55b1f7dfdadce2cbdad"
+checksum = "d2dbf6f408914a313cc13aa36ae0eea6bee3bc0c113aa0d477ba0a13a8c06350"
 dependencies = [
  "base64 0.22.1",
  "futures-channel",
@@ -2780,9 +2780,9 @@ dependencies = [
 
 [[package]]
 name = "objc2"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7c2599ce0ec54857b29ce62166b0ed9b4f6f1a70ccc9a71165b6154caca8c05"
+checksum = "3a12a8ed07aefc768292f076dc3ac8c48f3781c8f2d5851dd3d98950e8c5a89f"
 dependencies = [
  "objc2-encode",
 ]
@@ -5458,18 +5458,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.39"
+version = "0.8.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db6d35d663eadb6c932438e763b262fe1a70987f9ae936e60158176d710cae4a"
+checksum = "a789c6e490b576db9f7e6b6d661bcc9799f7c0ac8352f56ea20193b2681532e5"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.39"
+version = "0.8.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4122cd3169e94605190e77839c9a40d40ed048d305bfdc146e7df40ab0f3e517"
+checksum = "f65c489a7071a749c849713807783f70672b28094011623e200cb86dcb835953"
 dependencies = [
  "proc-macro2",
  "quote",
