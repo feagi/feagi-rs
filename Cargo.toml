@@ -1,6 +1,6 @@
 [package]
 name = "feagi-rs"
-version = "0.0.20"
+version = "0.0.21"
 edition = "2021"
 authors = ["Neuraville Inc. <feagi@neuraville.com>"]
 license = "Apache-2.0"

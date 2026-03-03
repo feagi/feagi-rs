@@ -25,6 +25,8 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use feagi::network_provider::FeagiNetworkConnectionInfoProvider;
+use feagi_agent::command_and_control::agent_embodiment_configuration_message::AgentEmbodimentConfigurationMessage;
+use feagi_agent::command_and_control::FeagiMessage;
 use feagi_api::common::agent_registration::{
     auto_create_cortical_areas_from_device_registrations,
     derive_motor_cortical_ids_from_device_registrations,
@@ -323,6 +325,9 @@ async fn main() -> Result<()> {
         // This prevents per-cycle re-check spam while still retrying until first success.
         let auto_created_descriptors: Arc<Mutex<HashSet<feagi_agent::AgentDescriptor>>> =
             Arc::new(Mutex::new(HashSet::new()));
+        // Rate-limit "Deferring motor registration" log per agent to avoid spam (loop polls every ~10ms).
+        let deferred_motor_log_last: Arc<Mutex<HashMap<AgentID, std::time::Instant>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         let api_state_holder = api_state_holder_for_polling;
 
@@ -340,6 +345,46 @@ async fn main() -> Result<()> {
                             "📨 Received message from session {:?}: {:?}",
                             session_id, message
                         );
+                        // Root cause fix: Run auto_create BEFORE sending response when processing
+                        // AgentConfiguration. The handler stores device_regs and sends HeartBeat
+                        // immediately; the SDK then verifies cortical areas exist. Previously,
+                        // auto_create ran in Pass 2 (later in the same loop), so the SDK could
+                        // query before areas were created. Running it here ensures areas exist
+                        // before the handler sends the acknowledgment.
+                        if let FeagiMessage::AgentConfiguration(
+                            AgentEmbodimentConfigurationMessage::AgentConfigurationDetails(
+                                device_def,
+                            ),
+                        ) = &message
+                        {
+                            let device_regs =
+                                serde_json::to_value(device_def).unwrap_or_else(|_| {
+                                    tracing::warn!(
+                                        target: "feagi-rs",
+                                        "Failed to serialize AgentConfigurationDetails to JSON"
+                                    );
+                                    serde_json::Value::Object(serde_json::Map::new())
+                                });
+                            match api_state_holder.lock().unwrap().as_ref() {
+                                Some(api) => {
+                                    info!(
+                                        "[MOTOR-REG] Running auto_create before AgentConfiguration response"
+                                    );
+                                    rt_handle.block_on(
+                                        auto_create_cortical_areas_from_device_registrations(
+                                            api.as_ref(),
+                                            &device_regs,
+                                        ),
+                                    );
+                                }
+                                None => {
+                                    warn!(
+                                        "[MOTOR-REG] ApiState not yet available (genome may still be loading); \
+                                         auto_create deferred to Pass 2"
+                                    );
+                                }
+                            }
+                        }
                         match handler_guard.send_message_to_agent(session_id, message, 0) {
                             Ok(()) => {
                                 info!("✅ Sent response to session {:?}", session_id);
@@ -399,6 +444,12 @@ async fn main() -> Result<()> {
                             .values()
                             .map(|(descriptor, _)| descriptor.clone())
                             .collect();
+
+                    // Prune rate-limit state for disconnected agents.
+                    {
+                        let mut log_guard = deferred_motor_log_last.lock().unwrap();
+                        log_guard.retain(|sid, _| current_sessions.contains(sid));
+                    }
 
                     // Detect agents that were registered but are no longer in handler (deregistered).
                     {
@@ -602,10 +653,24 @@ async fn main() -> Result<()> {
                         };
 
                         if motor_cortical_ids.is_empty() {
-                            info!(
-                                "⏳ [MOTOR-REG] Deferring motor registration for agent '{}' (no motor cortical IDs resolved)",
-                                agent_id
-                            );
+                            let now = std::time::Instant::now();
+                            let should_log = {
+                                let mut log_guard = deferred_motor_log_last.lock().unwrap();
+                                let last = log_guard.get(&session_id);
+                                let ok = last.map_or(true, |t| {
+                                    now.duration_since(*t) >= std::time::Duration::from_secs(30)
+                                });
+                                if ok {
+                                    log_guard.insert(session_id, now);
+                                }
+                                ok
+                            };
+                            if should_log {
+                                info!(
+                                    "[MOTOR-REG] Deferring motor registration for agent '{}' (no motor cortical IDs resolved)",
+                                    agent_id
+                                );
+                            }
                         } else {
                             let desired_set: HashSet<String> =
                                 motor_cortical_ids.iter().cloned().collect();
@@ -1106,9 +1171,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                     static WARNED_VIZ: std::sync::OnceLock<
                         std::sync::Mutex<std::collections::HashSet<String>>,
                     > = std::sync::OnceLock::new();
-                    let warned = WARNED_VIZ.get_or_init(|| {
-                        std::sync::Mutex::new(std::collections::HashSet::new())
-                    });
+                    let warned = WARNED_VIZ
+                        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
                     let mut warned = warned.lock().unwrap();
                     if warned.insert(agent_id.to_string()) {
                         tracing::warn!(
@@ -1155,9 +1219,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                     static WARNED_MOTOR: std::sync::OnceLock<
                         std::sync::Mutex<std::collections::HashSet<String>>,
                     > = std::sync::OnceLock::new();
-                    let warned = WARNED_MOTOR.get_or_init(|| {
-                        std::sync::Mutex::new(std::collections::HashSet::new())
-                    });
+                    let warned = WARNED_MOTOR
+                        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
                     let mut warned = warned.lock().unwrap();
                     if warned.insert(agent_id.to_string()) {
                         tracing::warn!(
