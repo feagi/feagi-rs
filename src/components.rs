@@ -320,9 +320,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
                     static WARNED_VIZ: std::sync::OnceLock<
                         std::sync::Mutex<std::collections::HashSet<String>>,
                     > = std::sync::OnceLock::new();
-                    let warned = WARNED_VIZ.get_or_init(|| {
-                        std::sync::Mutex::new(std::collections::HashSet::new())
-                    });
+                    let warned = WARNED_VIZ
+                        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
                     let mut warned = warned.lock().unwrap();
                     if warned.insert(agent_id.to_string()) {
                         tracing::warn!(
@@ -370,9 +369,8 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
                     static WARNED_MOTOR: std::sync::OnceLock<
                         std::sync::Mutex<std::collections::HashSet<String>>,
                     > = std::sync::OnceLock::new();
-                    let warned = WARNED_MOTOR.get_or_init(|| {
-                        std::sync::Mutex::new(std::collections::HashSet::new())
-                    });
+                    let warned = WARNED_MOTOR
+                        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
                     let mut warned = warned.lock().unwrap();
                     if warned.insert(agent_id.to_string()) {
                         tracing::warn!(
