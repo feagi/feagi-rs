@@ -428,273 +428,288 @@ async fn main() -> Result<()> {
                 }
 
                 // Check for new WebSocket agent registrations with visualization capability.
-                // CRITICAL: Collect pending registrations while holding handler lock, then release
-                // before block_on to avoid deadlock (burst loop needs agent_handler for viz publish).
+                // Collect a snapshot quickly under lock, then perform heavier processing outside.
                 let mut pending_motor: Vec<(AgentID, String, Vec<String>)> = Vec::new();
                 let mut pending_viz: Vec<(AgentID, String, f64)> = Vec::new();
                 let mut stale_motor: Vec<AgentID> = Vec::new();
                 let mut stale_viz: Vec<AgentID> = Vec::new();
+                let mut device_regs_to_auto_create: Vec<(
+                    feagi_agent::AgentDescriptor,
+                    serde_json::Value,
+                )> = Vec::new();
+
+                let mut registration_snapshot: Vec<(
+                    AgentID,
+                    String,
+                    feagi_agent::AgentDescriptor,
+                    Vec<feagi_agent::AgentCapabilities>,
+                    Option<serde_json::Value>,
+                    Option<(String, f64)>,
+                )> = Vec::new();
 
                 {
                     let registered_agents = handler_guard.get_all_registered_agents();
-                    let current_sessions: HashSet<AgentID> =
-                        registered_agents.keys().copied().collect();
-                    let current_descriptors: HashSet<feagi_agent::AgentDescriptor> =
-                        registered_agents
-                            .values()
-                            .map(|(descriptor, _)| descriptor.clone())
-                            .collect();
-
-                    // Prune rate-limit state for disconnected agents.
-                    {
-                        let mut log_guard = deferred_motor_log_last.lock().unwrap();
-                        log_guard.retain(|sid, _| current_sessions.contains(sid));
-                    }
-
-                    // Detect agents that were registered but are no longer in handler (deregistered).
-                    {
-                        let motor_guard = known_motor_sessions.lock().unwrap();
-                        for sid in motor_guard.difference(&current_sessions) {
-                            stale_motor.push(*sid);
-                        }
-                    }
-                    {
-                        let viz_guard = known_visualization_sessions.lock().unwrap();
-                        for sid in viz_guard.difference(&current_sessions) {
-                            stale_viz.push(*sid);
-                        }
-                    }
-                    // Drop auto-create completion markers for disconnected/replaced descriptors.
-                    auto_created_descriptors
-                        .lock()
-                        .unwrap()
-                        .retain(|descriptor| current_descriptors.contains(descriptor));
-
-                    // Pass 1: Collect device_regs for auto_create from ALL agents that have them.
-                    // (Not just new motor agents - we retry every cycle so auto_create runs when
-                    // api_state_holder becomes available after genome load, even if the agent
-                    // connected before genome was ready.)
-                    let mut device_regs_to_auto_create: Vec<(
-                        feagi_agent::AgentDescriptor,
-                        serde_json::Value,
-                    )> = Vec::new();
-                    let mut motor_agents_to_process: Vec<(
-                        AgentID,
-                        String,
-                        feagi_agent::AgentDescriptor,
-                    )> = Vec::new();
-
+                    registration_snapshot.reserve(registered_agents.len());
                     for (session_id, (agent_descriptor, capabilities)) in registered_agents.iter() {
-                        let agent_id = session_id.to_base64();
-
-                        // Collect device_regs for auto_create from any agent that has them.
-                        if let Some(device_regs) = handler_guard
+                        let device_regs = handler_guard
                             .get_device_registrations_by_descriptor(agent_descriptor)
                             .or_else(|| {
                                 handler_guard.get_device_registrations_by_agent(*session_id)
                             })
-                        {
-                            let already_marked_complete = auto_created_descriptors
-                                .lock()
-                                .unwrap()
-                                .contains(agent_descriptor);
-                            let needs_auto_create = if !already_marked_complete {
-                                true
-                            } else {
-                                // Genome reload/reset can remove previously auto-created areas while
-                                // the descriptor remains connected. Re-run auto-create when expected
-                                // motor IDs are no longer present.
-                                match derive_motor_cortical_ids_from_device_registrations(
-                                    device_regs,
-                                ) {
-                                    Ok(expected_motor_ids) => {
-                                        let connectome_guard =
-                                            connectome_manager_for_polling.read();
-                                        !expected_motor_ids.iter().all(|id_b64| {
-                                            feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
-                                                .ok()
-                                                .map(|id| connectome_guard.has_cortical_area(&id))
-                                                .unwrap_or(false)
-                                        })
-                                    }
-                                    Err(_) => false,
-                                }
-                            };
-                            if needs_auto_create {
-                                device_regs_to_auto_create
-                                    .push((agent_descriptor.clone(), device_regs.clone()));
-                            }
-                        }
+                            .cloned();
+                        let viz_registration =
+                            handler_guard.get_visualization_info_for_agent(*session_id);
+                        registration_snapshot.push((
+                            *session_id,
+                            session_id.to_base64(),
+                            agent_descriptor.clone(),
+                            capabilities.clone(),
+                            device_regs,
+                            viz_registration,
+                        ));
+                    }
+                }
+                drop(handler_guard); // Release quickly; burst loop also needs this lock for publish
 
-                        if capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveMotorData)
-                        {
-                            motor_agents_to_process.push((
-                                *session_id,
-                                agent_id.clone(),
-                                agent_descriptor.clone(),
-                            ));
-                        }
+                let current_sessions: HashSet<AgentID> =
+                    registration_snapshot.iter().map(|(sid, ..)| *sid).collect();
+                let current_descriptors: HashSet<feagi_agent::AgentDescriptor> =
+                    registration_snapshot
+                        .iter()
+                        .map(|(_, _, descriptor, ..)| descriptor.clone())
+                        .collect();
 
-                        if !known_visualization_sessions
+                // Prune rate-limit state for disconnected agents.
+                {
+                    let mut log_guard = deferred_motor_log_last.lock().unwrap();
+                    log_guard.retain(|sid, _| current_sessions.contains(sid));
+                }
+
+                // Detect agents that were registered but are no longer present (deregistered).
+                {
+                    let motor_guard = known_motor_sessions.lock().unwrap();
+                    for sid in motor_guard.difference(&current_sessions) {
+                        stale_motor.push(*sid);
+                    }
+                }
+                {
+                    let viz_guard = known_visualization_sessions.lock().unwrap();
+                    for sid in viz_guard.difference(&current_sessions) {
+                        stale_viz.push(*sid);
+                    }
+                }
+
+                // Drop auto-create completion markers for disconnected/replaced descriptors.
+                auto_created_descriptors
+                    .lock()
+                    .unwrap()
+                    .retain(|descriptor| current_descriptors.contains(descriptor));
+
+                // Pass 1: Collect auto-create work and new visualization registrations.
+                for (
+                    session_id,
+                    agent_id,
+                    agent_descriptor,
+                    capabilities,
+                    device_regs_opt,
+                    viz_registration_opt,
+                ) in &registration_snapshot
+                {
+                    if let Some(device_regs) = device_regs_opt.as_ref() {
+                        let already_marked_complete = auto_created_descriptors
                             .lock()
                             .unwrap()
-                            .contains(session_id)
-                        {
-                            let mut viz_registration: Option<(String, f64)> =
-                                handler_guard.get_visualization_info_for_agent(*session_id);
-
-                            if viz_registration.is_none()
-                                && capabilities.contains(
-                                    &feagi_agent::AgentCapabilities::ReceiveNeuronVisualizations,
-                                )
-                            {
-                                viz_registration = Some((agent_id, 0.0));
-                            }
-
-                            if let Some((viz_agent_id, requested_rate_hz)) = viz_registration {
-                                pending_viz.push((*session_id, viz_agent_id, requested_rate_hz));
-                            }
-                        }
-                    }
-
-                    // Pass 2: Auto-create missing cortical areas from device_registrations (outside lock).
-                    if !device_regs_to_auto_create.is_empty() {
-                        if let Some(api) = api_state_holder.lock().unwrap().as_ref() {
-                            debug!(
-                                "[MOTOR-REG] Invoking auto_create for {} device_registration(s)",
-                                device_regs_to_auto_create.len()
-                            );
-                            for (descriptor, device_regs) in &device_regs_to_auto_create {
-                                let expected_motor_ids =
-                                    match derive_motor_cortical_ids_from_device_registrations(
-                                        device_regs,
-                                    ) {
-                                        Ok(ids) => ids,
-                                        Err(e) => {
-                                            debug!(
-                                            "[MOTOR-REG] Could not derive motor IDs before auto_create for descriptor {:?}: {}",
-                                            descriptor, e
-                                        );
-                                            std::collections::HashSet::new()
-                                        }
-                                    };
-                                rt_handle.block_on(
-                                    auto_create_cortical_areas_from_device_registrations(
-                                        api.as_ref(),
-                                        device_regs,
-                                    ),
-                                );
-                                // Mark as completed only after expected motor cortical IDs exist.
-                                // This avoids false-positive completion when initial payload/state
-                                // causes auto_create to no-op.
-                                let all_expected_present = {
+                            .contains(agent_descriptor);
+                        let needs_auto_create = if !already_marked_complete {
+                            true
+                        } else {
+                            // Genome reload/reset can remove previously auto-created areas while
+                            // the descriptor remains connected. Re-run auto-create when expected
+                            // motor IDs are no longer present.
+                            match derive_motor_cortical_ids_from_device_registrations(device_regs) {
+                                Ok(expected_motor_ids) => {
                                     let connectome_guard = connectome_manager_for_polling.read();
-                                    expected_motor_ids.iter().all(|id_b64| {
+                                    !expected_motor_ids.iter().all(|id_b64| {
                                         feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
                                             .ok()
                                             .map(|id| connectome_guard.has_cortical_area(&id))
                                             .unwrap_or(false)
                                     })
-                                };
-                                if all_expected_present {
-                                    auto_created_descriptors
-                                        .lock()
-                                        .unwrap()
-                                        .insert(descriptor.clone());
-                                } else {
-                                    debug!(
-                                        "[MOTOR-REG] Auto-create incomplete for descriptor {:?}; will retry",
-                                        descriptor
-                                    );
                                 }
+                                Err(_) => false,
                             }
-                        } else {
-                            debug!(
-                                "[MOTOR-REG] Auto-create deferred: ApiState not yet available (genome may still be loading)"
-                            );
+                        };
+                        if needs_auto_create {
+                            device_regs_to_auto_create
+                                .push((agent_descriptor.clone(), device_regs.clone()));
                         }
                     }
 
-                    // Pass 3: Derive motor cortical IDs and build pending_motor.
-                    for (session_id, agent_id, agent_descriptor) in motor_agents_to_process {
-                        let motor_cortical_ids: Vec<String> = if let Some(device_regs) =
-                            handler_guard
-                                .get_device_registrations_by_descriptor(&agent_descriptor)
-                                .or_else(|| {
-                                    handler_guard.get_device_registrations_by_agent(session_id)
-                                }) {
-                            match derive_motor_cortical_ids_from_device_registrations(device_regs) {
-                                Ok(ids) => ids.into_iter().collect(),
-                                Err(e) => {
-                                    warn!(
-                                            "⚠️ [WS-REGISTRATION] Failed deriving motor cortical IDs from device registrations: {}",
-                                            e
-                                        );
-                                    Vec::new()
-                                }
-                            }
-                        } else {
-                            debug!(
-                                    "[MOTOR-REG] No device registrations for agent '{}' (descriptor {:?}); using connectome output areas as fallback",
-                                    agent_id,
-                                    agent_descriptor
-                                );
-                            let connectome_guard = connectome_manager_for_polling.read();
-                            connectome_guard
-                                .get_cortical_area_ids()
-                                .iter()
-                                .filter_map(|cortical_id| {
-                                    connectome_guard
-                                        .get_cortical_area(cortical_id)
-                                        .filter(|area| area.is_output_area())
-                                        .map(|_| cortical_id.as_base_64())
-                                })
-                                .collect()
-                        };
-
-                        if motor_cortical_ids.is_empty() {
-                            let now = std::time::Instant::now();
-                            let should_log = {
-                                let mut log_guard = deferred_motor_log_last.lock().unwrap();
-                                let last = log_guard.get(&session_id);
-                                let ok = last.map_or(true, |t| {
-                                    now.duration_since(*t) >= std::time::Duration::from_secs(30)
-                                });
-                                if ok {
-                                    log_guard.insert(session_id, now);
-                                }
-                                ok
-                            };
-                            if should_log {
-                                info!(
-                                    "[MOTOR-REG] Deferring motor registration for agent '{}' (no motor cortical IDs resolved)",
-                                    agent_id
-                                );
-                            }
-                        } else {
-                            let desired_set: HashSet<String> =
-                                motor_cortical_ids.iter().cloned().collect();
-                            let current_set = known_motor_subscriptions
-                                .lock()
-                                .unwrap()
-                                .get(&session_id)
-                                .cloned()
-                                .unwrap_or_default();
-                            let needs_update =
-                                !known_motor_sessions.lock().unwrap().contains(&session_id)
-                                    || current_set != desired_set;
-                            if needs_update {
-                                debug!(
-                                    "[MOTOR-REG] Scheduling motor subscription update for agent '{}' with {} cortical IDs",
-                                    agent_id,
-                                    motor_cortical_ids.len()
-                                );
-                                pending_motor.push((session_id, agent_id, motor_cortical_ids));
-                            }
+                    if !known_visualization_sessions
+                        .lock()
+                        .unwrap()
+                        .contains(session_id)
+                    {
+                        let mut viz_registration = viz_registration_opt.clone();
+                        if viz_registration.is_none()
+                            && capabilities.contains(
+                                &feagi_agent::AgentCapabilities::ReceiveNeuronVisualizations,
+                            )
+                        {
+                            viz_registration = Some((agent_id.clone(), 0.0));
+                        }
+                        if let Some((viz_agent_id, requested_rate_hz)) = viz_registration {
+                            pending_viz.push((*session_id, viz_agent_id, requested_rate_hz));
                         }
                     }
                 }
-                drop(handler_guard); // Release before block_on - burst loop needs agent_handler for viz publish
+
+                // Pass 2: Derive motor cortical IDs and build pending_motor.
+                for (
+                    session_id,
+                    agent_id,
+                    agent_descriptor,
+                    capabilities,
+                    device_regs_opt,
+                    _viz_registration_opt,
+                ) in &registration_snapshot
+                {
+                    if !capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveMotorData) {
+                        continue;
+                    }
+
+                    let motor_cortical_ids: Vec<String> = if let Some(device_regs) = device_regs_opt
+                    {
+                        match derive_motor_cortical_ids_from_device_registrations(device_regs) {
+                            Ok(ids) => ids.into_iter().collect(),
+                            Err(e) => {
+                                warn!(
+                                    "⚠️ [WS-REGISTRATION] Failed deriving motor cortical IDs from device registrations: {}",
+                                    e
+                                );
+                                Vec::new()
+                            }
+                        }
+                    } else {
+                        debug!(
+                            "[MOTOR-REG] No device registrations for agent '{}' (descriptor {:?}); using connectome output areas as fallback",
+                            agent_id,
+                            agent_descriptor
+                        );
+                        let connectome_guard = connectome_manager_for_polling.read();
+                        connectome_guard
+                            .get_cortical_area_ids()
+                            .iter()
+                            .filter_map(|cortical_id| {
+                                connectome_guard
+                                    .get_cortical_area(cortical_id)
+                                    .filter(|area| area.is_output_area())
+                                    .map(|_| cortical_id.as_base_64())
+                            })
+                            .collect()
+                    };
+
+                    if motor_cortical_ids.is_empty() {
+                        let now = std::time::Instant::now();
+                        let should_log = {
+                            let mut log_guard = deferred_motor_log_last.lock().unwrap();
+                            let last = log_guard.get(session_id);
+                            let ok = last.map_or(true, |t| {
+                                now.duration_since(*t) >= std::time::Duration::from_secs(30)
+                            });
+                            if ok {
+                                log_guard.insert(*session_id, now);
+                            }
+                            ok
+                        };
+                        if should_log {
+                            info!(
+                                "[MOTOR-REG] Deferring motor registration for agent '{}' (no motor cortical IDs resolved)",
+                                agent_id
+                            );
+                        }
+                    } else {
+                        let desired_set: HashSet<String> =
+                            motor_cortical_ids.iter().cloned().collect();
+                        let current_set = known_motor_subscriptions
+                            .lock()
+                            .unwrap()
+                            .get(session_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let needs_update =
+                            !known_motor_sessions.lock().unwrap().contains(session_id)
+                                || current_set != desired_set;
+                        if needs_update {
+                            debug!(
+                                "[MOTOR-REG] Scheduling motor subscription update for agent '{}' with {} cortical IDs",
+                                agent_id,
+                                motor_cortical_ids.len()
+                            );
+                            pending_motor.push((*session_id, agent_id.clone(), motor_cortical_ids));
+                        }
+                    }
+                }
+
+                // Pass 2 (outside handler lock): Auto-create missing cortical areas from
+                // device_registrations. This can be expensive and must not hold `agent_handler`,
+                // otherwise burst-loop publish path can block and stall burst progress.
+                if !device_regs_to_auto_create.is_empty() {
+                    if let Some(api) = api_state_holder.lock().unwrap().as_ref() {
+                        debug!(
+                            "[MOTOR-REG] Invoking auto_create for {} device_registration(s)",
+                            device_regs_to_auto_create.len()
+                        );
+                        for (descriptor, device_regs) in &device_regs_to_auto_create {
+                            let expected_motor_ids =
+                                match derive_motor_cortical_ids_from_device_registrations(
+                                    device_regs,
+                                ) {
+                                    Ok(ids) => ids,
+                                    Err(e) => {
+                                        debug!(
+                                            "[MOTOR-REG] Could not derive motor IDs before auto_create for descriptor {:?}: {}",
+                                            descriptor, e
+                                        );
+                                        std::collections::HashSet::new()
+                                    }
+                                };
+                            rt_handle.block_on(
+                                auto_create_cortical_areas_from_device_registrations(
+                                    api.as_ref(),
+                                    device_regs,
+                                ),
+                            );
+                            // Mark as completed only after expected motor cortical IDs exist.
+                            // This avoids false-positive completion when initial payload/state
+                            // causes auto_create to no-op.
+                            let all_expected_present = {
+                                let connectome_guard = connectome_manager_for_polling.read();
+                                expected_motor_ids.iter().all(|id_b64| {
+                                    feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
+                                        .ok()
+                                        .map(|id| connectome_guard.has_cortical_area(&id))
+                                        .unwrap_or(false)
+                                })
+                            };
+                            if all_expected_present {
+                                auto_created_descriptors
+                                    .lock()
+                                    .unwrap()
+                                    .insert(descriptor.clone());
+                            } else {
+                                debug!(
+                                    "[MOTOR-REG] Auto-create incomplete for descriptor {:?}; will retry",
+                                    descriptor
+                                );
+                            }
+                        }
+                    } else {
+                        debug!(
+                            "[MOTOR-REG] Auto-create deferred: ApiState not yet available (genome may still be loading)"
+                        );
+                    }
+                }
 
                 // Unregister stale agents (e.g. descriptor replacement) from burst runner.
                 for sid in &stale_motor {
@@ -1141,7 +1156,25 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 return Ok(());
             }
 
-            let mut handler_guard = self.handler.lock().unwrap();
+            let mut handler_guard = match self.handler.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    // Keep burst loop non-blocking: skip this frame under lock contention.
+                    static LAST_WARN_AT: std::sync::OnceLock<std::sync::Mutex<std::time::Instant>> =
+                        std::sync::OnceLock::new();
+                    let gate = LAST_WARN_AT
+                        .get_or_init(|| std::sync::Mutex::new(std::time::Instant::now()));
+                    let mut last_warn = gate.lock().unwrap();
+                    let now = std::time::Instant::now();
+                    if now.duration_since(*last_warn) >= std::time::Duration::from_secs(5) {
+                        tracing::warn!(
+                            "[BURST-PUBLISH] Visualization publish skipped due to agent_handler lock contention"
+                        );
+                        *last_warn = now;
+                    }
+                    return Ok(());
+                }
+            };
 
             use feagi_serialization::FeagiByteContainer;
             use feagi_structures::genomic::cortical_area::CorticalID;
@@ -1211,7 +1244,25 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 return Ok(());
             }
 
-            let mut handler_guard = self.handler.lock().unwrap();
+            let mut handler_guard = match self.handler.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    // Keep burst loop non-blocking: skip this frame under lock contention.
+                    static LAST_WARN_AT: std::sync::OnceLock<std::sync::Mutex<std::time::Instant>> =
+                        std::sync::OnceLock::new();
+                    let gate = LAST_WARN_AT
+                        .get_or_init(|| std::sync::Mutex::new(std::time::Instant::now()));
+                    let mut last_warn = gate.lock().unwrap();
+                    let now = std::time::Instant::now();
+                    if now.duration_since(*last_warn) >= std::time::Duration::from_secs(5) {
+                        tracing::warn!(
+                            "[BURST-PUBLISH] Motor publish skipped due to agent_handler lock contention"
+                        );
+                        *last_warn = now;
+                    }
+                    return Ok(());
+                }
+            };
 
             let agent_id = match AgentID::try_from_base64(agent_id) {
                 Ok(id) => id,
@@ -1498,6 +1549,8 @@ async fn start_services(
         websocket_visualization_port: config.websocket.visualization_port,
         websocket_rest_api_port: config.websocket.rest_api_port,
     }) as Arc<dyn NetworkConnectionInfoProvider>;
+    let (genome_transition_lock, genome_transition_in_progress) =
+        ApiState::init_genome_transition_controls();
 
     let api_state = ApiState {
         network_connection_info_provider: Some(network_provider),
@@ -1516,6 +1569,8 @@ async fn start_services(
         feagi_session_timestamp,
         memory_stats_cache: components.memory_stats_cache.clone(),
         amalgamation_state: ApiState::init_amalgamation_state(),
+        genome_transition_lock,
+        genome_transition_in_progress,
         #[cfg(feature = "feagi-agent")]
         agent_handler: Some(Arc::clone(&components.agent_handler)),
         #[cfg(not(feature = "feagi-agent"))]

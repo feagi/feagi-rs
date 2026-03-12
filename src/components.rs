@@ -540,6 +540,8 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         websocket_visualization_port: config.websocket.visualization_port,
         websocket_rest_api_port: config.websocket.rest_api_port,
     }) as Arc<dyn NetworkConnectionInfoProvider>;
+    let (genome_transition_lock, genome_transition_in_progress) =
+        ApiState::init_genome_transition_controls();
 
     let api_state = ApiState {
         network_connection_info_provider: Some(network_provider),
@@ -561,6 +563,8 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         #[cfg(not(feature = "plasticity"))]
         memory_stats_cache: None,
         amalgamation_state: ApiState::init_amalgamation_state(),
+        genome_transition_lock,
+        genome_transition_in_progress,
         #[cfg(feature = "feagi-agent")]
         agent_handler: Some(Arc::clone(&components.agent_handler)),
         #[cfg(not(feature = "feagi-agent"))]
