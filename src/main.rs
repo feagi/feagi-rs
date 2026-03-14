@@ -30,6 +30,7 @@ use feagi_agent::command_and_control::FeagiMessage;
 use feagi_api::common::agent_registration::{
     auto_create_cortical_areas_from_device_registrations,
     derive_motor_cortical_ids_from_device_registrations,
+    derive_sensory_cortical_ids_from_device_registrations,
 };
 use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
@@ -345,26 +346,27 @@ async fn main() -> Result<()> {
                             "📨 Received message from session {:?}: {:?}",
                             session_id, message
                         );
-                        // Root cause fix: Run auto_create BEFORE sending response when processing
-                        // AgentConfiguration. The handler stores device_regs and sends HeartBeat
-                        // immediately; the SDK then verifies cortical areas exist. Previously,
-                        // auto_create ran in Pass 2 (later in the same loop), so the SDK could
-                        // query before areas were created. Running it here ensures areas exist
-                        // before the handler sends the acknowledgment.
-                        if let FeagiMessage::AgentConfiguration(
+                        // Keep "auto_create before response" ordering for AgentConfiguration,
+                        // but release agent_handler lock while running expensive auto_create work.
+                        let pre_response_device_regs = if let FeagiMessage::AgentConfiguration(
                             AgentEmbodimentConfigurationMessage::AgentConfigurationDetails(
                                 device_def,
                             ),
                         ) = &message
                         {
-                            let device_regs =
-                                serde_json::to_value(device_def).unwrap_or_else(|_| {
-                                    tracing::warn!(
-                                        target: "feagi-rs",
-                                        "Failed to serialize AgentConfigurationDetails to JSON"
-                                    );
-                                    serde_json::Value::Object(serde_json::Map::new())
-                                });
+                            Some(serde_json::to_value(device_def).unwrap_or_else(|_| {
+                                tracing::warn!(
+                                    target: "feagi-rs",
+                                    "Failed to serialize AgentConfigurationDetails to JSON"
+                                );
+                                serde_json::Value::Object(serde_json::Map::new())
+                            }))
+                        } else {
+                            None
+                        };
+
+                        if let Some(device_regs) = pre_response_device_regs.as_ref() {
+                            drop(handler_guard);
                             match api_state_holder.lock().unwrap().as_ref() {
                                 Some(api) => {
                                     info!(
@@ -373,7 +375,7 @@ async fn main() -> Result<()> {
                                     rt_handle.block_on(
                                         auto_create_cortical_areas_from_device_registrations(
                                             api.as_ref(),
-                                            &device_regs,
+                                            device_regs,
                                         ),
                                     );
                                 }
@@ -384,6 +386,7 @@ async fn main() -> Result<()> {
                                     );
                                 }
                             }
+                            handler_guard = agent_handler_for_loop.lock().unwrap();
                         }
                         match handler_guard.send_message_to_agent(session_id, message, 0) {
                             Ok(()) => {
@@ -400,30 +403,21 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                if let Err(e) = handler_guard.poll_agent_motors() {
-                    error!("❌ Error polling embodiment motors: {:?}", e);
+                drop(handler_guard);
+
+                {
+                    let mut handler_guard = agent_handler_for_loop.lock().unwrap();
+                    if let Err(e) = handler_guard.poll_agent_motors() {
+                        error!("❌ Error polling embodiment motors: {:?}", e);
+                    }
                 }
 
                 // Keep visualization publishers polled so WebSocket clients can complete handshake
                 // even before visualization payloads are emitted.
-                if let Err(e) = handler_guard.poll_agent_visualizers() {
-                    error!("❌ Error polling embodiment visualizers: {:?}", e);
-                }
-
-                // Feed transport-agnostic sensory intake (any transport that received data).
-                // Drain up to a bounded per-cycle budget and keep only the newest payload
-                // so sustained streams do not accumulate stale frames in memory.
-                for _ in 0..sensory_drain_budget_per_cycle {
-                    match handler_guard.poll_agent_sensors() {
-                        Ok(Some(container)) => {
-                            sensory_intake_queue_for_polling
-                                .push(container.get_byte_ref().to_vec());
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            error!("❌ Error polling embodiment sensors: {:?}", e);
-                            break;
-                        }
+                {
+                    let mut handler_guard = agent_handler_for_loop.lock().unwrap();
+                    if let Err(e) = handler_guard.poll_agent_visualizers() {
+                        error!("❌ Error polling embodiment visualizers: {:?}", e);
                     }
                 }
 
@@ -448,6 +442,7 @@ async fn main() -> Result<()> {
                 )> = Vec::new();
 
                 {
+                    let handler_guard = agent_handler_for_loop.lock().unwrap();
                     let registered_agents = handler_guard.get_all_registered_agents();
                     registration_snapshot.reserve(registered_agents.len());
                     for (session_id, (agent_descriptor, capabilities)) in registered_agents.iter() {
@@ -469,7 +464,6 @@ async fn main() -> Result<()> {
                         ));
                     }
                 }
-                drop(handler_guard); // Release quickly; burst loop also needs this lock for publish
 
                 let current_sessions: HashSet<AgentID> =
                     registration_snapshot.iter().map(|(sid, ..)| *sid).collect();
@@ -524,19 +518,42 @@ async fn main() -> Result<()> {
                             true
                         } else {
                             // Genome reload/reset can remove previously auto-created areas while
-                            // the descriptor remains connected. Re-run auto-create when expected
-                            // motor IDs are no longer present.
+                            // the descriptor remains connected. Re-run auto-create when any expected
+                            // motor OR sensory IDs are no longer present.
+                            let mut expected_ids: HashSet<String> = HashSet::new();
+                            let mut derivation_failed = false;
                             match derive_motor_cortical_ids_from_device_registrations(device_regs) {
-                                Ok(expected_motor_ids) => {
-                                    let connectome_guard = connectome_manager_for_polling.read();
-                                    !expected_motor_ids.iter().all(|id_b64| {
-                                        feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
-                                            .ok()
-                                            .map(|id| connectome_guard.has_cortical_area(&id))
-                                            .unwrap_or(false)
-                                    })
+                                Ok(ids) => expected_ids.extend(ids),
+                                Err(e) => {
+                                    derivation_failed = true;
+                                    debug!(
+                                        "[MOTOR-REG] Could not derive motor IDs while checking auto-create completion for descriptor {:?}: {}",
+                                        agent_descriptor, e
+                                    );
                                 }
-                                Err(_) => false,
+                            }
+                            match derive_sensory_cortical_ids_from_device_registrations(device_regs)
+                            {
+                                Ok(ids) => expected_ids.extend(ids),
+                                Err(e) => {
+                                    derivation_failed = true;
+                                    debug!(
+                                        "[MOTOR-REG] Could not derive sensory IDs while checking auto-create completion for descriptor {:?}: {}",
+                                        agent_descriptor, e
+                                    );
+                                }
+                            }
+
+                            if derivation_failed || expected_ids.is_empty() {
+                                true
+                            } else {
+                                let connectome_guard = connectome_manager_for_polling.read();
+                                !expected_ids.iter().all(|id_b64| {
+                                    feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
+                                        .ok()
+                                        .map(|id| connectome_guard.has_cortical_area(&id))
+                                        .unwrap_or(false)
+                                })
                             }
                         };
                         if needs_auto_create {
@@ -661,19 +678,29 @@ async fn main() -> Result<()> {
                             device_regs_to_auto_create.len()
                         );
                         for (descriptor, device_regs) in &device_regs_to_auto_create {
-                            let expected_motor_ids =
-                                match derive_motor_cortical_ids_from_device_registrations(
-                                    device_regs,
-                                ) {
-                                    Ok(ids) => ids,
-                                    Err(e) => {
-                                        debug!(
-                                            "[MOTOR-REG] Could not derive motor IDs before auto_create for descriptor {:?}: {}",
-                                            descriptor, e
-                                        );
-                                        std::collections::HashSet::new()
-                                    }
-                                };
+                            let mut expected_ids: HashSet<String> = HashSet::new();
+                            let mut derivation_failed = false;
+                            match derive_motor_cortical_ids_from_device_registrations(device_regs) {
+                                Ok(ids) => expected_ids.extend(ids),
+                                Err(e) => {
+                                    derivation_failed = true;
+                                    debug!(
+                                        "[MOTOR-REG] Could not derive motor IDs before auto_create for descriptor {:?}: {}",
+                                        descriptor, e
+                                    );
+                                }
+                            }
+                            match derive_sensory_cortical_ids_from_device_registrations(device_regs)
+                            {
+                                Ok(ids) => expected_ids.extend(ids),
+                                Err(e) => {
+                                    derivation_failed = true;
+                                    debug!(
+                                        "[MOTOR-REG] Could not derive sensory IDs before auto_create for descriptor {:?}: {}",
+                                        descriptor, e
+                                    );
+                                }
+                            }
                             rt_handle.block_on(
                                 auto_create_cortical_areas_from_device_registrations(
                                     api.as_ref(),
@@ -685,14 +712,14 @@ async fn main() -> Result<()> {
                             // causes auto_create to no-op.
                             let all_expected_present = {
                                 let connectome_guard = connectome_manager_for_polling.read();
-                                expected_motor_ids.iter().all(|id_b64| {
+                                expected_ids.iter().all(|id_b64| {
                                     feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
                                         .ok()
                                         .map(|id| connectome_guard.has_cortical_area(&id))
                                         .unwrap_or(false)
                                 })
                             };
-                            if all_expected_present {
+                            if !derivation_failed && !expected_ids.is_empty() && all_expected_present {
                                 auto_created_descriptors
                                     .lock()
                                     .unwrap()
@@ -708,6 +735,35 @@ async fn main() -> Result<()> {
                         debug!(
                             "[MOTOR-REG] Auto-create deferred: ApiState not yet available (genome may still be loading)"
                         );
+                    }
+                }
+
+                // Feed transport-agnostic sensory intake (any transport that received data).
+                // IMPORTANT ORDERING: this runs after registration-driven auto-create work so
+                // first sensory payloads do not race ahead of cortical area provisioning.
+                //
+                // Drain up to a bounded per-cycle budget and keep only the newest payload
+                // so sustained streams do not accumulate stale frames in memory.
+                for _ in 0..sensory_drain_budget_per_cycle {
+                    let mut should_break = false;
+                    {
+                        let mut handler_guard = agent_handler_for_loop.lock().unwrap();
+                        match handler_guard.poll_agent_sensors() {
+                            Ok(Some(container)) => {
+                                sensory_intake_queue_for_polling
+                                    .push(container.get_byte_ref().to_vec());
+                            }
+                            Ok(None) => {
+                                should_break = true;
+                            }
+                            Err(e) => {
+                                error!("❌ Error polling embodiment sensors: {:?}", e);
+                                should_break = true;
+                            }
+                        }
+                    }
+                    if should_break {
+                        break;
                     }
                 }
 
@@ -1160,17 +1216,21 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 Ok(guard) => guard,
                 Err(_) => {
                     // Keep burst loop non-blocking: skip this frame under lock contention.
-                    static LAST_WARN_AT: std::sync::OnceLock<std::sync::Mutex<std::time::Instant>> =
-                        std::sync::OnceLock::new();
-                    let gate = LAST_WARN_AT
-                        .get_or_init(|| std::sync::Mutex::new(std::time::Instant::now()));
-                    let mut last_warn = gate.lock().unwrap();
+                    static WARN_GATE: std::sync::OnceLock<
+                        std::sync::Mutex<(std::time::Instant, u64)>,
+                    > = std::sync::OnceLock::new();
+                    let gate = WARN_GATE
+                        .get_or_init(|| std::sync::Mutex::new((std::time::Instant::now(), 0)));
+                    let mut guard = gate.lock().unwrap();
+                    guard.1 = guard.1.saturating_add(1);
                     let now = std::time::Instant::now();
-                    if now.duration_since(*last_warn) >= std::time::Duration::from_secs(5) {
+                    if now.duration_since(guard.0) >= std::time::Duration::from_secs(60) {
                         tracing::warn!(
-                            "[BURST-PUBLISH] Visualization publish skipped due to agent_handler lock contention"
+                            "[BURST-PUBLISH] Visualization publish skipped {} time(s) in last 60s due to agent_handler lock contention",
+                            guard.1
                         );
-                        *last_warn = now;
+                        guard.0 = now;
+                        guard.1 = 0;
                     }
                     return Ok(());
                 }
@@ -1248,17 +1308,21 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 Ok(guard) => guard,
                 Err(_) => {
                     // Keep burst loop non-blocking: skip this frame under lock contention.
-                    static LAST_WARN_AT: std::sync::OnceLock<std::sync::Mutex<std::time::Instant>> =
-                        std::sync::OnceLock::new();
-                    let gate = LAST_WARN_AT
-                        .get_or_init(|| std::sync::Mutex::new(std::time::Instant::now()));
-                    let mut last_warn = gate.lock().unwrap();
+                    static WARN_GATE: std::sync::OnceLock<
+                        std::sync::Mutex<(std::time::Instant, u64)>,
+                    > = std::sync::OnceLock::new();
+                    let gate = WARN_GATE
+                        .get_or_init(|| std::sync::Mutex::new((std::time::Instant::now(), 0)));
+                    let mut guard = gate.lock().unwrap();
+                    guard.1 = guard.1.saturating_add(1);
                     let now = std::time::Instant::now();
-                    if now.duration_since(*last_warn) >= std::time::Duration::from_secs(5) {
+                    if now.duration_since(guard.0) >= std::time::Duration::from_secs(60) {
                         tracing::warn!(
-                            "[BURST-PUBLISH] Motor publish skipped due to agent_handler lock contention"
+                            "[BURST-PUBLISH] Motor publish skipped {} time(s) in last 60s due to agent_handler lock contention",
+                            guard.1
                         );
-                        *last_warn = now;
+                        guard.0 = now;
+                        guard.1 = 0;
                     }
                     return Ok(());
                 }
