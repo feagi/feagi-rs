@@ -39,13 +39,17 @@ use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_io::{AgentID, SensoryIntakeQueue};
 use feagi_npu_burst_engine::backend::GpuConfig;
-use feagi_npu_burst_engine::{BurstLoopRunner, SensoryIntake, TracingMutex};
+use feagi_npu_burst_engine::{BurstLoopRunner, SensoryIngressPayload, SensoryIntake, TracingMutex};
 use feagi_observability::{init_logging_default, parse_debug_flags};
 use feagi_services::impls::AgentServiceImpl;
 use feagi_services::impls::SystemServiceImpl;
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::types::LoadGenomeParams;
 use feagi_services::*;
+use feagi_state_manager::StateManager;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::mpsc::{self, Sender};
 
 #[cfg(feature = "plasticity")]
 fn build_plasticity_config(config: &FeagiConfig) -> feagi_npu_plasticity::PlasticityConfig {
@@ -81,6 +85,83 @@ fn build_plasticity_config(config: &FeagiConfig) -> feagi_npu_plasticity::Plasti
         stdp: Some(stdp_cfg),
         pattern_config: pattern_cfg,
         memory_lifecycle_config: lifecycle_cfg,
+    }
+}
+
+/// Mask for agent_data_hash to keep within JSON-safe integer range (BV expects int).
+const AGENT_HASH_SAFE_MASK: u64 = (1u64 << 53) - 1;
+
+fn hash_json_value_for_agent(value: &serde_json::Value, hasher: &mut DefaultHasher) {
+    match value {
+        serde_json::Value::Null => hasher.write_u8(0),
+        serde_json::Value::Bool(val) => {
+            hasher.write_u8(1);
+            hasher.write_u8(*val as u8);
+        }
+        serde_json::Value::Number(num) => {
+            hasher.write_u8(2);
+            num.to_string().hash(hasher);
+        }
+        serde_json::Value::String(text) => {
+            hasher.write_u8(3);
+            text.hash(hasher);
+        }
+        serde_json::Value::Array(values) => {
+            hasher.write_u8(4);
+            for item in values {
+                hash_json_value_for_agent(item, hasher);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            hasher.write_u8(5);
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for key in keys {
+                key.hash(hasher);
+                if let Some(item) = map.get(key) {
+                    hash_json_value_for_agent(item, hasher);
+                } else {
+                    hasher.write_u8(0);
+                }
+            }
+        }
+    }
+}
+
+/// Updates StateManager agent_data_hash from FeagiAgentHandler's registered agents.
+/// BV polls health check and refreshes agent registry when this hash changes.
+fn update_agent_data_hash_from_registration_snapshot(
+    snapshot: &[(
+        AgentID,
+        String,
+        feagi_agent::AgentDescriptor,
+        Vec<feagi_agent::AgentCapabilities>,
+        Option<serde_json::Value>,
+        Option<(String, f64)>,
+    )],
+) {
+    let mut agent_ids: Vec<&String> = snapshot.iter().map(|(_, id, ..)| id).collect();
+    agent_ids.sort();
+    let mut hasher = DefaultHasher::new();
+    for agent_id in agent_ids {
+        agent_id.hash(&mut hasher);
+        if let Some((_, _, descriptor, capabilities, device_regs, _)) =
+            snapshot.iter().find(|(_, id, ..)| id == agent_id)
+        {
+            descriptor.hash(&mut hasher);
+            for cap in capabilities {
+                cap.hash(&mut hasher);
+            }
+            if let Some(regs) = device_regs {
+                hash_json_value_for_agent(regs, &mut hasher);
+            } else {
+                hasher.write_u8(0);
+            }
+        }
+    }
+    let hash_value = hasher.finish() & AGENT_HASH_SAFE_MASK;
+    if let Some(state_manager) = StateManager::instance().try_write() {
+        state_manager.set_agent_data_hash(hash_value);
     }
 }
 
@@ -338,6 +419,20 @@ async fn main() -> Result<()> {
                 break;
             }
 
+            let transition_in_progress = api_state_holder
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|api| api.genome_transition_in_progress.load(Ordering::SeqCst))
+                .unwrap_or(false);
+            if transition_in_progress {
+                // Strict transition barrier: never carry pre-transition sensory frames
+                // into a post-load genome.
+                sensory_intake_queue_for_polling.clear();
+                std::thread::yield_now();
+                continue;
+            }
+
             {
                 let mut handler_guard = agent_handler_for_loop.lock().unwrap();
                 match handler_guard.poll_command_and_control() {
@@ -464,6 +559,8 @@ async fn main() -> Result<()> {
                         ));
                     }
                 }
+
+                update_agent_data_hash_from_registration_snapshot(&registration_snapshot);
 
                 let current_sessions: HashSet<AgentID> =
                     registration_snapshot.iter().map(|(sid, ..)| *sid).collect();
@@ -719,7 +816,10 @@ async fn main() -> Result<()> {
                                         .unwrap_or(false)
                                 })
                             };
-                            if !derivation_failed && !expected_ids.is_empty() && all_expected_present {
+                            if !derivation_failed
+                                && !expected_ids.is_empty()
+                                && all_expected_present
+                            {
                                 auto_created_descriptors
                                     .lock()
                                     .unwrap()
@@ -750,8 +850,12 @@ async fn main() -> Result<()> {
                         let mut handler_guard = agent_handler_for_loop.lock().unwrap();
                         match handler_guard.poll_agent_sensors() {
                             Ok(Some(container)) => {
+                                let source_id = container
+                                    .get_agent_identifier_bytes()
+                                    .ok()
+                                    .map(|bytes| AgentID::new(*bytes).to_base64());
                                 sensory_intake_queue_for_polling
-                                    .push(container.get_byte_ref().to_vec());
+                                    .push_with_source(container.get_byte_ref().to_vec(), source_id);
                             }
                             Ok(None) => {
                                 should_break = true;
@@ -1196,10 +1300,139 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let burst_timestep = config.neural.burst_engine_timestep;
     let burst_hz = 1.0 / burst_timestep;
 
+    enum AgentPublishJob {
+        Visualization {
+            agent_id: String,
+            fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
+        },
+        Motor {
+            agent_id: String,
+            data: Vec<u8>,
+        },
+    }
+
+    let (publish_tx, publish_rx) = mpsc::channel::<AgentPublishJob>();
+    let publish_handler = Arc::clone(&agent_handler);
+    std::thread::Builder::new()
+        .name("agent-publish-dispatch".to_string())
+        .spawn(move || {
+            info!("    ✓ Agent publish dispatcher started");
+            while let Ok(job) = publish_rx.recv() {
+                let mut handler_guard = match publish_handler.lock() {
+                    Ok(guard) => guard,
+                    Err(e) => {
+                        error!("[AGENT-PUBLISH] Failed to lock agent handler: {}", e);
+                        continue;
+                    }
+                };
+
+                match job {
+                    AgentPublishJob::Visualization { agent_id, fire_data } => {
+                        use feagi_serialization::FeagiByteContainer;
+                        use feagi_structures::genomic::cortical_area::CorticalID;
+                        use feagi_structures::neuron_voxels::xyzp::{
+                            CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays,
+                        };
+
+                        let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
+                        for (_area_idx, fire_queue_data) in fire_data {
+                            if let Ok(cortical_id) =
+                                CorticalID::try_from_base_64(&fire_queue_data.cortical_id)
+                            {
+                                if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
+                                    fire_queue_data.coords_x,
+                                    fire_queue_data.coords_y,
+                                    fire_queue_data.coords_z,
+                                    fire_queue_data.potentials,
+                                ) {
+                                    cortical_mapped.insert(cortical_id, neuron_voxels);
+                                }
+                            }
+                        }
+
+                        let parsed_agent_id = match AgentID::try_from_base64(&agent_id) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                static WARNED_VIZ: std::sync::OnceLock<
+                                    std::sync::Mutex<std::collections::HashSet<String>>,
+                                > = std::sync::OnceLock::new();
+                                let warned = WARNED_VIZ.get_or_init(|| {
+                                    std::sync::Mutex::new(std::collections::HashSet::new())
+                                });
+                                let mut warned = warned.lock().unwrap();
+                                if warned.insert(agent_id.to_string()) {
+                                    tracing::warn!(
+                                        "Visualization agent_id '{}' is not valid base64 AgentID ({}). \
+                                         Skipping viz publish. Ensure agents register with base64-encoded AgentDescriptor.",
+                                        agent_id, e
+                                    );
+                                }
+                                continue;
+                            }
+                        };
+
+                        let mut container = FeagiByteContainer::new_empty();
+                        if let Err(e) = container.set_agent_identifier(parsed_agent_id) {
+                            error!(
+                                "[AGENT-PUBLISH] Failed to set visualization agent identifier: {:?}",
+                                e
+                            );
+                            continue;
+                        }
+                        if let Err(e) =
+                            container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
+                        {
+                            error!("[AGENT-PUBLISH] Failed to wrap visualization payload: {:?}", e);
+                            continue;
+                        }
+                        if let Err(e) = handler_guard.send_visualization_data(parsed_agent_id, &container)
+                        {
+                            warn!("[AGENT-PUBLISH] Failed to send visualization data: {}", e);
+                        }
+                    }
+                    AgentPublishJob::Motor { agent_id, data } => {
+                        use feagi_serialization::FeagiByteContainer;
+
+                        let parsed_agent_id = match AgentID::try_from_base64(&agent_id) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                static WARNED_MOTOR: std::sync::OnceLock<
+                                    std::sync::Mutex<std::collections::HashSet<String>>,
+                                > = std::sync::OnceLock::new();
+                                let warned = WARNED_MOTOR.get_or_init(|| {
+                                    std::sync::Mutex::new(std::collections::HashSet::new())
+                                });
+                                let mut warned = warned.lock().unwrap();
+                                if warned.insert(agent_id.to_string()) {
+                                    tracing::warn!(
+                                        "Motor agent_id '{}' is not valid base64 AgentID ({}). \
+                                         Skipping motor publish. Ensure agents register with base64-encoded AgentDescriptor.",
+                                        agent_id, e
+                                    );
+                                }
+                                continue;
+                            }
+                        };
+
+                        let mut container = FeagiByteContainer::new_empty();
+                        if let Err(e) = container.try_write_data_by_copy_and_verify(&data) {
+                            error!("[AGENT-PUBLISH] Failed to parse motor data: {:?}", e);
+                            continue;
+                        }
+
+                        if let Err(e) = handler_guard.send_motor_data(parsed_agent_id, &container) {
+                            warn!("[AGENT-PUBLISH] Failed to send motor data: {}", e);
+                        }
+                    }
+                }
+            }
+            warn!("Agent publish dispatcher stopped: channel closed");
+        })
+        .context("Failed to spawn agent publish dispatcher thread")?;
+
     // Create agent-handler-backed publishers
     struct AgentHandlerVisualizationPublisher {
-        #[allow(dead_code)] // TODO: Use when encoding is implemented
-        handler: Arc<Mutex<feagi_agent::server::FeagiAgentHandler>>,
+        tx: Sender<AgentPublishJob>,
     }
 
     impl feagi_npu_burst_engine::VisualizationPublisher for AgentHandlerVisualizationPublisher {
@@ -1212,90 +1445,17 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 return Ok(());
             }
 
-            let mut handler_guard = match self.handler.try_lock() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    // Keep burst loop non-blocking: skip this frame under lock contention.
-                    static WARN_GATE: std::sync::OnceLock<
-                        std::sync::Mutex<(std::time::Instant, u64)>,
-                    > = std::sync::OnceLock::new();
-                    let gate = WARN_GATE
-                        .get_or_init(|| std::sync::Mutex::new((std::time::Instant::now(), 0)));
-                    let mut guard = gate.lock().unwrap();
-                    guard.1 = guard.1.saturating_add(1);
-                    let now = std::time::Instant::now();
-                    if now.duration_since(guard.0) >= std::time::Duration::from_secs(60) {
-                        tracing::warn!(
-                            "[BURST-PUBLISH] Visualization publish skipped {} time(s) in last 60s due to agent_handler lock contention",
-                            guard.1
-                        );
-                        guard.0 = now;
-                        guard.1 = 0;
-                    }
-                    return Ok(());
-                }
-            };
-
-            use feagi_serialization::FeagiByteContainer;
-            use feagi_structures::genomic::cortical_area::CorticalID;
-            use feagi_structures::neuron_voxels::xyzp::{
-                CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays,
-            };
-
-            let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
-
-            for (_area_idx, fire_queue_data) in fire_data {
-                if let Ok(cortical_id) = CorticalID::try_from_base_64(&fire_queue_data.cortical_id)
-                {
-                    if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
-                        fire_queue_data.coords_x,
-                        fire_queue_data.coords_y,
-                        fire_queue_data.coords_z,
-                        fire_queue_data.potentials,
-                    ) {
-                        cortical_mapped.insert(cortical_id, neuron_voxels);
-                    }
-                }
-            }
-
-            let agent_id = match AgentID::try_from_base64(agent_id) {
-                Ok(id) => id,
-                Err(e) => {
-                    static WARNED_VIZ: std::sync::OnceLock<
-                        std::sync::Mutex<std::collections::HashSet<String>>,
-                    > = std::sync::OnceLock::new();
-                    let warned = WARNED_VIZ
-                        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-                    let mut warned = warned.lock().unwrap();
-                    if warned.insert(agent_id.to_string()) {
-                        tracing::warn!(
-                            "Visualization agent_id '{}' is not valid base64 AgentID ({}). \
-                             Skipping viz publish. Ensure agents register with base64-encoded AgentDescriptor.",
-                            agent_id, e
-                        );
-                    }
-                    return Ok(());
-                }
-            };
-
-            let mut container = FeagiByteContainer::new_empty();
-            container
-                .set_agent_identifier(agent_id)
-                .map_err(|e| format!("Failed to set visualization agent identifier: {:?}", e))?;
-            container
-                .overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
-                .map_err(|e| format!("Failed to wrap visualization: {:?}", e))?;
-            handler_guard
-                .send_visualization_data(agent_id, &container)
-                .map_err(|e| format!("Failed to send visualization: {:?}", e))?;
-
-            Ok(())
+            self.tx
+                .send(AgentPublishJob::Visualization {
+                    agent_id: agent_id.to_string(),
+                    fire_data,
+                })
+                .map_err(|e| format!("Failed to queue visualization publish job: {}", e))
         }
     }
 
     struct AgentHandlerMotorPublisher {
-        #[allow(dead_code)] // TODO: Use when SessionID lookup is implemented
-        handler: Arc<Mutex<feagi_agent::server::FeagiAgentHandler>>,
+        tx: Sender<AgentPublishJob>,
     }
 
     impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
@@ -1304,70 +1464,19 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 return Ok(());
             }
 
-            let mut handler_guard = match self.handler.try_lock() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    // Keep burst loop non-blocking: skip this frame under lock contention.
-                    static WARN_GATE: std::sync::OnceLock<
-                        std::sync::Mutex<(std::time::Instant, u64)>,
-                    > = std::sync::OnceLock::new();
-                    let gate = WARN_GATE
-                        .get_or_init(|| std::sync::Mutex::new((std::time::Instant::now(), 0)));
-                    let mut guard = gate.lock().unwrap();
-                    guard.1 = guard.1.saturating_add(1);
-                    let now = std::time::Instant::now();
-                    if now.duration_since(guard.0) >= std::time::Duration::from_secs(60) {
-                        tracing::warn!(
-                            "[BURST-PUBLISH] Motor publish skipped {} time(s) in last 60s due to agent_handler lock contention",
-                            guard.1
-                        );
-                        guard.0 = now;
-                        guard.1 = 0;
-                    }
-                    return Ok(());
-                }
-            };
-
-            let agent_id = match AgentID::try_from_base64(agent_id) {
-                Ok(id) => id,
-                Err(e) => {
-                    static WARNED_MOTOR: std::sync::OnceLock<
-                        std::sync::Mutex<std::collections::HashSet<String>>,
-                    > = std::sync::OnceLock::new();
-                    let warned = WARNED_MOTOR
-                        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-                    let mut warned = warned.lock().unwrap();
-                    if warned.insert(agent_id.to_string()) {
-                        tracing::warn!(
-                            "Motor agent_id '{}' is not valid base64 AgentID ({}). \
-                             Skipping motor publish. Ensure agents register with base64-encoded AgentDescriptor.",
-                            agent_id, e
-                        );
-                    }
-                    return Ok(());
-                }
-            };
-
-            use feagi_serialization::FeagiByteContainer;
-            let mut container = FeagiByteContainer::new_empty();
-            container
-                .try_write_data_by_copy_and_verify(data)
-                .map_err(|e| format!("Failed to parse motor data: {:?}", e))?;
-
-            handler_guard
-                .send_motor_data(agent_id, &container)
-                .map_err(|e| format!("Failed to send motor data: {:?}", e))?;
-
-            Ok(())
+            self.tx
+                .send(AgentPublishJob::Motor {
+                    agent_id: agent_id.to_string(),
+                    data: data.to_vec(),
+                })
+                .map_err(|e| format!("Failed to queue motor publish job: {}", e))
         }
     }
 
     let viz_publisher = Arc::new(Mutex::new(AgentHandlerVisualizationPublisher {
-        handler: Arc::clone(&agent_handler),
+        tx: publish_tx.clone(),
     }));
-    let motor_publisher = Arc::new(Mutex::new(AgentHandlerMotorPublisher {
-        handler: Arc::clone(&agent_handler),
-    }));
+    let motor_publisher = Arc::new(Mutex::new(AgentHandlerMotorPublisher { tx: publish_tx }));
 
     let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
         Arc::clone(&npu),
@@ -1448,8 +1557,13 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         queue: Arc<SensoryIntakeQueue>,
     }
     impl SensoryIntake for SensoryIntakeAdapter {
-        fn poll_sensory_data(&mut self) -> Result<Option<Vec<u8>>, String> {
-            Ok(self.queue.poll_next())
+        fn poll_sensory_data(&mut self) -> Result<Option<SensoryIngressPayload>, String> {
+            let packet = self.queue.poll_next().map(|packet| SensoryIngressPayload {
+                bytes: packet.bytes,
+                source_id: packet.source_id,
+                received_at: packet.received_at,
+            });
+            Ok(packet)
         }
     }
     burst_runner

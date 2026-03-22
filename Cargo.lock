@@ -111,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "anstyle"
-version = "1.0.13"
+version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5192cca8006f1fd4f7237516f40fa183bb07f8fbdfedaa0036de5ea9b0b45e78"
+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
 name = "anstyle-parse"
@@ -491,9 +491,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.56"
+version = "1.2.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aebf35691d1bfb0ac386a69bac2fde4dd276fb618cf8bf4f5318fe285e821bb2"
+checksum = "7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -572,9 +572,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.61"
+version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52fa72306bb30daf11bc97773431628e5b4916e97aaa74b7d3f625d4d495da02"
+checksum = "b193af5b67834b676abd72466a96c1024e6a6ad978a1f484bd90b85c94041351"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -582,9 +582,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.61"
+version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2071365c5c56eae7d77414029dde2f4f4ba151cf68d5a3261c9a40de428ace93"
+checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
 dependencies = [
  "anstream 1.0.0",
  "anstyle",
@@ -594,9 +594,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.61"
+version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dec5be1eea072311774b7b84ded287adbd9f293f9d23456817605c6042f4f5e0"
+checksum = "1110bd8a634a1ab8cb04345d8d878267d57c3cf1b38d91b71af6686408bbca6a"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -606,9 +606,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e78417baa3b3114dc0e95e7357389a249c4da97c3c2b540700079db6171bfd7"
+checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "codespan-reporting"
@@ -628,9 +628,9 @@ checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
 name = "colorchoice"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
+checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "com"
@@ -1110,9 +1110,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-agent"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f577d3ff78ea0c242a44a3c1edc21e3b2739ce6f17861208cc6fc234b18045e"
+checksum = "90b63a3f6e788b511f266c412ad6808c17672fdca3a15837a3d5be9ef221265c"
 dependencies = [
  "base64 0.22.1",
  "feagi-io",
@@ -1128,9 +1128,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-api"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d8511d234239617141cfb1795f5d30d55e9f75f1dcdd2cce8d09ce83b56aebb"
+checksum = "484cd370c2ce921d440376308baa6bcc9746274494147eb42bf45357b824cf4d"
 dependencies = [
  "async-trait",
  "axum",
@@ -1169,9 +1169,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-brain-development"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fda2ca28bf8df7213e9d802eb96ada124de94f35099898a0e0da5aedd4f5310f"
+checksum = "2babdf10a1b44a2a6ff30a69a52c6d5bbc266453ad626fb36e820d5e7d74af11"
 dependencies = [
  "ahash",
  "chrono",
@@ -1198,9 +1198,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-config"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc830067fed88a35807a0a10ca79a39cb507dbc36739e38f90ce57f62286c894"
+checksum = "3db8e82b1c11df2157f03ef452a0c50fdede8502ff87b259c10485a02f7b5ca5"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -1209,9 +1209,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-evolutionary"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5e660eaa523ab36bb252b3feb0dd013f7eb8d714310cadce51600d885a3bcd4"
+checksum = "c68a32c3cbf7b2cb88550795c620a6cec341ae248faed8b565b352bcb7fb7dfa"
 dependencies = [
  "chrono",
  "feagi-npu-neural",
@@ -1230,9 +1230,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-io"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d151bbcfb1497d33a7642307b09c66a0ef7180dfbaa322da734515fb8ff47e5"
+checksum = "03463d1945fb479c5d4c5134f9005399180e846990da793240a27001b0c30904"
 dependencies = [
  "base64 0.22.1",
  "feagi-serialization",
@@ -1244,9 +1244,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-burst-engine"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4389f0b14d2fcb62e62bee19561f3f3075e6ec49278be58b1f1776ca3ddd42f2"
+checksum = "0da02a5be80f6e1f68f57ce5f53fe99b0e1a274c3b3b41d2ffcc45f69735b231"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1271,9 +1271,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-neural"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e198809d6f568f0fa11d86463f845d2cbc6bf2ada3a75e3a5aff1aa8a7cbcadf"
+checksum = "a01c2f757b63d5649dd00b210214d4e204bad98fa4598225ab40398784cf820c"
 dependencies = [
  "ahash",
  "serde",
@@ -1283,9 +1283,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-plasticity"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f0489d5c672af88cca4b88d650d6640e021002952e2f67218496cfc91a9f96d"
+checksum = "4d8c7913546ee664f33cef19d0b0ce1c36b82b13fbdb4c99671b04b788353df9"
 dependencies = [
  "ahash",
  "feagi-npu-burst-engine",
@@ -1302,9 +1302,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-npu-runtime"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28180059b84534bc10bb136e3a8073321c724db1e1e6c153029e692a3a4b795a"
+checksum = "516e3c626abc83dd9b99316074ab5dabf8e37b30d2fd5b46018fe3dc3dff6b55"
 dependencies = [
  "ahash",
  "feagi-npu-neural",
@@ -1314,9 +1314,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-observability"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6a5402859e91c077212c5980664600e4b15c21f51d9d4c409586c6a906307dd"
+checksum = "2abb5458e38fddbd210491bd74f8e618edab2f5173738bc279af840cc4490c22"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "feagi-rs"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "axum",
@@ -1368,9 +1368,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-sensorimotor"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0709a3ee43b59ddcbbb75c1041c39157c35c8b161f8733383083351fe6e4c801"
+checksum = "3d95a952742385006949b7a19a2f2e7fb322efe7ed9c9d931b2aa6643d76cd13"
 dependencies = [
  "feagi-serialization",
  "feagi-structures",
@@ -1385,9 +1385,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-serialization"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f93fc8f04e21ab092d2ece467423e355e99028a7a8dfb426e46882827b053ab"
+checksum = "cb79bd7d946a6aaffe85647a99038ec3228e8a6745af26a480310bdc8b6a20a0"
 dependencies = [
  "byteorder",
  "feagi-structures",
@@ -1397,9 +1397,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-services"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d59dbf332976edfbd3385c32ad6e4319a3951636f595e59f08b43beea77ebc43"
+checksum = "edfd6a2b50abd7d9d8765dda065937a3f33f95344dc9d46e637b916a793f2fad"
 dependencies = [
  "ahash",
  "async-trait",
@@ -1423,9 +1423,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-state-manager"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "454d2f4fb8b9a93ee1be85bb3a640f8a7e97d5a2443cc6c209a62247ffaff2df"
+checksum = "701d9b54bca1090b22a8d42e0cbdbcb9349195a946b13171db9c143489897568"
 dependencies = [
  "ahash",
  "atomic-polyfill",
@@ -1439,9 +1439,9 @@ dependencies = [
 
 [[package]]
 name = "feagi-structures"
-version = "0.0.1-beta.22"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5021af10d4e538f74f27e9ea50099c7d1e4560eed39de006aeb7859e80d1b085"
+checksum = "1d15c14ed8eeacfc88f0dc84fbfa579acf94c76bd366cd7c8e49e6e9c595f9d9"
 dependencies = [
  "base64 0.22.1",
  "futures-channel",
@@ -2299,9 +2299,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
@@ -2329,9 +2329,31 @@ dependencies = [
 
 [[package]]
 name = "jni-sys"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eaf4bc02d17cbdd7ff4c7438cafcdf7fb9a4613313ad11b4f8fefe7d3fa0130"
+checksum = "41a652e1f9b6e0275df1f15b32661cf0d4b78d4d87ddec5e0c3c20f097433258"
+dependencies = [
+ "jni-sys 0.4.1",
+]
+
+[[package]]
+name = "jni-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6377a88cb3910bee9b0fa88d4f42e1d2da8e79915598f65fb0c7ee14c878af2"
+dependencies = [
+ "jni-sys-macros",
+]
+
+[[package]]
+name = "jni-sys-macros"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "jobserver"
@@ -2679,7 +2701,7 @@ version = "0.5.0+25.2.9519653"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c196769dd60fd4f363e11d948139556a344e79d451aeb2fa2fd040738ef7691"
 dependencies = [
- "jni-sys",
+ "jni-sys 0.3.1",
 ]
 
 [[package]]
@@ -3031,9 +3053,9 @@ checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "portable-atomic-util"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a9db96d7fa8782dd8c15ce32ffe8680bbd1e978a43bf51a34d39483540495f5"
+checksum = "091397be61a01d4be58e7841595bd4bfedb15f1cd54977d79b8271e94ed799a3"
 dependencies = [
  "portable-atomic",
 ]
@@ -3628,9 +3650,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.9"
+version = "0.103.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7df23109aa6c1567d1c575b9952556388da57401e4ace1d15f79eedad0d8f53"
+checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4164,9 +4186,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa5fdc3bce6191a1dbc8c02d5c8bffcf557bafa17c124c5264a458f1b0613fa"
+checksum = "3e61e67053d25a4e82c844e8424039d9745781b3fc4f32b8d55ed50f5f667ef3"
 dependencies = [
  "tinyvec_macros",
 ]
@@ -4411,9 +4433,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-subscriber"
-version = "0.3.22"
+version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f30143827ddab0d256fd843b7a66d164e9f271cfa0dde49142c5ca0ca291f1e"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -5485,18 +5507,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.42"
+version = "0.8.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2578b716f8a7a858b7f02d5bd870c14bf4ddbbcf3a4c05414ba6503640505e3"
+checksum = "efbb2a062be311f2ba113ce66f697a4dc589f85e78a4aea276200804cea0ed87"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.42"
+version = "0.8.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6cc098ea4d3bd6246687de65af3f920c430e236bee1e3bf2e441463f08a02f"
+checksum = "0e8bc7269b54418e7aeeef514aa68f8690b8c0489a06b0136e5f57c4c5ccab89"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5630,9 +5652,9 @@ dependencies = [
 
 [[package]]
 name = "zune-jpeg"
-version = "0.5.13"
+version = "0.5.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec5f41c76397b7da451efd19915684f727d7e1d516384ca6bd0ec43ec94de23c"
+checksum = "0b7a1c0af6e5d8d1363f4994b7a091ccf963d8b694f7da5b0b9cceb82da2c0a6"
 dependencies = [
  "zune-core",
 ]
