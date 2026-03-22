@@ -15,7 +15,9 @@ use feagi_brain_development::ConnectomeManager;
 use feagi_config::FeagiConfig;
 use feagi_io::{AgentID, SensoryIntakeQueue};
 use feagi_npu_burst_engine::backend::GpuConfig;
-use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, RustNPU, SensoryIntake, TracingMutex};
+use feagi_npu_burst_engine::{
+    BurstLoopRunner, DynamicNPU, RustNPU, SensoryIngressPayload, SensoryIntake, TracingMutex,
+};
 use feagi_services::impls::{AgentServiceImpl, SystemServiceImpl};
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::*;
@@ -427,8 +429,13 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         queue: Arc<SensoryIntakeQueue>,
     }
     impl SensoryIntake for SensoryIntakeAdapter {
-        fn poll_sensory_data(&mut self) -> Result<Option<Vec<u8>>, String> {
-            Ok(self.queue.poll_next())
+        fn poll_sensory_data(&mut self) -> Result<Option<SensoryIngressPayload>, String> {
+            let packet = self.queue.poll_next().map(|packet| SensoryIngressPayload {
+                bytes: packet.bytes,
+                source_id: packet.source_id,
+                received_at: packet.received_at,
+            });
+            Ok(packet)
         }
     }
     burst_runner
