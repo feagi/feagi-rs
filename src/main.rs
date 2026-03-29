@@ -91,6 +91,16 @@ fn build_plasticity_config(config: &FeagiConfig) -> feagi_npu_plasticity::Plasti
 /// Mask for agent_data_hash to keep within JSON-safe integer range (BV expects int).
 const AGENT_HASH_SAFE_MASK: u64 = (1u64 << 53) - 1;
 
+/// Row from agent registration snapshot (handler loops / hashing).
+type AgentRegistrationRow = (
+    AgentID,
+    String,
+    feagi_agent::AgentDescriptor,
+    Vec<feagi_agent::AgentCapabilities>,
+    Option<serde_json::Value>,
+    Option<(String, f64)>,
+);
+
 fn hash_json_value_for_agent(value: &serde_json::Value, hasher: &mut DefaultHasher) {
     match value {
         serde_json::Value::Null => hasher.write_u8(0),
@@ -130,16 +140,7 @@ fn hash_json_value_for_agent(value: &serde_json::Value, hasher: &mut DefaultHash
 
 /// Updates StateManager agent_data_hash from FeagiAgentHandler's registered agents.
 /// BV polls health check and refreshes agent registry when this hash changes.
-fn update_agent_data_hash_from_registration_snapshot(
-    snapshot: &[(
-        AgentID,
-        String,
-        feagi_agent::AgentDescriptor,
-        Vec<feagi_agent::AgentCapabilities>,
-        Option<serde_json::Value>,
-        Option<(String, f64)>,
-    )],
-) {
+fn update_agent_data_hash_from_registration_snapshot(snapshot: &[AgentRegistrationRow]) {
     let mut agent_ids: Vec<&String> = snapshot.iter().map(|(_, id, ..)| id).collect();
     agent_ids.sort();
     let mut hasher = DefaultHasher::new();
@@ -226,9 +227,15 @@ struct Args {
     /// internal NPU trace emitters (power excluded).
     ///
     /// Optional filters:
+    /// - --npu-trace-chain-upstream / --npu-trace-chain-downstream <NEURON_ID> (CHAIN latency lines)
     /// - --npu-trace-src <NEURON_ID>
     /// - --npu-trace-dst <NEURON_ID>
     /// - --npu-trace-neuron <NEURON_ID>
+    /// - --npu-trace-cortical-idx <U32> (runtime cortical_idx; enables dynamics + FCL summary)
+    /// - --npu-trace-cortical-id <BASE64> (genome cortical id; enables synapse traces to that area;
+    ///   after genome load, cortical_idx is resolved for dynamics/FCL when idx not set explicitly)
+    ///
+    /// Synapse per-edge lines: set env `FEAGI_NPU_TRACE_SYNAPSE_VERBOSE=1` (default is summary only).
     #[arg(long)]
     npu_trace: bool,
 
@@ -251,6 +258,28 @@ struct Args {
     /// Filter dynamics traces to a single neuron id.
     #[arg(long)]
     npu_trace_neuron: Option<u32>,
+
+    /// Filter dynamics / FCL instrumentation to neurons with this runtime `cortical_idx`.
+    /// Implies dynamics tracing if `--npu-trace` / `--npu-trace-dynamics` are not set.
+    #[arg(long)]
+    npu_trace_cortical_idx: Option<u32>,
+
+    /// Filter synapse traces to edges whose **target** is in this cortical area (base64 id, e.g. from genome).
+    /// Implies synapse tracing if `--npu-trace` / `--npu-trace-synapse` are not set.
+    #[arg(long)]
+    npu_trace_cortical_id: Option<String>,
+
+    /// Log `CHAIN upstream_fired` / `CHAIN downstream_fired` with burst deltas (pair with downstream).
+    #[arg(long)]
+    npu_trace_chain_upstream: Option<u32>,
+
+    /// Log `CHAIN downstream_fired` with `delta_bursts_since_upstream` (pair with upstream).
+    #[arg(long)]
+    npu_trace_chain_downstream: Option<u32>,
+
+    /// After load: log every neuron id in the traced cortical area; each burst: `AREA_FIRES` with ids + inter-fire burst deltas. Use with `--npu-trace-cortical-idx` or `--npu-trace-cortical-id` (no coordinates).
+    #[arg(long)]
+    npu_trace_area_fire_ids: bool,
 }
 
 #[tokio::main]
@@ -259,7 +288,15 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Configure NPU tracing BEFORE logging initialization (trace config is cached via OnceLock)
-    let enable_any_trace = args.npu_trace || args.npu_trace_synapse || args.npu_trace_dynamics;
+    let enable_any_trace = args.npu_trace
+        || args.npu_trace_synapse
+        || args.npu_trace_dynamics
+        || args.npu_trace_cortical_idx.is_some()
+        || args.npu_trace_cortical_id.is_some()
+        || args.npu_trace_chain_upstream.is_some()
+        || args.npu_trace_chain_downstream.is_some()
+        || args.npu_trace_area_fire_ids;
+
     if enable_any_trace {
         // Gate emitters
         if args.npu_trace || args.npu_trace_synapse {
@@ -276,6 +313,30 @@ async fn main() -> Result<()> {
         }
         if let Some(n) = args.npu_trace_neuron {
             std::env::set_var("FEAGI_NPU_TRACE_NEURON", n.to_string());
+        }
+        if let Some(idx) = args.npu_trace_cortical_idx {
+            std::env::set_var("FEAGI_NPU_TRACE_CORTICAL_IDX", idx.to_string());
+            if !(args.npu_trace || args.npu_trace_dynamics) {
+                std::env::set_var("FEAGI_NPU_TRACE_DYNAMICS", "1");
+            }
+        }
+        if let Some(ref id) = args.npu_trace_cortical_id {
+            std::env::set_var("FEAGI_NPU_TRACE_CORTICAL_ID", id.trim());
+            if !(args.npu_trace || args.npu_trace_synapse) {
+                std::env::set_var("FEAGI_NPU_TRACE_SYNAPSE", "1");
+            }
+        }
+        if let Some(u) = args.npu_trace_chain_upstream {
+            std::env::set_var("FEAGI_NPU_TRACE_CHAIN_UPSTREAM", u.to_string());
+        }
+        if let Some(d) = args.npu_trace_chain_downstream {
+            std::env::set_var("FEAGI_NPU_TRACE_CHAIN_DOWNSTREAM", d.to_string());
+        }
+        if args.npu_trace_area_fire_ids {
+            std::env::set_var("FEAGI_NPU_TRACE_AREA_FIRE_IDS", "1");
+            if !(args.npu_trace || args.npu_trace_dynamics) {
+                std::env::set_var("FEAGI_NPU_TRACE_DYNAMICS", "1");
+            }
         }
     }
 
@@ -407,9 +468,10 @@ async fn main() -> Result<()> {
         // This prevents per-cycle re-check spam while still retrying until first success.
         let auto_created_descriptors: Arc<Mutex<HashSet<feagi_agent::AgentDescriptor>>> =
             Arc::new(Mutex::new(HashSet::new()));
-        // Rate-limit "Deferring motor registration" log per agent to avoid spam (loop polls every ~10ms).
-        let deferred_motor_log_last: Arc<Mutex<HashMap<AgentID, std::time::Instant>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        // Log "Deferring motor registration" only once per agent-id until registration recovers.
+        // This prevents startup/restart loops from flooding logs every polling cycle.
+        let deferred_motor_logged_agents: Arc<Mutex<HashSet<String>>> =
+            Arc::new(Mutex::new(HashSet::new()));
 
         let api_state_holder = api_state_holder_for_polling;
 
@@ -527,14 +589,7 @@ async fn main() -> Result<()> {
                     serde_json::Value,
                 )> = Vec::new();
 
-                let mut registration_snapshot: Vec<(
-                    AgentID,
-                    String,
-                    feagi_agent::AgentDescriptor,
-                    Vec<feagi_agent::AgentCapabilities>,
-                    Option<serde_json::Value>,
-                    Option<(String, f64)>,
-                )> = Vec::new();
+                let mut registration_snapshot: Vec<AgentRegistrationRow> = Vec::new();
 
                 {
                     let handler_guard = agent_handler_for_loop.lock().unwrap();
@@ -570,10 +625,14 @@ async fn main() -> Result<()> {
                         .map(|(_, _, descriptor, ..)| descriptor.clone())
                         .collect();
 
-                // Prune rate-limit state for disconnected agents.
+                // Prune deferral-log state for disconnected agents.
                 {
-                    let mut log_guard = deferred_motor_log_last.lock().unwrap();
-                    log_guard.retain(|sid, _| current_sessions.contains(sid));
+                    let current_agent_ids: HashSet<String> = registration_snapshot
+                        .iter()
+                        .map(|(_, agent_id, ..)| agent_id.clone())
+                        .collect();
+                    let mut logged_guard = deferred_motor_logged_agents.lock().unwrap();
+                    logged_guard.retain(|agent_id| current_agent_ids.contains(agent_id));
                 }
 
                 // Detect agents that were registered but are no longer present (deregistered).
@@ -679,88 +738,104 @@ async fn main() -> Result<()> {
                 }
 
                 // Pass 2: Derive motor cortical IDs and build pending_motor.
-                for (
-                    session_id,
-                    agent_id,
-                    agent_descriptor,
-                    capabilities,
-                    device_regs_opt,
-                    _viz_registration_opt,
-                ) in &registration_snapshot
-                {
-                    if !capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveMotorData) {
-                        continue;
-                    }
-
-                    let motor_cortical_ids: Vec<String> = if let Some(device_regs) = device_regs_opt
+                // Gate motor registration attempts until API/connectome state is ready.
+                // During startup/restart, agents can connect before genome/connectome is ready,
+                // which causes repeated unresolved motor-ID resolution attempts.
+                let motor_registration_ready = api_state_holder
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|api| !api.genome_transition_in_progress.load(Ordering::SeqCst))
+                    .unwrap_or(false);
+                if motor_registration_ready {
+                    for (
+                        session_id,
+                        agent_id,
+                        agent_descriptor,
+                        capabilities,
+                        device_regs_opt,
+                        _viz_registration_opt,
+                    ) in &registration_snapshot
                     {
-                        match derive_motor_cortical_ids_from_device_registrations(device_regs) {
-                            Ok(ids) => ids.into_iter().collect(),
-                            Err(e) => {
-                                warn!(
-                                    "⚠️ [WS-REGISTRATION] Failed deriving motor cortical IDs from device registrations: {}",
-                                    e
-                                );
-                                Vec::new()
-                            }
+                        if !capabilities.contains(&feagi_agent::AgentCapabilities::ReceiveMotorData)
+                        {
+                            continue;
                         }
-                    } else {
-                        debug!(
-                            "[MOTOR-REG] No device registrations for agent '{}' (descriptor {:?}); using connectome output areas as fallback",
-                            agent_id,
-                            agent_descriptor
-                        );
-                        let connectome_guard = connectome_manager_for_polling.read();
-                        connectome_guard
-                            .get_cortical_area_ids()
-                            .iter()
-                            .filter_map(|cortical_id| {
-                                connectome_guard
-                                    .get_cortical_area(cortical_id)
-                                    .filter(|area| area.is_output_area())
-                                    .map(|_| cortical_id.as_base_64())
-                            })
-                            .collect()
-                    };
 
-                    if motor_cortical_ids.is_empty() {
-                        let now = std::time::Instant::now();
-                        let should_log = {
-                            let mut log_guard = deferred_motor_log_last.lock().unwrap();
-                            let last = log_guard.get(session_id);
-                            let ok = last.map_or(true, |t| {
-                                now.duration_since(*t) >= std::time::Duration::from_secs(30)
-                            });
-                            if ok {
-                                log_guard.insert(*session_id, now);
+                        let motor_cortical_ids: Vec<String> = if let Some(device_regs) =
+                            device_regs_opt
+                        {
+                            match derive_motor_cortical_ids_from_device_registrations(device_regs) {
+                                Ok(ids) => ids.into_iter().collect(),
+                                Err(e) => {
+                                    warn!(
+                                        "⚠️ [WS-REGISTRATION] Failed deriving motor cortical IDs from device registrations: {}",
+                                        e
+                                    );
+                                    Vec::new()
+                                }
                             }
-                            ok
-                        };
-                        if should_log {
-                            info!(
-                                "[MOTOR-REG] Deferring motor registration for agent '{}' (no motor cortical IDs resolved)",
-                                agent_id
-                            );
-                        }
-                    } else {
-                        let desired_set: HashSet<String> =
-                            motor_cortical_ids.iter().cloned().collect();
-                        let current_set = known_motor_subscriptions
-                            .lock()
-                            .unwrap()
-                            .get(session_id)
-                            .cloned()
-                            .unwrap_or_default();
-                        let needs_update =
-                            !known_motor_sessions.lock().unwrap().contains(session_id)
-                                || current_set != desired_set;
-                        if needs_update {
+                        } else {
                             debug!(
-                                "[MOTOR-REG] Scheduling motor subscription update for agent '{}' with {} cortical IDs",
+                                "[MOTOR-REG] No device registrations for agent '{}' (descriptor {:?}); using connectome output areas as fallback",
                                 agent_id,
-                                motor_cortical_ids.len()
+                                agent_descriptor
                             );
-                            pending_motor.push((*session_id, agent_id.clone(), motor_cortical_ids));
+                            let connectome_guard = connectome_manager_for_polling.read();
+                            connectome_guard
+                                .get_cortical_area_ids()
+                                .iter()
+                                .filter_map(|cortical_id| {
+                                    connectome_guard
+                                        .get_cortical_area(cortical_id)
+                                        .filter(|area| area.is_output_area())
+                                        .map(|_| cortical_id.as_base_64())
+                                })
+                                .collect()
+                        };
+
+                        if motor_cortical_ids.is_empty() {
+                            let should_log = {
+                                let mut logged_guard = deferred_motor_logged_agents.lock().unwrap();
+                                logged_guard.insert(agent_id.clone())
+                            };
+                            if should_log {
+                                info!(
+                                    "[MOTOR-REG] Deferring motor registration for agent '{}' (no motor cortical IDs resolved)",
+                                    agent_id
+                                );
+                            }
+                        } else {
+                            let desired_set: HashSet<String> =
+                                motor_cortical_ids.iter().cloned().collect();
+                            let current_set = known_motor_subscriptions
+                                .lock()
+                                .unwrap()
+                                .get(session_id)
+                                .cloned()
+                                .unwrap_or_default();
+                            let needs_update =
+                                !known_motor_sessions.lock().unwrap().contains(session_id)
+                                    || current_set != desired_set;
+                            if needs_update {
+                                // Registration is now active for this agent; allow a future deferral
+                                // message if it later loses motor cortical IDs again.
+                                {
+                                    let mut logged_guard =
+                                        deferred_motor_logged_agents.lock().unwrap();
+                                    logged_guard.remove(agent_id);
+                                }
+                                debug!(
+                                    "[MOTOR-REG] Scheduling motor subscription update for agent '{}' with {} cortical IDs",
+                                    agent_id,
+                                    motor_cortical_ids.len()
+                                );
+                                pending_motor.push((
+                                    *session_id,
+                                    agent_id.clone(),
+                                    motor_cortical_ids,
+                                ));
+                            }
                         }
                     }
                 }
@@ -1486,12 +1561,9 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     )));
     info!("    ✓ BurstLoopRunner initialized ({:.0}Hz)", burst_hz);
 
-    let runtime_service = Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)));
-    info!("    ✓ Runtime service created");
-
-    // Initialize plasticity executor (if plasticity feature enabled)
+    // Initialize plasticity executor (if plasticity feature enabled) BEFORE RuntimeService
     #[cfg(feature = "plasticity")]
-    let (plasticity_executor, memory_stats_cache, use_post_burst_processor) = {
+    let (plasticity_executor, memory_stats_cache, use_post_burst_processor, plasticity_service) = {
         use feagi_npu_plasticity::{
             create_memory_stats_cache, AsyncPlasticityExecutor, PlasticityExecutor,
         };
@@ -1519,6 +1591,9 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             PlasticityExecutor::start(&mut *exec);
         }
 
+        // Get PlasticityService for RuntimeService wiring
+        let plasticity_service = executor.lock().unwrap().get_service().map(Arc::new);
+
         info!("  🔗 Wiring PlasticityExecutor into ConnectomeManager...");
         // Wire plasticity executor into ConnectomeManager for automatic memory area registration
         ConnectomeManager::instance()
@@ -1535,18 +1610,37 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
         info!("║     • STDP synaptic plasticity: ENABLED                       ║");
         info!("║     • Background processing thread: ACTIVE                    ║");
         info!("╚═══════════════════════════════════════════════════════════════╝");
-        (Some(executor), Some(cache), use_post_burst_processor)
+        (
+            Some(executor),
+            Some(cache),
+            use_post_burst_processor,
+            plasticity_service,
+        )
     };
 
     #[cfg(not(feature = "plasticity"))]
-    let (plasticity_executor, memory_stats_cache, use_post_burst_processor): (
+    let (plasticity_executor, memory_stats_cache, use_post_burst_processor, plasticity_service): (
         Option<()>,
         Option<()>,
         bool,
+        Option<Arc<feagi_npu_plasticity::PlasticityService>>,
     ) = {
         info!("  ℹ️  Plasticity feature disabled (compiled without --features plasticity)");
-        (None, None, false)
+        (None, None, false, None)
     };
+
+    // Create RuntimeService with plasticity support if available
+    let runtime_service = if let Some(service) = plasticity_service {
+        info!("    ✓ Creating Runtime service WITH plasticity support");
+        Arc::new(RuntimeServiceImpl::new_with_plasticity(
+            Arc::clone(&burst_runner),
+            service,
+        ))
+    } else {
+        info!("    ✓ Creating Runtime service WITHOUT plasticity support");
+        Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)))
+    };
+    info!("    ✓ Runtime service created");
 
     // Wire up bidirectional connections between PNS and BurstLoopRunner
     info!("  Wiring PNS ↔ BurstLoopRunner connections...");
@@ -1622,6 +1716,63 @@ async fn load_genome_with_agent_handler(
     info!("    [GENOME-LOAD] Step 4: Complete");
 
     Ok(Some(simulation_timestep))
+}
+
+/// Lookup runtime cortical index from base64 cortical id (post-neurogenesis).
+fn lookup_cortical_idx_from_trace_cortical_id(
+    npu: &feagi_npu_burst_engine::DynamicNPU,
+    id_b64: &str,
+) -> Option<u32> {
+    use feagi_structures::genomic::cortical_area::CorticalID;
+    CorticalID::try_from_base_64(id_b64.trim())
+        .ok()
+        .and_then(|cid| npu.get_cortical_area_id(&cid.as_base_64()))
+}
+
+/// True when CLI idx and id-resolved idx both exist and differ (FCL vs synapse trace mismatch).
+fn cortical_trace_cli_disagrees_with_id_lookup(cli: Option<u32>, idx_from_id: Option<u32>) -> bool {
+    matches!((cli, idx_from_id), (Some(a), Some(b)) if a != b)
+}
+
+fn warn_if_npu_trace_cortical_idx_and_id_mismatch(
+    args: &Args,
+    npu: &feagi_npu_burst_engine::DynamicNPU,
+) {
+    let (Some(cli_idx), Some(id_b64)) = (
+        args.npu_trace_cortical_idx,
+        args.npu_trace_cortical_id.as_ref(),
+    ) else {
+        return;
+    };
+    let Some(id_idx) = lookup_cortical_idx_from_trace_cortical_id(npu, id_b64) else {
+        return;
+    };
+    if cortical_trace_cli_disagrees_with_id_lookup(Some(cli_idx), Some(id_idx)) {
+        tracing::warn!(
+            target: "feagi-npu-trace",
+            cli_cortical_idx = cli_idx,
+            cortical_id_base64 = id_b64.trim(),
+            resolved_cortical_idx_from_id = id_idx,
+            "NPU trace: --npu-trace-cortical-idx does not match the runtime index for --npu-trace-cortical-id. FCL/dynamics/AREA_FIRES use the CLI idx; synapse trace filters by postsynaptic cortical id. Logs will disagree until both refer to the same cortical area."
+        );
+    }
+}
+
+/// Resolve trace cortical index for FCL/dynamics: `--npu-trace-cortical-idx` wins, else lookup from id.
+///
+/// When both CLI idx and id are set, the idx is returned without validating id; synapse trace still
+/// filters by [`FEAGI_NPU_TRACE_CORTICAL_ID`]. Call [`warn_if_npu_trace_cortical_idx_and_id_mismatch`]
+/// to detect inconsistent pairs.
+fn resolve_npu_trace_cortical_idx(
+    args: &Args,
+    npu: &feagi_npu_burst_engine::DynamicNPU,
+) -> Option<u32> {
+    if let Some(idx) = args.npu_trace_cortical_idx {
+        return Some(idx);
+    }
+    args.npu_trace_cortical_id
+        .as_deref()
+        .and_then(|id| lookup_cortical_idx_from_trace_cortical_id(npu, id))
 }
 
 /// Start all FEAGI services (API, ZMQ, Burst Engine)
@@ -1849,6 +2000,77 @@ async fn start_services(
         info!("    ⚠️  Data streams will not start until genome is loaded");
     }
 
+    // @npu-debug-instrumentation: resolve cortical_id -> cortical_idx; optional full-area neuron id list
+    if args.genome.is_some() {
+        use feagi_npu_burst_engine::set_runtime_trace_cortical_idx;
+
+        let npu = components.npu.lock().unwrap();
+        let idx_resolved = resolve_npu_trace_cortical_idx(args, &npu);
+
+        warn_if_npu_trace_cortical_idx_and_id_mismatch(args, &npu);
+
+        // Log id -> idx from NPU vs effective idx for FCL (CLI idx overrides id lookup).
+        if let Some(ref id_b64) = args.npu_trace_cortical_id {
+            match lookup_cortical_idx_from_trace_cortical_id(&npu, id_b64) {
+                Some(idx_from_id) => {
+                    tracing::info!(
+                        target: "feagi-npu-trace",
+                        cortical_id_base64 = id_b64.trim(),
+                        cortical_idx_from_id = idx_from_id,
+                        effective_cortical_idx_for_fcl = idx_resolved,
+                        "NPU trace: cortical_id maps to cortical_idx (post-neurogenesis); FCL/dynamics use effective idx (CLI --npu-trace-cortical-idx wins when set)"
+                    );
+                }
+                None => {
+                    tracing::warn!(
+                        target: "feagi-npu-trace",
+                        cortical_id_base64 = id_b64.trim(),
+                        "NPU trace: could not resolve cortical_id to cortical_idx (unknown id or parse error)"
+                    );
+                }
+            }
+        }
+
+        // Dynamics/FCL/AREA_FIRES need cortical_idx: set runtime atomic + env when only cortical_id was given.
+        // Include --npu-trace-area-fire-ids (not only --npu-trace) so id-only + area fires works.
+        let needs_runtime_idx_from_id = args.npu_trace_cortical_idx.is_none()
+            && args.npu_trace_cortical_id.is_some()
+            && (args.npu_trace || args.npu_trace_dynamics || args.npu_trace_area_fire_ids);
+
+        if needs_runtime_idx_from_id {
+            set_runtime_trace_cortical_idx(idx_resolved);
+            if let Some(idx) = idx_resolved {
+                std::env::set_var("FEAGI_NPU_TRACE_CORTICAL_IDX", idx.to_string());
+            }
+        }
+
+        if args.npu_trace_area_fire_ids {
+            match idx_resolved {
+                Some(idx) => {
+                    let ids = npu.get_neurons_in_cortical_area(idx);
+                    tracing::info!(
+                        target: "feagi-npu-trace",
+                        cortical_idx = idx,
+                        neuron_count = ids.len(),
+                        neuron_ids = ?ids,
+                        "NPU trace: all neuron ids in cortical area (post-neurogenesis)"
+                    );
+                }
+                None => {
+                    tracing::warn!(
+                        target: "feagi-npu-trace",
+                        "NPU trace: --npu-trace-area-fire-ids requires a resolvable --npu-trace-cortical-id or --npu-trace-cortical-idx"
+                    );
+                }
+            }
+        }
+    } else if args.npu_trace_area_fire_ids {
+        tracing::warn!(
+            target: "feagi-npu-trace",
+            "NPU trace: --npu-trace-area-fire-ids requires --genome so the connectome/NPU are populated"
+        );
+    }
+
     // Make ApiState available to polling loop for auto_create when device_registrations arrive.
     // Set after genome load so cortical area creation has a valid connectome.
     *api_state_holder.lock().unwrap() = Some(Arc::new(api_state.clone()));
@@ -2018,6 +2240,14 @@ async fn start_services(
                                     PlasticityCommand::UpdateStateCounters { .. } => {
                                         // Stats tracking only, no NPU action needed
                                     }
+                                    PlasticityCommand::ResetMemoryNeuronsInArea { cortical_idx } => {
+                                        debug!(
+                                            "[PLASTICITY-CMD] Memory neurons reset in cortical area {}",
+                                            cortical_idx
+                                        );
+                                        // Memory neuron reset is handled by PlasticityService.reset_memory_neurons_in_area()
+                                        // This command is for notification/logging only
+                                    }
                                 }
                             }
                         }
@@ -2155,4 +2385,27 @@ fn print_banner() {
 ╚═══════════════════════════════════════════════════════════════════╝
 "#
     );
+}
+
+#[cfg(test)]
+mod npu_trace_resolve_tests {
+    #[test]
+    fn cortical_trace_cli_disagrees_with_id_lookup_cases() {
+        assert!(!super::cortical_trace_cli_disagrees_with_id_lookup(
+            None,
+            Some(3)
+        ));
+        assert!(!super::cortical_trace_cli_disagrees_with_id_lookup(
+            Some(2),
+            None
+        ));
+        assert!(!super::cortical_trace_cli_disagrees_with_id_lookup(
+            Some(2),
+            Some(2)
+        ));
+        assert!(super::cortical_trace_cli_disagrees_with_id_lookup(
+            Some(2),
+            Some(3)
+        ));
+    }
 }

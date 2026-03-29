@@ -835,9 +835,9 @@ fn register_vision_device(
             unit_index,
             channel_count,
             frame_change_handling,
-            image_props.clone(),
-            segmented_props.clone(),
-            initial_gaze.clone(),
+            image_props,
+            segmented_props,
+            initial_gaze,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("Failed to register segmented vision device")?;
