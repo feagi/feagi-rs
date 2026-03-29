@@ -1,12 +1,9 @@
-# Local development override template
+# Patch crates.io feagi-* dependencies to the sibling `feagi-core` workspace (monorepo layout).
 #
-# Usage:
-# - Copy this file to `feagi-rs/.cargo/config.toml`
-# - Edit paths if your repo layout differs
-# - The real `feagi-rs/.cargo/config.toml` is intentionally gitignored
+# Paths assume `feagi-rs` and `feagi-core` are side-by-side (e.g. FEAGI-2.0/feagi-rs and FEAGI-2.0/feagi-core).
+# To use registry crates instead, remove or rename this file.
 #
-# This lets `feagi-rs` depend on crates.io in CI/staging/main while you can
-# rapidly iterate against local `../feagi-core` crates during development.
+# Keep entries in sync with every `feagi-*` dependency in feagi-rs/Cargo.toml (dependencies + dev-dependencies).
 
 [patch.crates-io]
 feagi-api = { path = "../feagi-core/crates/feagi-api" }

@@ -1,6 +1,6 @@
 [package]
 name = "feagi-rs"
-version = "0.0.24"
+version = "0.0.25"
 edition = "2021"
 authors = ["Neuraville Inc. <feagi@neuraville.com>"]
 license = "Apache-2.0"
@@ -21,25 +21,27 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-# FEAGI Core Components (crates.io)
-# - Use ^ to pick up latest compatible; run `cargo update` to refresh.
-# - Local dev: override via `feagi-rs/.cargo/config.toml` [patch.crates-io].
-# - CI/release: pin with `cargo build --locked` and Cargo.lock.
-feagi-npu-neural = { version = "^0.0.2" }
-feagi-structures = { version = "^0.0.2" }
-feagi-npu-runtime = { version = "^0.0.2", features = ["std"] }
-feagi-config = { version = "^0.0.2" }
+# FEAGI Core Components
+# - Cargo.toml uses crates.io version reqs (^0.0.4) for publish/CI compatibility.
+# - Local monorepo dev: `feagi-rs/.cargo/config.toml` [patch.crates-io] redirects every
+#   feagi-* crate below to `../feagi-core/crates/...` so builds always use sibling sources.
+# - After changing feagi-core, run `cargo build` / `cargo test` in feagi-rs (no crates.io sync).
+# - Release/locked CI: `cargo build --locked` uses Cargo.lock (still patched when config present).
+feagi-npu-neural = { version = "^0.0.4" }
+feagi-structures = { version = "^0.0.4" }
+feagi-npu-runtime = { version = "^0.0.4", features = ["std"] }
+feagi-config = { version = "^0.0.4" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "^0.0.2" }
-feagi-brain-development = { version = "^0.0.2" }
-feagi-evolutionary = { version = "^0.0.2" }
-feagi-services = { version = "^0.0.2" }
-feagi-api = { version = "^0.0.2", features = ["services"] }
-feagi-io = { version = "^0.0.2", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
-feagi-agent = { version = "^0.0.2", features = ["agent-server", "agent-client-asynchelper-tokio"] }
-feagi-state-manager = { version = "^0.0.2" }
-feagi-npu-plasticity = { version = "^0.0.2" }
-feagi-serialization = { version = "^0.0.2" }
+feagi-npu-burst-engine = { version = "^0.0.4" }
+feagi-brain-development = { version = "^0.0.4" }
+feagi-evolutionary = { version = "^0.0.4" }
+feagi-services = { version = "^0.0.4" }
+feagi-api = { version = "^0.0.4", features = ["services"] }
+feagi-io = { version = "^0.0.4", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
+feagi-agent = { version = "^0.0.4", features = ["agent-server", "agent-client-asynchelper-tokio"] }
+feagi-state-manager = { version = "^0.0.4" }
+feagi-npu-plasticity = { version = "^0.0.4" }
+feagi-serialization = { version = "^0.0.4" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -49,7 +51,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "^0.0.2" }
+feagi-observability = { version = "^0.0.4" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
@@ -86,7 +88,7 @@ tempfile = "3.8"
 serde_json = "1.0"
 
 # Example dependencies
-feagi-sensorimotor = { version = "^0.0.2" }
+feagi-sensorimotor = { version = "^0.0.4" }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [profile.release]

@@ -266,6 +266,14 @@ pub fn wire_plasticity_callbacks(
                         warn!("[PLASTICITY-CMD] STDP weight updates not yet implemented");
                     }
                     feagi_npu_plasticity::PlasticityCommand::UpdateStateCounters { .. } => {}
+                    feagi_npu_plasticity::PlasticityCommand::ResetMemoryNeuronsInArea {
+                        cortical_idx,
+                    } => {
+                        debug!(
+                            "[PLASTICITY-CMD] Memory neurons reset in cortical area {}",
+                            cortical_idx
+                        );
+                    }
                 }
             }
         }
