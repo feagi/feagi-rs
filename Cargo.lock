@@ -1087,6 +1087,8 @@ dependencies = [
 [[package]]
 name = "feagi-agent"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3567c0cff50b4500a644177a06cf1a551dc16352eeb8766ad34743fda337f8a"
 dependencies = [
  "base64 0.22.1",
  "feagi-io",
@@ -1103,6 +1105,8 @@ dependencies = [
 [[package]]
 name = "feagi-api"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "172815ff82c004aac7bcbcd456ae1c130fae2252a99d908a9574e9ff576a374b"
 dependencies = [
  "async-trait",
  "axum",
@@ -1142,6 +1146,8 @@ dependencies = [
 [[package]]
 name = "feagi-brain-development"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1306638f5a06a906c0ecbc1caaf7f1aacd9498b918241ba0a33f243e694e1fa"
 dependencies = [
  "ahash",
  "chrono",
@@ -1169,6 +1175,8 @@ dependencies = [
 [[package]]
 name = "feagi-config"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b301b1b1af3a9c34e7e73ef276e170803ad72ae9278b156fa23fb980606d6a8"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -1178,6 +1186,8 @@ dependencies = [
 [[package]]
 name = "feagi-evolutionary"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "399d051817db5c5972014fe247c012669834c6bb2e664988af7ac4fe0fa0ae30"
 dependencies = [
  "chrono",
  "feagi-npu-neural",
@@ -1197,6 +1207,8 @@ dependencies = [
 [[package]]
 name = "feagi-io"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0959d70f983a71042204f263b7203ea72dbb792b8b7aeff17a59e894f7176fcf"
 dependencies = [
  "base64 0.22.1",
  "feagi-serialization",
@@ -1209,6 +1221,8 @@ dependencies = [
 [[package]]
 name = "feagi-npu-burst-engine"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fc7a13f5d7a2e1d4be07c7d4cc71115591de33953b3d71c6a1fb8777ec71ca9"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1234,6 +1248,8 @@ dependencies = [
 [[package]]
 name = "feagi-npu-neural"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90391d6f6bae4b00153d51e36dfb0a4b5941eb2e15b76f0eda91c33e134e631a"
 dependencies = [
  "ahash",
  "serde",
@@ -1244,6 +1260,8 @@ dependencies = [
 [[package]]
 name = "feagi-npu-plasticity"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbc54101e66add8cd7c9c73d6c13e021b6feffc8cbe259978c253af85e29032a"
 dependencies = [
  "ahash",
  "feagi-npu-burst-engine",
@@ -1261,6 +1279,8 @@ dependencies = [
 [[package]]
 name = "feagi-npu-runtime"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea09b9208561d7632c0fba77c2fa0bf58e4c2ca602f54ff7a8af892cab13fa1a"
 dependencies = [
  "ahash",
  "feagi-npu-neural",
@@ -1271,6 +1291,8 @@ dependencies = [
 [[package]]
 name = "feagi-observability"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82460e2aa323ba8aea9ebadff9a47a2405b7ee6ab71b828f5bbca64ab4c98fc9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1323,6 +1345,8 @@ dependencies = [
 [[package]]
 name = "feagi-sensorimotor"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ee4ee22ef7afb46d6ea225180de03ee09022acbf8c6477506950cbd7135fa04"
 dependencies = [
  "feagi-serialization",
  "feagi-structures",
@@ -1338,6 +1362,8 @@ dependencies = [
 [[package]]
 name = "feagi-serialization"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bbfef5222487f3e0fd6341c2dfea265ffcb6e43db130a12437d113688863e90"
 dependencies = [
  "byteorder",
  "feagi-structures",
@@ -1348,6 +1374,8 @@ dependencies = [
 [[package]]
 name = "feagi-services"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3b2016106447fb7f4512a2d01b73a0185596e44b7311465af7590c6f09af664"
 dependencies = [
  "ahash",
  "async-trait",
@@ -1372,6 +1400,8 @@ dependencies = [
 [[package]]
 name = "feagi-state-manager"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae29da302b1b1957b1469e0ed106e9c3ddb47577285a195749b71c3e7e15efc5"
 dependencies = [
  "ahash",
  "atomic-polyfill",
@@ -1386,6 +1416,8 @@ dependencies = [
 [[package]]
 name = "feagi-structures"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1637d2bbf3f2d8ae0572237d45e7643d6312563b4ea2454b12367f0c097c01df"
 dependencies = [
  "base64 0.22.1",
  "futures-channel",
