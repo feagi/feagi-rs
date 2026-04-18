@@ -1881,6 +1881,16 @@ async fn start_services(
     let (genome_transition_lock, genome_transition_in_progress) =
         ApiState::init_genome_transition_controls();
 
+    let filesystem_data_root = ApiState::filesystem_data_root_from_config(&config.system.data_dir);
+    info!(
+        "    ✓ Filesystem data root ([system].data_dir / FEAGI_DATA_DIR, else ~/.feagi): {}",
+        filesystem_data_root.display()
+    );
+    info!(
+        "    ✓ Default genome autosave dir: {}/cache/.genome/",
+        filesystem_data_root.display()
+    );
+
     let api_state = ApiState {
         network_connection_info_provider: Some(network_provider),
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
@@ -1896,6 +1906,7 @@ async fn start_services(
             snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>,
         ),
         feagi_session_timestamp,
+        filesystem_data_root,
         memory_stats_cache: components.memory_stats_cache.clone(),
         amalgamation_state: ApiState::init_amalgamation_state(),
         genome_transition_lock,
