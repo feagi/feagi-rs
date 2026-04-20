@@ -550,6 +550,8 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     let (genome_transition_lock, genome_transition_in_progress) =
         ApiState::init_genome_transition_controls();
 
+    let filesystem_data_root = ApiState::filesystem_data_root_from_config(&config.system.data_dir);
+
     let api_state = ApiState {
         network_connection_info_provider: Some(network_provider),
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
@@ -565,6 +567,7 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
             snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>,
         ),
         feagi_session_timestamp,
+        filesystem_data_root,
         #[cfg(feature = "plasticity")]
         memory_stats_cache: None, // Will be initialized with plasticity manager in main.rs
         #[cfg(not(feature = "plasticity"))]
