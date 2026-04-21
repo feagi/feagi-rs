@@ -1403,23 +1403,53 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
 
                 match job {
                     AgentPublishJob::Visualization { agent_id, fire_data } => {
+                        // Convert RawFireQueueSnapshot to the new quantization-generic
+                        // `CorticalMappedNeuronVoxelCoordVectors` using the standard
+                        // desktop-CPU primitive params (<f32, u32, u32, u16>). See
+                        // the matching conversion in `components.rs` for why a
+                        // placeholder dimension is used here — the wire format does
+                        // not carry dimensions (Phase 1b contract).
                         use feagi_serialization::FeagiByteContainer;
                         use feagi_structures::genomic::cortical_area::CorticalID;
-                        use feagi_structures::neuron_voxels::xyzp::{
-                            CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays,
+                        use feagi_structures::neuron_voxels::coord_potential::{
+                            CorticalMappedNeuronVoxelCoordVectors, NeuronVoxelCoordVector,
+                        };
+                        use feagi_structures::neuron_voxels::descriptors::{
+                            NeuronVoxelDimensions, NeuronVoxelPotential,
                         };
 
-                        let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
+                        let mut cortical_mapped: CorticalMappedNeuronVoxelCoordVectors<
+                            f32,
+                            u32,
+                            u32,
+                            u16,
+                        > = CorticalMappedNeuronVoxelCoordVectors::new();
+
+                        let placeholder_dims: NeuronVoxelDimensions<u32> =
+                            NeuronVoxelDimensions::<u32>::new(1, 1, 1).expect(
+                                "(1,1,1) is a valid non-zero placeholder dimension",
+                            );
+
                         for (_area_idx, fire_queue_data) in fire_data {
                             if let Ok(cortical_id) =
                                 CorticalID::try_from_base_64(&fire_queue_data.cortical_id)
                             {
-                                if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
-                                    fire_queue_data.coords_x,
-                                    fire_queue_data.coords_y,
-                                    fire_queue_data.coords_z,
-                                    fire_queue_data.potentials,
-                                ) {
+                                let potentials_wrapped: Vec<NeuronVoxelPotential<f32>> =
+                                    fire_queue_data
+                                        .potentials
+                                        .into_iter()
+                                        .map(NeuronVoxelPotential::from)
+                                        .collect();
+
+                                if let Ok(neuron_voxels) =
+                                    NeuronVoxelCoordVector::<f32, u32, u32>::from_parts(
+                                        placeholder_dims,
+                                        fire_queue_data.coords_x,
+                                        fire_queue_data.coords_y,
+                                        fire_queue_data.coords_z,
+                                        potentials_wrapped,
+                                    )
+                                {
                                     cortical_mapped.insert(cortical_id, neuron_voxels);
                                 }
                             }

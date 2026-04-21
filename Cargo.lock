@@ -25,6 +25,7 @@ checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
  "const-random",
+ "getrandom 0.3.4",
  "once_cell",
  "serde",
  "version_check",
@@ -426,20 +427,6 @@ name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "byteorder"
@@ -1099,8 +1086,6 @@ dependencies = [
 [[package]]
 name = "feagi-agent"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c85c6f0f041ef900eecf7f5b067a1b6c0f459c18ff8de26b3369de401917b8f"
 dependencies = [
  "base64 0.22.1",
  "feagi-io",
@@ -1117,8 +1102,6 @@ dependencies = [
 [[package]]
 name = "feagi-api"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a7f3a06990673475e6fdf4cb4a6b2137f9ebcb17475cb1daf0bbac490903da6"
 dependencies = [
  "async-trait",
  "axum",
@@ -1159,8 +1142,6 @@ dependencies = [
 [[package]]
 name = "feagi-brain-development"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e60d1418c5eaad9568b9c76f3b6ee7c098d9404e7a3e0b342a0b202ae9ea831"
 dependencies = [
  "ahash",
  "chrono",
@@ -1188,8 +1169,6 @@ dependencies = [
 [[package]]
 name = "feagi-config"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bf6f7d70825ec6afbe375c162e27a443bffb7ebc38520a34a63bf8b5cf6a770"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -1199,8 +1178,6 @@ dependencies = [
 [[package]]
 name = "feagi-evolutionary"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d78163672fcd0bcbfbb4ed87deb87d1670f6b1feacc816e27f16423558627ec2"
 dependencies = [
  "chrono",
  "feagi-npu-neural",
@@ -1220,8 +1197,6 @@ dependencies = [
 [[package]]
 name = "feagi-io"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0d6d86dc587be12dbb9c9e153a12ad923554ed953045440f499686090fcfdeb"
 dependencies = [
  "base64 0.22.1",
  "feagi-serialization",
@@ -1234,14 +1209,13 @@ dependencies = [
 [[package]]
 name = "feagi-npu-burst-engine"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c58fc43e4f1ad40b40a1f6e806d2d6b893b18a2f80ef932c454b81ee52e5dd"
 dependencies = [
  "ahash",
  "bytemuck",
  "chrono",
  "feagi-npu-neural",
  "feagi-npu-runtime",
+ "feagi-npu-structures",
  "feagi-observability",
  "feagi-serialization",
  "feagi-state-manager",
@@ -1261,8 +1235,6 @@ dependencies = [
 [[package]]
 name = "feagi-npu-neural"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22937aa785fa7e0adee0e1ba68439bdd23d89fb4cc5ecab636c88831b4b215e7"
 dependencies = [
  "ahash",
  "serde",
@@ -1273,8 +1245,6 @@ dependencies = [
 [[package]]
 name = "feagi-npu-plasticity"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bf3fb9eceac3fbf9cdfd296f27fa2e4a5a41da8831c39f8ddde60996dd37d2c"
 dependencies = [
  "ahash",
  "feagi-npu-burst-engine",
@@ -1292,8 +1262,6 @@ dependencies = [
 [[package]]
 name = "feagi-npu-runtime"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "279576f9e31d50184b7da88692a86e60f85cd1d55542ffa681170edc771c99bb"
 dependencies = [
  "ahash",
  "feagi-npu-neural",
@@ -1302,10 +1270,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "feagi-npu-structures"
+version = "0.0.10"
+dependencies = [
+ "ahash",
+ "feagi-structures",
+ "half",
+ "paste",
+ "rayon",
+ "serde",
+]
+
+[[package]]
 name = "feagi-observability"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e614c813c6332e26b91d74cebcdc3c23adda376ef2d2f48ee53c055e5fe3e4a9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1358,9 +1336,8 @@ dependencies = [
 [[package]]
 name = "feagi-sensorimotor"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a45f7c5d61e23c6940f682b71a6066972ed984eeeba1782cd2d22803a9ec1aff"
 dependencies = [
+ "feagi-evolutionary",
  "feagi-serialization",
  "feagi-structures",
  "image",
@@ -1375,8 +1352,6 @@ dependencies = [
 [[package]]
 name = "feagi-serialization"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97a61234c2a4ef9edc027049f0e4a3337d04d28f42d6432b172d643a2d0fea1f"
 dependencies = [
  "byteorder",
  "feagi-structures",
@@ -1387,8 +1362,6 @@ dependencies = [
 [[package]]
 name = "feagi-services"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8b7112ae77b2bc0f72cc512a63a9e2f17a7a8322529d3859803cd0a79c91a3a"
 dependencies = [
  "ahash",
  "async-trait",
@@ -1413,8 +1386,6 @@ dependencies = [
 [[package]]
 name = "feagi-state-manager"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd0627d6152b25e5c72681fb2d2b0da5591774aec96dcb57be419d44982dacd8"
 dependencies = [
  "ahash",
  "atomic-polyfill",
@@ -1429,23 +1400,17 @@ dependencies = [
 [[package]]
 name = "feagi-structures"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "111a86a571d71dbcbc59ea13735299f7f00231779ab48ac97ef7e1f9eb0edca8"
 dependencies = [
+ "ahash",
  "base64 0.22.1",
- "futures-channel",
- "futures-util",
- "js-sys",
+ "half",
  "ndarray",
  "paste",
  "rayon",
  "serde",
  "serde_json",
- "tokio",
+ "tracing",
  "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -1772,6 +1737,7 @@ checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
 dependencies = [
  "cfg-if",
  "crunchy",
+ "serde",
  "zerocopy",
 ]
 
