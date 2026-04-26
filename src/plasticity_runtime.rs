@@ -7,6 +7,8 @@
 use std::collections::{BTreeMap, HashMap};
 #[cfg(feature = "plasticity")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "plasticity")]
+use std::time::Instant;
 
 #[cfg(feature = "plasticity")]
 use feagi_brain_development::models::CorticalAreaExt;
@@ -19,7 +21,7 @@ use feagi_npu_burst_engine::{BurstLoopRunner, DynamicNPU, TracingMutex};
 #[cfg(feature = "plasticity")]
 use feagi_npu_neural::types::NeuronId;
 #[cfg(feature = "plasticity")]
-use feagi_npu_plasticity::{AsyncPlasticityExecutor, PlasticityExecutor};
+use feagi_npu_plasticity::AsyncPlasticityExecutor;
 #[cfg(feature = "plasticity")]
 use feagi_structures::genomic::cortical_area::CorticalID;
 #[cfg(feature = "plasticity")]
@@ -73,6 +75,7 @@ pub fn wire_plasticity_callbacks(
     let executor_for_post = Arc::clone(&executor);
     let npu_for_post = Arc::clone(&npu);
     burst_runner.write().set_post_burst_callback(move |timestep: u64| {
+        let callback_start = Instant::now();
         let Ok(exec) = executor_for_post.lock() else {
             warn!(
                 "[PLASTICITY-CMD] Post-burst lock failed at burst {}",
@@ -80,7 +83,42 @@ pub fn wire_plasticity_callbacks(
             );
             return;
         };
-        let commands = exec.drain_commands();
+        let (commands, max_ops_per_burst, deferred_commands) = match exec.get_service() {
+            Some(service) => {
+                let max_ops = service.max_ops_per_burst();
+                if max_ops == 0 {
+                    warn!(
+                        "[PLASTICITY-CMD] max_ops_per_burst is 0 at burst {} - skipping command processing",
+                        timestep
+                    );
+                    (Vec::new(), max_ops, service.pending_command_count())
+                } else {
+                    let pending_before = service.pending_command_count();
+                    let drained = service.dequeue_commands(max_ops);
+                    let deferred = pending_before.saturating_sub(drained.len());
+                    (drained, max_ops, deferred)
+                }
+            }
+            None => {
+                warn!(
+                    "[PLASTICITY-CMD] Post-burst service unavailable at burst {}",
+                    timestep
+                );
+                (Vec::new(), 0, 0)
+            }
+        };
+        drop(exec);
+
+        if deferred_commands > 0 {
+            debug!(
+                "[PLASTICITY-CMD] Burst {} command budget reached ({}/burst), deferred {} command(s)",
+                timestep,
+                max_ops_per_burst,
+                deferred_commands
+            );
+        }
+        let commands_processed = commands.len();
+        let command_phase_start = Instant::now();
         let scheduled_replays: Vec<(u64, ReplayInjection)> = Vec::new();
         if !commands.is_empty() {
             for cmd in commands {
@@ -277,12 +315,30 @@ pub fn wire_plasticity_callbacks(
                 }
             }
         }
+        let command_phase_ms = command_phase_start.elapsed().as_secs_f64() * 1000.0;
+        if command_phase_ms > 5.0 {
+            debug!(
+                "[PLASTICITY-CMD] Burst {} command phase took {:.2}ms",
+                timestep,
+                command_phase_ms
+            );
+        }
 
+        let fire_queue_phase_start = Instant::now();
         let fire_queue_sample = {
             let mut npu_lock = npu_for_post.lock().unwrap();
             npu_lock.force_sample_fire_queue()
         };
+        let fire_queue_phase_ms = fire_queue_phase_start.elapsed().as_secs_f64() * 1000.0;
+        if fire_queue_phase_ms > 5.0 {
+            debug!(
+                "[PLASTICITY-CMD] Burst {} fire-queue sampling phase took {:.2}ms",
+                timestep,
+                fire_queue_phase_ms
+            );
+        }
         if let Some(sample) = fire_queue_sample {
+            let ltm_bridge_phase_start = Instant::now();
             let ltm_twin_map = ltm_twin_map_for_post.lock().unwrap();
             let ltm_twin_reverse = ltm_twin_reverse_for_post.lock().unwrap();
             let mut fired_memory: HashMap<u32, f32> = HashMap::new();
@@ -360,6 +416,14 @@ pub fn wire_plasticity_callbacks(
                     }
                 }
             }
+            let ltm_bridge_phase_ms = ltm_bridge_phase_start.elapsed().as_secs_f64() * 1000.0;
+            if ltm_bridge_phase_ms > 5.0 {
+                debug!(
+                    "[PLASTICITY-CMD] Burst {} LTM bridge phase took {:.2}ms",
+                    timestep,
+                    ltm_bridge_phase_ms
+                );
+            }
         }
 
         if !scheduled_replays.is_empty() {
@@ -398,6 +462,25 @@ pub fn wire_plasticity_callbacks(
             debug!(
                 "[PLASTICITY-REPLAY] No replay injections scheduled for burst {}",
                 next_burst
+            );
+        }
+
+        let callback_elapsed_ms = callback_start.elapsed().as_secs_f64() * 1000.0;
+        if callback_elapsed_ms > 20.0 {
+            warn!(
+                "[PLASTICITY-CMD] Post-burst callback for burst {} took {:.2}ms (commands_processed={}, deferred={})",
+                timestep,
+                callback_elapsed_ms,
+                commands_processed,
+                deferred_commands
+            );
+        } else if callback_elapsed_ms > 5.0 {
+            debug!(
+                "[PLASTICITY-CMD] Post-burst callback for burst {} took {:.2}ms (commands_processed={}, deferred={})",
+                timestep,
+                callback_elapsed_ms,
+                commands_processed,
+                deferred_commands
             );
         }
 
