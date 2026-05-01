@@ -718,3 +718,122 @@ fn test_post_burst_memory_conversion_command_does_not_deadlock() {
         "Burst loop stalled while processing MemoryNeuronConvertedToLtm"
     );
 }
+
+#[test]
+fn test_post_burst_command_budget_defers_large_ltm_batches() {
+    let _test_lock = TEST_LOCK.lock().unwrap();
+    let runtime = StdRuntime;
+    let backend = CPUBackend::new();
+    let npu = Arc::new(TracingMutex::new(
+        DynamicNPU::INT8(
+            feagi_npu_burst_engine::RustNPU::new(runtime, backend, 100_000, 100_000, 10)
+                .expect("Failed to create NPU"),
+        ),
+        "TestNPU",
+    ));
+
+    let manager = ConnectomeManager::instance();
+    {
+        let mut mgr = manager.write();
+        mgr.set_npu(Arc::clone(&npu));
+        mgr.setup_core_morphologies_for_testing();
+    }
+
+    let m1_id = CorticalID::try_from_bytes(b"mmem0402").unwrap();
+    let m1_area = CorticalArea::new(
+        m1_id,
+        0,
+        "Memory M1".to_string(),
+        CorticalAreaDimensions::new(1, 1, 1).unwrap(),
+        (0, 0, 0).into(),
+        CorticalAreaType::Memory(MemoryCorticalType::Memory),
+    )
+    .unwrap();
+    let mut m1_area = m1_area;
+    m1_area
+        .properties
+        .insert("is_mem_type".to_string(), serde_json::json!(true));
+    m1_area
+        .properties
+        .insert("temporal_depth".to_string(), serde_json::json!(1));
+
+    {
+        let mut mgr = manager.write();
+        mgr.add_cortical_area(m1_area).unwrap();
+    }
+
+    let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new::<NoopViz, NoopMotor>(
+        Arc::clone(&npu),
+        None,
+        None,
+        200.0,
+    )));
+    let _runner_guard = BurstRunnerGuard {
+        burst_runner: Arc::clone(&burst_runner),
+    };
+
+    let cache = create_memory_stats_cache();
+    let executor = Arc::new(Mutex::new(AsyncPlasticityExecutor::new(
+        PlasticityConfig::default(),
+        cache,
+        Arc::clone(&npu),
+    )));
+    {
+        let mut exec = executor.lock().unwrap();
+        PlasticityExecutor::start(&mut *exec);
+    }
+    {
+        let mut mgr = manager.write();
+        mgr.set_plasticity_executor(Arc::clone(&executor));
+    }
+    wire_plasticity_callbacks(&burst_runner, Arc::clone(&executor), Arc::clone(&npu));
+
+    burst_runner
+        .write()
+        .start()
+        .expect("Failed to start burst loop");
+    assert!(
+        wait_for_burst_count(&burst_runner, 1, 200_000),
+        "Burst loop did not advance"
+    );
+
+    let memory_idx = {
+        let mgr = manager.read();
+        mgr.get_cortical_idx(&m1_id).expect("Missing memory idx")
+    };
+
+    let burst_before = burst_runner.read().get_burst_count();
+    let conversion_commands: Vec<feagi_npu_plasticity::PlasticityCommand> = (0..250_u32)
+        .map(|offset| feagi_npu_plasticity::PlasticityCommand::MemoryNeuronConvertedToLtm {
+            neuron_id: 51_000_000 + offset,
+            area_idx: memory_idx,
+            pattern_hash: 100 + offset as u64,
+        })
+        .collect();
+    {
+        let exec = executor.lock().unwrap();
+        exec.enqueue_commands_for_test(conversion_commands);
+    }
+
+    assert!(
+        wait_for_burst_count(&burst_runner, burst_before + 1, 200_000),
+        "Burst loop did not process first throttled callback cycle"
+    );
+
+    let pending_after_first_cycle = {
+        let exec = executor.lock().unwrap();
+        let service = exec
+            .get_service()
+            .expect("Plasticity service should be available");
+        service.pending_command_count()
+    };
+    assert!(
+        pending_after_first_cycle > 0,
+        "Expected deferred command backlog after first callback cycle"
+    );
+
+    assert!(
+        wait_for_burst_count(&burst_runner, burst_before + 4, 200_000),
+        "Burst loop stalled while draining throttled LTM command backlog"
+    );
+}
