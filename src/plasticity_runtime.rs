@@ -276,6 +276,7 @@ pub fn wire_plasticity_callbacks(
                                         offset: frame.offset,
                                         upstream_area_idx: frame.upstream_area_idx,
                                         coords: frame.coords.clone(),
+                                        membrane_potentials: frame.membrane_potentials.clone(),
                                     })
                                     .collect();
                                 let mut npu_lock = npu_for_post.lock().unwrap();
