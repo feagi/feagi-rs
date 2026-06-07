@@ -166,6 +166,76 @@ fn update_agent_data_hash_from_registration_snapshot(snapshot: &[AgentRegistrati
     }
 }
 
+/// Log sensory `device_registrations` content relevant to SmartIMU IPU auto-create diagnostics.
+fn log_smart_imu_io_auto_hints(device_regs: &serde_json::Value, context: &str) {
+    let Some(input) = device_regs
+        .get("input_units_and_encoder_properties")
+        .and_then(|v| v.as_object())
+    else {
+        warn!(
+            target: "feagi-rs",
+            "[IO-AUTO] {context}: missing `input_units_and_encoder_properties` — \
+             no sensory units in this payload; SmartIMU (and other IPU) cannot be auto-created from it"
+        );
+        return;
+    };
+
+    let mut keys: Vec<&String> = input.keys().collect();
+    keys.sort();
+    info!(
+        target: "feagi-rs",
+        "[IO-AUTO] {context}: input sensory unit keys: {:?}",
+        keys
+    );
+
+    match input.get("SmartIMU") {
+        None => {
+            warn!(
+                target: "feagi-rs",
+                "[IO-AUTO] {context}: no `SmartIMU` key under input_units — \
+                 connector export has no SmartIMU register call (ROS bridge mapping / SDK / cache export). \
+                 Motor-only or vision-only payloads omit this."
+            );
+        }
+        Some(smart_val) => {
+            let Some(arr) = smart_val.as_array() else {
+                warn!(
+                    target: "feagi-rs",
+                    "[IO-AUTO] {context}: `SmartIMU` value is not an array — invalid device_registrations shape"
+                );
+                return;
+            };
+            for (i, entry) in arr.iter().enumerate() {
+                let Some(pair) = entry.as_array() else {
+                    warn!(
+                        target: "feagi-rs",
+                        "[IO-AUTO] {context}: SmartIMU[{i}] is not a [unit_def, encoder_properties] pair"
+                    );
+                    continue;
+                };
+                let unit_def = pair.first();
+                let dg_len = unit_def
+                    .and_then(|u| u.get("device_grouping"))
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                let group_ix = unit_def.and_then(|u| u.get("cortical_unit_index"));
+                info!(
+                    target: "feagi-rs",
+                    "[IO-AUTO] {context}: SmartIMU[{i}] cortical_unit_index={group_ix:?} device_grouping_len={dg_len}"
+                );
+                if dg_len == 0 {
+                    warn!(
+                        target: "feagi-rs",
+                        "[IO-AUTO] {context}: SmartIMU[{i}] has EMPTY device_grouping — \
+                         feagi-api auto_create skips this sensory unit (no IPU area from this entry)"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// FEAGI Server - Full-featured neural processing and brain management
 #[derive(Parser, Debug)]
 #[command(name = "feagi", version, author, about, long_about = None)]
@@ -524,6 +594,10 @@ async fn main() -> Result<()> {
 
                         if let Some(device_regs) = pre_response_device_regs.as_ref() {
                             drop(handler_guard);
+                            log_smart_imu_io_auto_hints(
+                                device_regs,
+                                "before AgentConfiguration auto_create",
+                            );
                             match api_state_holder.lock().unwrap().as_ref() {
                                 Some(api) => {
                                     info!(
@@ -693,7 +767,7 @@ async fn main() -> Result<()> {
                                 Ok(ids) => expected_ids.extend(ids),
                                 Err(e) => {
                                     derivation_failed = true;
-                                    debug!(
+                                    warn!(
                                         "[MOTOR-REG] Could not derive sensory IDs while checking auto-create completion for descriptor {:?}: {}",
                                         agent_descriptor, e
                                     );
@@ -867,7 +941,7 @@ async fn main() -> Result<()> {
                                 Ok(ids) => expected_ids.extend(ids),
                                 Err(e) => {
                                     derivation_failed = true;
-                                    debug!(
+                                    warn!(
                                         "[MOTOR-REG] Could not derive sensory IDs before auto_create for descriptor {:?}: {}",
                                         descriptor, e
                                     );
