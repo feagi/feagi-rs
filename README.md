@@ -1,24 +1,31 @@
 # FEAGI Server (Rust)
 
-The FEAGI Rust server is the main runtime for the Framework for Evolutionary Artificial General Intelligence. It runs the neural burst engine, exposes the HTTP API, and manages agent I/O transports.
+The FEAGI Rust server is the main runtime for the Framework for Evolutionary Artificial General Intelligence. It runs the neural burst engine and exposes the HTTP API.
 
-This package is part of the FEAGI 2.0 monorepo. Core crates live under `../feagi-core/crates/` and are consumed from crates.io in `Cargo.toml`.
+This package is part of the FEAGI 2.0 monorepo. It is built on the in-progress `feagi-core` NPU rewrite, consumed as path dependencies from a sibling `../feagi-core/` checkout.
+
+## Status
+
+The NPU rewrite (`feagi-core/crates/feagi-npu`, `DynamicNPU`) currently supports **adding cortical areas** and **running bursts**. This server exposes exactly that.
+
+Subsystems from the previous architecture — genome loading, neuroembryogenesis, synaptogenesis, agent registration, ZMQ/WebSocket transports, plasticity, visualization — have not been ported. Their HTTP routes are registered and answer `501 Not Implemented` with an explanatory body, so clients can distinguish "not available yet" from a bad URL.
+
+The previous implementation is preserved under [`legacy/`](legacy/) for reference. It does not compile against the current `feagi-core`.
 
 ## What this provides
 
-- HTTP API for runtime control, genome I/O, and connectome management
-- Transport layer for sensory input, motor output, and visualization
-- Burst engine runtime (CPU by default, GPU optional)
-- Genome-driven brain development and agent registration
-- Configuration-driven runtime (TOML file with env and CLI overrides)
+- HTTP API for creating cortical areas and controlling the burst engine
+- Burst loop running on a dedicated thread at a configurable frequency
+- Embeddable library (`feagi`) alongside the standalone `feagi` binary
 
 ## Build and run
 
 ### Prerequisites
 
 - Rust toolchain (edition 2021; see `Cargo.toml`)
+- A sibling `feagi-core` checkout at `../feagi-core`
 
-### Build from source
+### Build
 
 ```bash
 cd feagi-rs
@@ -30,137 +37,98 @@ Binary output: `target/release/feagi`.
 ### Run
 
 ```bash
-# Auto-discover configuration file
+# Defaults: 0.0.0.0:8000, 10 Hz, burst engine auto-started
 feagi
 
-# Specify config path
-feagi --config /path/to/feagi_configuration.toml
+# Bind elsewhere and run faster
+feagi --api-host 127.0.0.1 --api-port 8123 --burst-hz 50
 
-# Load a genome on startup
-feagi --genome /path/to/genome.json
+# Start with the engine paused, then drive it over HTTP
+feagi --no-autostart
 ```
 
 ## CLI options
 
 The `feagi` binary is built when the `cli` feature is enabled (default).
 
-| Option | Description |
-|--------|-------------|
-| `-f, --config <PATH>` | Config path (overrides search) |
-| `-g, --genome <PATH>` | Genome to load on startup |
-| `--verbose` | Verbose logging |
-| `--api-port <PORT>` | Override API port |
-| `--burst-hz <HZ>` | Override burst frequency |
-| `--viz-transport <auto|websocket|shm>` | Override visualization transport policy |
-| `--precision <fp32|int8>` | Override NPU precision |
-| `--debug <CRATE>` | Enable per-crate debug (repeatable) |
-| `--debug-all` | Enable debug for all crates |
-| `--npu-trace` | Enable NPU trace logging |
-| `--npu-trace-synapse` | Enable synapse trace logging |
-| `--npu-trace-dynamics` | Enable dynamics trace logging |
-| `--npu-trace-src <NEURON_ID>` | Filter trace source neuron |
-| `--npu-trace-dst <NEURON_ID>` | Filter trace destination neuron |
-| `--npu-trace-neuron <NEURON_ID>` | Filter trace neuron |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--api-host <IP>` | `0.0.0.0` | Host interface for the HTTP API |
+| `--api-port <PORT>` | `8000` | Port for the HTTP API |
+| `--burst-hz <HZ>` | `10` | Burst frequency |
+| `--no-autostart` | off | Start with the burst engine paused |
+| `-v, --verbose` | off | Debug-level logging |
 
-## Configuration
+Logging honors `RUST_LOG` when set; otherwise it follows `--verbose`.
 
-Configuration is loaded from `feagi_configuration.toml` with the following precedence:
+## HTTP API
 
-1. CLI `--config` (explicit path)
-2. `FEAGI_CONFIG_PATH` environment variable
-3. Current directory `./feagi_configuration.toml`
-4. Parent directories (up to 5 levels)
+### Cortical areas
 
-Overrides are applied in this order: TOML file, environment variables, then CLI overrides.
+`POST /v1/cortical_area/cortical_area`
 
-### Minimal configuration (defaults shown)
-
-```toml
-[system]
-max_cores = 0
-
-[api]
-host = "0.0.0.0"
-port = 8000
-
-[ports]
-zmq_req_rep_port = 5555
-zmq_pub_sub_port = 5556
-zmq_push_pull_port = 5557
-zmq_sensory_port = 5558
-zmq_visualization_port = 5562
-zmq_rest_port = 5563
-zmq_motor_port = 5564
-
-[zmq]
-host = "0.0.0.0"
-enabled = true
-
-[neural]
-burst_engine_timestep = 0.1
+```bash
+curl -X POST http://127.0.0.1:8000/v1/cortical_area/cortical_area \
+  -H 'Content-Type: application/json' \
+  -d '{"cortical_id": "cust0042", "cortical_dimensions": [8, 8, 4], "neurons_per_voxel": 2}'
 ```
 
-The full schema is defined in `feagi-core/crates/feagi-config/src/types.rs`.
-
-## Environment overrides
-
-Supported variables (from `feagi-config`):
-
-| Variable | Maps to |
-|----------|---------|
-| `FEAGI_CONFIG_PATH` | Config file path |
-| `FEAGI_API_HOST` | `api.host` |
-| `FEAGI_API_PORT` | `api.port` |
-| `FEAGI_API_WORKERS` | `api.workers` |
-| `FEAGI_API_RELOAD` | `api.reload` |
-| `FEAGI_ZMQ_HOST` | `zmq.host` |
-| `FEAGI_DATA_DIR` | `system.data_dir` |
-| `FEAGI_MAX_CORES` | `system.max_cores` |
-| `FEAGI_LOG_LEVEL` | `system.log_level` |
-| `FEAGI_AGENT_DEFAULT_HOST` | `agents.default_host` |
-| `FEAGI_ZMQ_REQ_REP_PORT` | `ports.zmq_req_rep_port` |
-| `FEAGI_ZMQ_PUB_SUB_PORT` | `ports.zmq_pub_sub_port` |
-| `FEAGI_ZMQ_PUSH_PULL_PORT` | `ports.zmq_push_pull_port` |
-| `FEAGI_ZMQ_SENSORY_PORT` | `ports.zmq_sensory_port` |
-| `FEAGI_ZMQ_VISUALIZATION_PORT` | `ports.zmq_visualization_port` |
-| `FEAGI_ZMQ_REST_PORT` | `ports.zmq_rest_port` |
-| `FEAGI_ZMQ_MOTOR_PORT` | `ports.zmq_motor_port` |
-
-## Transports
-
-- ZMQ transport is available via the `zeromq` crate (pure Rust).
-- `feagi-io` defaults to ZMQ and UDP transports.
-- WebSocket transport is enabled in this binary via the `feagi-io` `websocket-transport` feature.
-
-## Genome autosave
-
-Autosaved genomes are written to `.genome/` in the working directory. This folder is ignored by git.
-
-## API documentation
-
-Swagger UI is served at:
-
+```json
+{
+  "cortical_id": "cust0042",
+  "cortical_id_base64": "Y3VzdDAwNDI=",
+  "cortical_dimensions": [8, 8, 4],
+  "neurons_per_voxel": 2,
+  "neuron_count": 512
+}
 ```
-http://<api-host>:<api-port>/swagger-ui/
+
+`cortical_id` accepts either the 8-character raw form (`cust0042`) or its base64 encoding. The first byte selects the area type: `c` custom, `m` memory, `_` core, `i` brain input, `o` brain output. `neurons_per_voxel` defaults to 1, so the area holds `x * y * z * neurons_per_voxel` neurons.
+
+Responses: `201` on success, `400` for a malformed ID or a zero-sized axis, `409` if the ID already exists.
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/v1/cortical_area/cortical_area` | POST | Create a cortical area |
+| `/v1/cortical_area/cortical_area/:cortical_id` | GET | Fetch one area |
+| `/v1/cortical_area/cortical_area_id_list` | GET | List area IDs |
+| `/v1/cortical_area/cortical_area_list` | GET | List areas with dimensions |
+
+### Burst engine
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/v1/burst_engine/status` | GET | Running state, burst count, frequency, area count |
+| `/v1/burst_engine/start` | POST | Start the burst loop |
+| `/v1/burst_engine/stop` | POST | Stop the burst loop |
+| `/v1/burst_engine/burst` | POST | Run exactly one burst (works while stopped) |
+| `/v1/burst_engine/burst_frequency` | PUT | Set frequency, body `{"burst_frequency_hz": 50}` |
+
+### System
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/v1/system/health_check` | GET | Engine state and area count |
+| `/v1/system/version` | GET | Crate and NPU version info |
+
+## Embedding
+
+```rust
+use feagi::{FeagiConfig, FeagiInstance};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let instance = FeagiInstance::new(FeagiConfig::default());
+    instance.start_burst_engine();
+    instance.serve().await
+}
 ```
+
+`FeagiInstance::npu()` exposes the `NpuHandle` for driving the NPU directly without going through HTTP.
 
 ## Development
 
-### Use local `feagi-core` crates
-
-For local development, you can override crates.io with local paths:
-
-```bash
-cp .cargo/config.toml.example .cargo/config.toml
-```
-
-To return to crates.io behavior:
-
-```bash
-rm .cargo/config.toml
-```
-
-### Tests and linting
+Core crates are consumed as path dependencies, so no `[patch.crates-io]` setup is needed. `feagi-rs` and `feagi-core` must sit side by side.
 
 ```bash
 cargo test
@@ -170,29 +138,17 @@ cargo fmt --check
 
 ## Troubleshooting
 
-### Configuration not found
-
-```
-Error: Failed to load configuration
-```
-
-Ensure `feagi_configuration.toml` exists in one of the search locations or set `FEAGI_CONFIG_PATH`.
-
 ### Port already in use
 
 ```
-Error: Failed to bind API server: Address already in use
+Error: failed to bind HTTP API to 0.0.0.0:8000
 ```
 
-Update the port in config or use `--api-port`.
+Use `--api-port` to pick another port.
 
-### ZMQ bind failure
+### Endpoint returns 501
 
-```
-Error: ZMQ bind failed
-```
-
-Verify that the configured ports are available.
+The route exists but its subsystem has not been ported to the NPU rewrite. See [Status](#status).
 
 ### Windows linking errors
 
@@ -207,4 +163,3 @@ Apache-2.0. See [LICENSE](../LICENSE).
 Neuraville Inc. <feagi@neuraville.com>
 
 Copyright 2025-2026 Neuraville Inc. All Rights Reserved.
-
