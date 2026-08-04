@@ -7,9 +7,10 @@
 //! (`feagi_npu::dynamic_npu::DynamicNPU`).
 //!
 //! The NPU currently supports adding cortical areas and running bursts, so that is what this
-//! server exposes. Subsystems from the previous architecture (genome loading, agents, ZMQ
-//! streaming, plasticity, synaptogenesis) are not wired up; their HTTP routes answer with
-//! `501 Not Implemented`. The previous implementation is kept for reference under `legacy/`.
+//! server exposes over HTTP and over the `feagi-io` WebSocket transport. Subsystems from the
+//! previous architecture (genome loading, agents, ZMQ streaming, plasticity, synaptogenesis) are
+//! not wired up; their HTTP routes answer with `501 Not Implemented`. The previous implementation
+//! is kept for reference under `legacy/`.
 //!
 //! ## Embedding
 //!
@@ -18,6 +19,7 @@
 //!
 //! # async fn run() -> anyhow::Result<()> {
 //! let instance = FeagiInstance::new(FeagiConfig::default());
+//! instance.start_websocket()?;
 //! instance.start_burst_engine();
 //! instance.serve().await?;
 //! # Ok(())
@@ -26,14 +28,21 @@
 
 pub mod api;
 pub mod npu;
+pub mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use parking_lot::Mutex;
 use tracing::info;
 
 pub use api::{create_http_server, ApiState};
 pub use npu::{CorticalAreaRecord, NpuError, NpuHandle, DEFAULT_BURST_HZ};
+pub use ws::{
+    WebSocketBroadcaster, WebSocketConfig, WebSocketError, WebSocketStatus, DEFAULT_WEBSOCKET_HZ,
+    DEFAULT_WEBSOCKET_PORT,
+};
 
 /// Version of this crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -47,6 +56,8 @@ pub struct FeagiConfig {
     pub api_host: IpAddr,
     pub api_port: u16,
     pub burst_hz: u64,
+    /// WebSocket broadcast settings, or `None` to run without the transport.
+    pub websocket: Option<WebSocketConfig>,
 }
 
 impl Default for FeagiConfig {
@@ -55,6 +66,7 @@ impl Default for FeagiConfig {
             api_host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             api_port: DEFAULT_API_PORT,
             burst_hz: DEFAULT_BURST_HZ,
+            websocket: Some(WebSocketConfig::default()),
         }
     }
 }
@@ -65,16 +77,23 @@ impl FeagiConfig {
     }
 }
 
-/// A FEAGI server: one NPU plus the HTTP API in front of it.
+/// A FEAGI server: one NPU, the HTTP API in front of it, and the WebSocket state broadcast.
 pub struct FeagiInstance {
     config: FeagiConfig,
     npu: NpuHandle,
+    /// Behind a lock so the transport can be started and stopped through a shared handle, the way
+    /// the burst engine is.
+    websocket: Mutex<Option<Arc<WebSocketBroadcaster>>>,
 }
 
 impl FeagiInstance {
     pub fn new(config: FeagiConfig) -> Self {
         let npu = NpuHandle::new(config.burst_hz);
-        Self { config, npu }
+        Self {
+            config,
+            npu,
+            websocket: Mutex::new(None),
+        }
     }
 
     pub fn config(&self) -> &FeagiConfig {
@@ -92,6 +111,44 @@ impl FeagiInstance {
 
     pub fn stop_burst_engine(&self) -> bool {
         self.npu.stop()
+    }
+
+    /// Binds the WebSocket publisher configured in [`FeagiConfig::websocket`] and starts
+    /// broadcasting NPU state. Does nothing when no WebSocket config is set.
+    ///
+    /// Call this before [`Self::serve`], because the HTTP status endpoint reports the broadcaster
+    /// that exists at the time the router is built.
+    pub fn start_websocket(&self) -> Result<Option<WebSocketStatus>, WebSocketError> {
+        let Some(ws_config) = self.config.websocket.clone() else {
+            return Ok(None);
+        };
+
+        let mut slot = self.websocket.lock();
+        if let Some(existing) = slot.as_ref() {
+            return Ok(Some(existing.status()));
+        }
+
+        let broadcaster = WebSocketBroadcaster::start(ws_config, self.npu.clone())?;
+        let status = broadcaster.status();
+        *slot = Some(Arc::new(broadcaster));
+        Ok(Some(status))
+    }
+
+    /// Stops the WebSocket publisher. Returns `false` if it was not running.
+    ///
+    /// The socket closes once the last handle handed out to the API layer is dropped.
+    pub fn stop_websocket(&self) -> bool {
+        match self.websocket.lock().take() {
+            Some(broadcaster) => {
+                broadcaster.stop();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn websocket_status(&self) -> Option<WebSocketStatus> {
+        self.websocket.lock().as_ref().map(|ws| ws.status())
     }
 
     /// Binds the API socket without serving, so callers can learn the bound port
@@ -112,7 +169,10 @@ impl FeagiInstance {
     /// Serves the HTTP API on an already-bound listener.
     pub async fn serve_on(&self, listener: tokio::net::TcpListener) -> Result<()> {
         let address = listener.local_addr()?;
-        let router = create_http_server(ApiState::new(self.npu.clone()));
+        let router = create_http_server(ApiState::new(
+            self.npu.clone(),
+            self.websocket.lock().as_ref().map(Arc::clone),
+        ));
 
         info!(target: "feagi-rs", "HTTP API listening on http://{address}");
         axum::serve(listener, router)

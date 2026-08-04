@@ -11,11 +11,15 @@ use feagi::{FeagiConfig, FeagiInstance};
 use serde_json::json;
 
 /// Starts a server on an OS-assigned port and returns its base URL.
+///
+/// The WebSocket transport is left off here so these tests don't contend for a fixed port; it has
+/// its own test file.
 async fn start_server() -> (Arc<FeagiInstance>, String) {
     let config = FeagiConfig {
         api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         api_port: 0,
         burst_hz: 100,
+        websocket: None,
     };
     let instance = Arc::new(FeagiInstance::new(config));
     let listener = instance.bind().await.expect("bind ephemeral port");

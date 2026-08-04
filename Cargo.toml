@@ -29,6 +29,16 @@ feagi-npu = { path = "../feagi-core/crates/feagi-npu" }
 feagi-models = { path = "../feagi-core/crates/feagi-models" }
 feagi-data = { path = "../feagi-core/crates/feagi-data" }
 feagi-genomic-context = { path = "../feagi-core/crates/feagi-genomic-context" }
+feagi-serialization = { path = "../feagi-core/crates/feagi-serialization" }
+# WebSocket transport only. ZMQ is left off because the NPU has no sensory/motor entry points yet
+# (`set_sensor_data` / `get_motor_data` are unimplemented), and it would pull in the libzmq C library.
+# Both directions are enabled because feagi-io's shared types reference client and server
+# properties unconditionally, so it does not build with only one half.
+feagi-io = { path = "../feagi-core/crates/feagi-io", default-features = false, features = [
+    "websocket-transport-std",
+    "feagi-server",
+    "feagi-client",
+] }
 
 # Async runtime + HTTP
 tokio = { version = "1.40", features = ["full"] }

@@ -15,7 +15,10 @@ use clap::Parser;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use feagi::{FeagiConfig, FeagiInstance, DEFAULT_API_PORT, DEFAULT_BURST_HZ};
+use feagi::{
+    FeagiConfig, FeagiInstance, WebSocketConfig, DEFAULT_API_PORT, DEFAULT_BURST_HZ,
+    DEFAULT_WEBSOCKET_HZ, DEFAULT_WEBSOCKET_PORT,
+};
 
 /// FEAGI Server - neural processing and brain management
 #[derive(Parser, Debug)]
@@ -36,6 +39,22 @@ struct Args {
     /// Start with the burst engine paused; resume via POST /v1/burst_engine/start
     #[arg(long)]
     no_autostart: bool,
+
+    /// Host interface for the NPU state WebSocket
+    #[arg(long, default_value = "0.0.0.0")]
+    websocket_host: String,
+
+    /// Port for the NPU state WebSocket
+    #[arg(long, default_value_t = DEFAULT_WEBSOCKET_PORT)]
+    websocket_port: u16,
+
+    /// How many NPU state frames per second to broadcast over the WebSocket
+    #[arg(long, default_value_t = DEFAULT_WEBSOCKET_HZ)]
+    websocket_hz: u64,
+
+    /// Run without the NPU state WebSocket
+    #[arg(long)]
+    no_websocket: bool,
 
     /// Enable verbose (debug) logging
     #[arg(short, long)]
@@ -58,19 +77,39 @@ async fn main() -> Result<()> {
     if args.burst_hz == 0 {
         anyhow::bail!("--burst-hz must be greater than zero");
     }
+    if !args.no_websocket && args.websocket_hz == 0 {
+        anyhow::bail!("--websocket-hz must be greater than zero");
+    }
+
+    let websocket = if args.no_websocket {
+        None
+    } else {
+        Some(WebSocketConfig::new(
+            &args.websocket_host,
+            args.websocket_port,
+            args.websocket_hz,
+        ))
+    };
 
     let config = FeagiConfig {
         api_host: args.api_host,
         api_port: args.api_port,
         burst_hz: args.burst_hz,
+        websocket,
     };
 
     info!(target: "feagi-rs", "FEAGI {} starting", feagi::VERSION);
 
     let instance = Arc::new(FeagiInstance::new(config));
 
-    // Bind before starting the burst loop so a port conflict fails fast.
+    // Bind both sockets before starting the burst loop so a port conflict fails fast.
     let listener = instance.bind().await?;
+    match instance.start_websocket()? {
+        Some(status) => {
+            info!(target: "feagi-rs", "NPU state stream at {} ({} Hz)", status.advertised_address, status.publish_hz)
+        }
+        None => info!(target: "feagi-rs", "websocket transport disabled (--no-websocket)"),
+    }
 
     if args.no_autostart {
         info!(target: "feagi-rs", "burst engine paused (--no-autostart)");
@@ -97,6 +136,7 @@ async fn main() -> Result<()> {
 
     info!(target: "feagi-rs", "shutting down");
     instance.stop_burst_engine();
+    instance.stop_websocket();
     server.abort();
 
     Ok(())
