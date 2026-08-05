@@ -4,7 +4,7 @@
 
 This repository automatically builds and publishes FEAGI binaries for all platforms when you create a version tag.
 
-**Dependencies:** This build requires `feagi-core` crates. The workflow automatically checks out the `fdp-merge-mnt` branch of `feagi-core` during the build (temporary - will use `main` once crates are published).
+**Dependencies:** `feagi-core` crates are pulled from [crates.io](https://crates.io) (see `Cargo.toml` / `Cargo.lock`). CI verifies locked metadata resolves only registry sources for `feagi-*` dependencies. For local path overrides, use `scripts/switch-feagi-core-source.sh local` (see `.cargo/config.toml.example`).
 
 ---
 
@@ -68,9 +68,7 @@ For emergency releases or testing:
 
 **GitHub UI:** Actions → Release FEAGI Binary → Run workflow
 - Enter tag name (e.g., `v1.2.3-hotfix`)
-- **(Optional)** Override `feagi-core` branch (default: `fdp-merge-mnt`)
-  - Current default is `fdp-merge-mnt` (has all required crates)
-  - Will switch to `main` once crates are published to crates.io
+- Builds use locked `Cargo.toml` / `Cargo.lock` with `feagi-*` crates from crates.io (no feagi-core git checkout).
 - Triggers the build manually
 
 ---
@@ -180,7 +178,7 @@ File: `.github/workflows/release.yml`
 - Repository has GitHub Actions enabled
 - No special secrets needed (uses default GITHUB_TOKEN)
 - `feagi/feagi-core` must be accessible (public repo)
-- Currently uses `fdp-merge-mnt` branch (will use `main` after crate publication)
+- Resolves `feagi-*` dependencies from crates.io only (see workflow metadata check).
 
 ---
 
@@ -210,7 +208,7 @@ File: `.github/workflows/release.yml`
 
 This repository automatically builds and publishes FEAGI binaries for all platforms when you create a version tag.
 
-**Dependencies:** This build requires `feagi-core` crates. The workflow automatically checks out the `fdp-merge-mnt` branch of `feagi-core` during the build (temporary - will use `main` once crates are published).
+**Dependencies:** `feagi-core` crates are pulled from [crates.io](https://crates.io) (see `Cargo.toml` / `Cargo.lock`). CI verifies locked metadata resolves only registry sources for `feagi-*` dependencies. For local path overrides, use `scripts/switch-feagi-core-source.sh local` (see `.cargo/config.toml.example`).
 
 ---
 
@@ -274,9 +272,7 @@ For emergency releases or testing:
 
 **GitHub UI:** Actions → Release FEAGI Binary → Run workflow
 - Enter tag name (e.g., `v1.2.3-hotfix`)
-- **(Optional)** Override `feagi-core` branch (default: `fdp-merge-mnt`)
-  - Current default is `fdp-merge-mnt` (has all required crates)
-  - Will switch to `main` once crates are published to crates.io
+- Builds use locked `Cargo.toml` / `Cargo.lock` with `feagi-*` crates from crates.io (no feagi-core git checkout).
 - Triggers the build manually
 
 ---
@@ -386,7 +382,7 @@ File: `.github/workflows/release.yml`
 - Repository has GitHub Actions enabled
 - No special secrets needed (uses default GITHUB_TOKEN)
 - `feagi/feagi-core` must be accessible (public repo)
-- Currently uses `fdp-merge-mnt` branch (will use `main` after crate publication)
+- Resolves `feagi-*` dependencies from crates.io only (see workflow metadata check).
 
 ---
 

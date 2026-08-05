@@ -633,8 +633,30 @@ async fn main() -> Result<()> {
                         error!("❌ Error polling command/control: {:?}", e);
                     }
                 }
+                let pending_agent_configurations =
+                    handler_guard.drain_pending_agent_configurations();
 
                 drop(handler_guard);
+                if !pending_agent_configurations.is_empty() {
+                    if let Some(api) = api_state_holder.lock().unwrap().as_ref() {
+                        for (session_id, device_regs) in &pending_agent_configurations {
+                            info!(
+                                "[MOTOR-REG] Processing queued AgentConfiguration for session {}",
+                                session_id.to_base64()
+                            );
+                            rt_handle.block_on(
+                                auto_create_cortical_areas_from_device_registrations(
+                                    api.as_ref(),
+                                    device_regs,
+                                ),
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "[MOTOR-REG] ApiState not yet available; queued AgentConfiguration auto-create deferred"
+                        );
+                    }
+                }
 
                 {
                     let mut handler_guard = agent_handler_for_loop.lock().unwrap();

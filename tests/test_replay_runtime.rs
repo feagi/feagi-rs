@@ -240,6 +240,7 @@ fn test_runtime_replay_fires_twin_area() {
                 offset: 0,
                 upstream_area_idx: upstream_idx,
                 coords: vec![(0, 0, 0)],
+                membrane_potentials: None,
             }],
         );
         npu_lock.register_memory_twin_mapping(memory_idx, upstream_idx, twin_idx, source_potential);
@@ -804,11 +805,13 @@ fn test_post_burst_command_budget_defers_large_ltm_batches() {
 
     let burst_before = burst_runner.read().get_burst_count();
     let conversion_commands: Vec<feagi_npu_plasticity::PlasticityCommand> = (0..250_u32)
-        .map(|offset| feagi_npu_plasticity::PlasticityCommand::MemoryNeuronConvertedToLtm {
-            neuron_id: 51_000_000 + offset,
-            area_idx: memory_idx,
-            pattern_hash: 100 + offset as u64,
-        })
+        .map(
+            |offset| feagi_npu_plasticity::PlasticityCommand::MemoryNeuronConvertedToLtm {
+                neuron_id: 51_000_000 + offset,
+                area_idx: memory_idx,
+                pattern_hash: 100 + offset as u64,
+            },
+        )
         .collect();
     {
         let exec = executor.lock().unwrap();
