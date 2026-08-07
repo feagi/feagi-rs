@@ -939,7 +939,13 @@ async fn main() -> Result<()> {
                 // Pass 2 (outside handler lock): Auto-create missing cortical areas from
                 // device_registrations. This can be expensive and must not hold `agent_handler`,
                 // otherwise burst-loop publish path can block and stall burst progress.
-                if !device_regs_to_auto_create.is_empty() {
+                //
+                // Guard: skip entirely when no genome is loaded. cortical area creation requires
+                // an active genome. The genome endpoint already calls auto_create post-load, so
+                // there is no need to retry here before a genome is present — doing so only floods
+                // the log with repeated "No genome loaded" warnings.
+                let genome_is_ready = connectome_manager_for_polling.read().is_initialized();
+                if !device_regs_to_auto_create.is_empty() && genome_is_ready {
                     if let Some(api) = api_state_holder.lock().unwrap().as_ref() {
                         debug!(
                             "[MOTOR-REG] Invoking auto_create for {} device_registration(s)",
