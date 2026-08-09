@@ -6,11 +6,13 @@
 //! Server application built on the in-progress `feagi-core` NPU rewrite
 //! (`feagi_npu::dynamic_npu::DynamicNPU`).
 //!
-//! The NPU currently supports adding cortical areas and running bursts, so that is what this
-//! server exposes over HTTP and over the `feagi-io` WebSocket transport. Subsystems from the
-//! previous architecture (genome loading, agents, ZMQ streaming, plasticity, synaptogenesis) are
-//! not wired up; their HTTP routes answer with `501 Not Implemented`. The previous implementation
-//! is kept for reference under `legacy/`.
+//! The REST surface and its OpenAPI document come from the `feagi-api` crate, which owns the
+//! published endpoint contract. This crate supplies what sits behind it: the NPU, the loaded
+//! genome, the adapter that lets the API services drive the engine, and the NPU state broadcast.
+//!
+//! The NPU currently supports adding cortical areas and running bursts. Endpoints needing
+//! capabilities the engine does not yet have -- per-neuron and per-synapse introspection in
+//! particular -- keep their published paths and schemas and answer `501 Not Implemented`.
 //!
 //! ## Embedding
 //!
@@ -19,8 +21,8 @@
 //!
 //! # async fn run() -> anyhow::Result<()> {
 //! let instance = FeagiInstance::new(FeagiConfig::default());
-//! instance.start_websocket()?;
 //! instance.start_burst_engine();
+//! instance.start_websocket()?;
 //! instance.serve().await?;
 //! # Ok(())
 //! # }
@@ -29,6 +31,7 @@
 pub mod api;
 pub mod genome;
 pub mod npu;
+pub mod npu_access;
 pub mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -38,7 +41,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use tracing::info;
 
-pub use api::{create_http_server, ApiState};
+pub use feagi_api::services::{empty_shared_genome, SharedGenome};
 pub use npu::{CorticalAreaRecord, NpuError, NpuHandle, DEFAULT_BURST_HZ};
 pub use ws::{
     WebSocketBroadcaster, WebSocketConfig, WebSocketError, WebSocketStatus, DEFAULT_WEBSOCKET_HZ,
@@ -57,7 +60,7 @@ pub struct FeagiConfig {
     pub api_host: IpAddr,
     pub api_port: u16,
     pub burst_hz: u64,
-    /// WebSocket broadcast settings, or `None` to run without the transport.
+    /// NPU state broadcast settings, or `None` to run without the transport.
     pub websocket: Option<WebSocketConfig>,
 }
 
@@ -78,10 +81,13 @@ impl FeagiConfig {
     }
 }
 
-/// A FEAGI server: one NPU, the HTTP API in front of it, and the WebSocket state broadcast.
+/// A FEAGI server: one NPU, the HTTP API in front of it, and the NPU state broadcast.
 pub struct FeagiInstance {
     config: FeagiConfig,
     npu: NpuHandle,
+    /// The genome the API services read. Shared rather than owned so that loading a new genome is
+    /// visible to an already-running router.
+    genome: SharedGenome,
     /// Behind a lock so the transport can be started and stopped through a shared handle, the way
     /// the burst engine is.
     websocket: Mutex<Option<Arc<WebSocketBroadcaster>>>,
@@ -93,8 +99,17 @@ impl FeagiInstance {
         Self {
             config,
             npu,
+            genome: feagi_api::services::empty_shared_genome(),
             websocket: Mutex::new(None),
         }
+    }
+
+    /// Handle to the genome the API services read.
+    ///
+    /// Genome loading publishes through this handle so the REST layer reflects the change without
+    /// the router being rebuilt.
+    pub fn genome(&self) -> &SharedGenome {
+        &self.genome
     }
 
     pub fn config(&self) -> &FeagiConfig {
@@ -114,11 +129,8 @@ impl FeagiInstance {
         self.npu.stop()
     }
 
-    /// Binds the WebSocket publisher configured in [`FeagiConfig::websocket`] and starts
-    /// broadcasting NPU state. Does nothing when no WebSocket config is set.
-    ///
-    /// Call this before [`Self::serve`], because the HTTP status endpoint reports the broadcaster
-    /// that exists at the time the router is built.
+    /// Binds the publisher configured in [`FeagiConfig::websocket`] and starts broadcasting NPU
+    /// state. Does nothing when no WebSocket config is set.
     pub fn start_websocket(&self) -> Result<Option<WebSocketStatus>, WebSocketError> {
         let Some(ws_config) = self.config.websocket.clone() else {
             return Ok(None);
@@ -135,7 +147,7 @@ impl FeagiInstance {
         Ok(Some(status))
     }
 
-    /// Stops the WebSocket publisher. Returns `false` if it was not running.
+    /// Stops the publisher. Returns `false` if it was not running.
     ///
     /// The socket closes once the last handle handed out to the API layer is dropped.
     pub fn stop_websocket(&self) -> bool {
@@ -150,6 +162,21 @@ impl FeagiInstance {
 
     pub fn websocket_status(&self) -> Option<WebSocketStatus> {
         self.websocket.lock().as_ref().map(|ws| ws.status())
+    }
+
+    /// Versions of the crates linked into this binary, reported by `/v1/system/version`.
+    ///
+    /// Only the final binary knows what was actually linked, so the value is built here rather
+    /// than inside the API or service crates.
+    fn version_info(&self) -> feagi_services::types::VersionInfo {
+        let mut crates = std::collections::HashMap::new();
+        crates.insert("feagi_rs".to_string(), VERSION.to_string());
+
+        feagi_services::types::VersionInfo {
+            crates,
+            build_timestamp: String::new(),
+            rust_version: String::new(),
+        }
     }
 
     /// Binds the API socket without serving, so callers can learn the bound port
@@ -168,14 +195,21 @@ impl FeagiInstance {
     }
 
     /// Serves the HTTP API on an already-bound listener.
+    ///
+    /// The router comes from `feagi-api`, which owns the published endpoint contract and its
+    /// OpenAPI document, so the served surface and `/swagger-ui/` stay in step with the spec.
     pub async fn serve_on(&self, listener: tokio::net::TcpListener) -> Result<()> {
         let address = listener.local_addr()?;
-        let router = create_http_server(ApiState::new(
-            self.npu.clone(),
-            self.websocket.lock().as_ref().map(Arc::clone),
-        ));
+        let router = feagi_api::transports::http::server::create_http_server(
+            feagi_api::services::create_api_state_from_genome(
+                Arc::clone(&self.genome),
+                Some(Arc::new(self.npu.clone())),
+                self.version_info(),
+            ),
+        );
 
         info!(target: "feagi-rs", "HTTP API listening on http://{address}");
+        info!(target: "feagi-rs", "API documentation at http://{address}/swagger-ui/");
         axum::serve(listener, router)
             .await
             .context("HTTP server terminated unexpectedly")

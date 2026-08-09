@@ -18,8 +18,9 @@ fn barebones_genome_path() -> PathBuf {
 #[test]
 fn barebones_genome_populates_the_npu() {
     let npu = NpuHandle::new(10);
+    let shared_genome = feagi::empty_shared_genome();
 
-    let summary = load_genome_file(&npu, &barebones_genome_path()).expect("genome should load");
+    let summary = load_genome_file(&npu, &shared_genome, &barebones_genome_path()).expect("genome should load");
 
     assert!(
         summary.areas_added > 0,
@@ -39,8 +40,9 @@ fn barebones_genome_populates_the_npu() {
 #[test]
 fn registry_neuron_counts_match_the_summary() {
     let npu = NpuHandle::new(10);
+    let shared_genome = feagi::empty_shared_genome();
 
-    let summary = load_genome_file(&npu, &barebones_genome_path()).expect("genome should load");
+    let summary = load_genome_file(&npu, &shared_genome, &barebones_genome_path()).expect("genome should load");
 
     let registry_neurons: u64 = npu.cortical_areas().iter().map(|area| area.neuron_count).sum();
 
@@ -53,7 +55,8 @@ fn registry_neuron_counts_match_the_summary() {
 #[test]
 fn loaded_genome_bursts_without_panicking() {
     let npu = NpuHandle::new(10);
-    load_genome_file(&npu, &barebones_genome_path()).expect("genome should load");
+    let shared_genome = feagi::empty_shared_genome();
+    load_genome_file(&npu, &shared_genome, &barebones_genome_path()).expect("genome should load");
 
     for _ in 0..32 {
         npu.step_once();
@@ -65,7 +68,8 @@ fn loaded_genome_bursts_without_panicking() {
 #[test]
 fn a_loaded_genome_eventually_reports_fire_activity() {
     let npu = NpuHandle::new(10);
-    load_genome_file(&npu, &barebones_genome_path()).expect("genome should load");
+    let shared_genome = feagi::empty_shared_genome();
+    load_genome_file(&npu, &shared_genome, &barebones_genome_path()).expect("genome should load");
 
     // The placeholder neuron model fires on a fixed period, so a full period is enough to see
     // activity without depending on which burst within it fires.
@@ -85,9 +89,10 @@ fn a_loaded_genome_eventually_reports_fire_activity() {
 #[test]
 fn a_missing_genome_file_is_reported_as_a_read_error() {
     let npu = NpuHandle::new(10);
+    let shared_genome = feagi::empty_shared_genome();
     let missing = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/no_such_genome.json");
 
-    match load_genome_file(&npu, &missing) {
+    match load_genome_file(&npu, &shared_genome, &missing) {
         Err(GenomeError::Read { .. }) => {}
         Err(other) => panic!("expected a read error, got {other}"),
         Ok(_) => panic!("loading a missing file should fail"),
@@ -102,8 +107,9 @@ fn a_missing_genome_file_is_reported_as_a_read_error() {
 #[test]
 fn malformed_genome_json_is_reported_as_a_parse_error() {
     let npu = NpuHandle::new(10);
+    let shared_genome = feagi::empty_shared_genome();
 
-    match feagi::genome::load_genome_json(&npu, "{ not a genome }") {
+    match feagi::genome::load_genome_json(&npu, &shared_genome, "{ not a genome }") {
         Err(GenomeError::Parse(_)) => {}
         Err(other) => panic!("expected a parse error, got {other}"),
         Ok(_) => panic!("loading malformed json should fail"),

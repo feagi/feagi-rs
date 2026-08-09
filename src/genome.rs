@@ -17,6 +17,7 @@ use feagi_brain_development::corticogenesis::develop_connectome_requests;
 use feagi_evolutionary::load_genome_from_json;
 
 use crate::npu::NpuHandle;
+use crate::SharedGenome;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GenomeError {
@@ -44,17 +45,25 @@ pub struct GenomeLoadSummary {
 }
 
 /// Reads a genome file and realises it in the NPU.
-pub fn load_genome_file(npu: &NpuHandle, path: &Path) -> Result<GenomeLoadSummary, GenomeError> {
+pub fn load_genome_file(
+    npu: &NpuHandle,
+    shared_genome: &SharedGenome,
+    path: &Path,
+) -> Result<GenomeLoadSummary, GenomeError> {
     let json = std::fs::read_to_string(path).map_err(|source| GenomeError::Read {
         path: path.display().to_string(),
         source,
     })?;
 
-    load_genome_json(npu, &json)
+    load_genome_json(npu, shared_genome, &json)
 }
 
-/// Realises an in-memory genome document in the NPU.
-pub fn load_genome_json(npu: &NpuHandle, json: &str) -> Result<GenomeLoadSummary, GenomeError> {
+/// Realises an in-memory genome document in the NPU and publishes it to the API services.
+pub fn load_genome_json(
+    npu: &NpuHandle,
+    shared_genome: &SharedGenome,
+    json: &str,
+) -> Result<GenomeLoadSummary, GenomeError> {
     let genome = load_genome_from_json(json).map_err(|error| GenomeError::Parse(error.to_string()))?;
 
     let (requests, report) = develop_connectome_requests(&genome)
@@ -68,6 +77,10 @@ pub fn load_genome_json(npu: &NpuHandle, json: &str) -> Result<GenomeLoadSummary
         neurons_added: report.neurons_added,
         mappings_deferred: report.mappings_deferred,
     };
+
+    // Publish only after corticogenesis succeeds, so the REST layer never reports a genome the
+    // NPU was unable to realise.
+    *shared_genome.write() = Some(genome);
 
     info!(
         target: "feagi-rs",

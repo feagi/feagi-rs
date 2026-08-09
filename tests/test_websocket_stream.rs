@@ -174,31 +174,19 @@ fn stops_publishing_once_the_transport_is_stopped() {
     assert!(!connected, "publisher accepted a connection after stopping");
 }
 
-#[tokio::test]
-async fn reports_the_stream_endpoint_over_http() {
+/// The status is read from the instance rather than over HTTP: the published `feagi-api` contract
+/// has no endpoint reporting this transport, and inventing one here would change the API surface.
+#[test]
+fn reports_the_stream_endpoint() {
     let (instance, url) = start_instance(20);
 
-    let listener = instance.bind().await.expect("bind the api port");
-    let address = listener.local_addr().expect("api address");
-    let serve_instance = Arc::clone(&instance);
-    tokio::spawn(async move { serve_instance.serve_on(listener).await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let body: serde_json::Value = reqwest::get(format!("http://{address}/v1/system/websocket"))
-        .await
-        .expect("request sent")
-        .json()
-        .await
-        .expect("json body");
-
-    assert_eq!(body["enabled"], true);
-    assert_eq!(body["running"], true);
-    assert_eq!(body["url"], url);
-    assert_eq!(body["publish_hz"], 20);
+    let status = instance.websocket_status().expect("transport is running");
+    assert_eq!(status.advertised_address, url);
+    assert_eq!(status.publish_hz, 20);
 }
 
-#[tokio::test]
-async fn reports_the_transport_as_disabled_when_unconfigured() {
+#[test]
+fn reports_the_transport_as_disabled_when_unconfigured() {
     let config = FeagiConfig {
         api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         api_port: 0,
@@ -210,19 +198,5 @@ async fn reports_the_transport_as_disabled_when_unconfigured() {
         .start_websocket()
         .expect("no-op start succeeds")
         .is_none());
-
-    let listener = instance.bind().await.expect("bind the api port");
-    let address = listener.local_addr().expect("api address");
-    let serve_instance = Arc::clone(&instance);
-    tokio::spawn(async move { serve_instance.serve_on(listener).await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let body: serde_json::Value = reqwest::get(format!("http://{address}/v1/system/websocket"))
-        .await
-        .expect("request sent")
-        .json()
-        .await
-        .expect("json body");
-
-    assert_eq!(body["enabled"], false);
+    assert!(instance.websocket_status().is_none());
 }

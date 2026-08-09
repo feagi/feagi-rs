@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
 
     // Load before the first burst so the engine never runs against a half-built connectome.
     if let Some(path) = args.genome.as_deref() {
-        let summary = feagi::genome::load_genome_file(instance.npu(), path)
+        let summary = feagi::genome::load_genome_file(instance.npu(), instance.genome(), path)
             .with_context(|| format!("failed to load genome '{}'", path.display()))?;
         info!(
             target: "feagi-rs",
