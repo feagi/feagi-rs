@@ -1221,7 +1221,7 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     // Determine quantization precision:
     // - If CLI override is present, use it.
     // - Else, peek genome if provided.
-    // - Else, use int8 (existing behavior).
+    // - Else, default to fp32 to avoid implicit threshold clipping.
     let precision = if let Some(p) = &args.precision {
         info!("  Precision override from CLI: {}", p);
         p.clone()
@@ -1233,15 +1233,15 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
             }
             Err(e) => {
                 warn!(
-                    "  Failed to peek genome precision ({}), defaulting to int8",
+                    "  Failed to peek genome precision ({}), defaulting to fp32",
                     e
                 );
-                "int8".to_string()
+                "fp32".to_string()
             }
         }
     } else {
-        info!("  No genome provided at startup, defaulting to int8 quantization");
-        "int8".to_string()
+        info!("  No genome provided at startup, defaulting to fp32 quantization");
+        "fp32".to_string()
     };
 
     // Initialize NPU with appropriate precision
@@ -1290,8 +1290,8 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 )?)
             }
             _ => {
-                warn!("    Unknown precision '{}', defaulting to INT8", precision);
-                feagi_npu_burst_engine::DynamicNPU::INT8(feagi_npu_burst_engine::RustNPU::new(
+                warn!("    Unknown precision '{}', defaulting to FP32", precision);
+                feagi_npu_burst_engine::DynamicNPU::F32(feagi_npu_burst_engine::RustNPU::new(
                     runtime,
                     backend,
                     config.connectome.neuron_space,
