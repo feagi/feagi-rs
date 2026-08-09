@@ -30,6 +30,10 @@ feagi-models = { path = "../feagi-core/crates/feagi-models" }
 feagi-data = { path = "../feagi-core/crates/feagi-data" }
 feagi-genomic-context = { path = "../feagi-core/crates/feagi-genomic-context" }
 feagi-serialization = { path = "../feagi-core/crates/feagi-serialization" }
+# Genome loading: `feagi-evolutionary` parses and migrates the genome file, and
+# `feagi-brain-development` turns the result into connectome requests for the NPU.
+feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
+feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development", default-features = false }
 # WebSocket transport only. ZMQ is left off because the NPU has no sensory/motor entry points yet
 # (`set_sensor_data` / `get_motor_data` are unimplemented), and it would pull in the libzmq C library.
 # Both directions are enabled because feagi-io's shared types reference client and server

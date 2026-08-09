@@ -27,6 +27,7 @@
 //! ```
 
 pub mod api;
+pub mod genome;
 pub mod npu;
 pub mod ws;
 

@@ -7,6 +7,7 @@
 //! in-progress NPU currently supports.
 
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -55,6 +56,10 @@ struct Args {
     /// Run without the NPU state WebSocket
     #[arg(long)]
     no_websocket: bool,
+
+    /// Genome file to load before the burst engine starts
+    #[arg(long, value_name = "PATH")]
+    genome: Option<PathBuf>,
 
     /// Enable verbose (debug) logging
     #[arg(short, long)]
@@ -109,6 +114,17 @@ async fn main() -> Result<()> {
             info!(target: "feagi-rs", "NPU state stream at {} ({} Hz)", status.advertised_address, status.publish_hz)
         }
         None => info!(target: "feagi-rs", "websocket transport disabled (--no-websocket)"),
+    }
+
+    // Load before the first burst so the engine never runs against a half-built connectome.
+    if let Some(path) = args.genome.as_deref() {
+        let summary = feagi::genome::load_genome_file(instance.npu(), path)
+            .with_context(|| format!("failed to load genome '{}'", path.display()))?;
+        info!(
+            target: "feagi-rs",
+            "genome '{}' loaded: {} areas, {} neurons",
+            summary.genome_title, summary.areas_added, summary.neurons_added
+        );
     }
 
     if args.no_autostart {

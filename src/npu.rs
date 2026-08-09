@@ -22,11 +22,15 @@ use feagi_data::quantization_levels::feagi_index_quantization::{
     FeagiIndexQuantization, FeagiIndexQuantizationGenomic,
 };
 use feagi_genomic_context::cortical_area::CorticalID;
+use feagi_data::values::quantizable::QuantizedIndexCountTrait;
 use feagi_models::connectome_requests::connectome_request::ConnectomeRequest;
-use feagi_models::neuron::models::feagi_advanced::{
-    FeagiAdvancedModelCorticalWriter, FeagiAdvancedModelStandardQuant,
+use feagi_models::cortical_area::genome_compose::cortical_writer_by_model_quant::{
+    CorticalWriterByModelQuant, FeagiAdvancedModelWriter,
 };
+use feagi_models::cortical_area::neuron_model_implementations::feagi_advanced::composers::FeagiAdvancedModelCorticalWriter;
+use feagi_models::cortical_area::neuron_model_implementations::feagi_advanced::quantization::FeagiAdvancedModelStandardQuant;
 use feagi_npu::dynamic_npu::DynamicNPU;
+use feagi_npu::visualization::CorticalAreaFireSnapshot;
 
 /// Neuron index quantization used by the genomic-level engine the NPU is currently fixed to.
 type NeuronQuant = <FeagiIndexQuantizationGenomic as FeagiIndexQuantization>::NeuronIndexQuant;
@@ -90,6 +94,34 @@ pub fn parse_cortical_id(raw: &str) -> Result<CorticalID, NpuError> {
         NpuError::InvalidCorticalId(format!(
             "'{raw}' is neither 8 ASCII bytes starting with one of c/m/_/i/o, nor base64 encoding such an ID"
         ))
+    })
+}
+
+/// Describes the cortical area a request will create, for the local registry.
+///
+/// Returns `None` for requests that do not create an area, such as mapping additions.
+fn record_for_request(request: &ConnectomeRequest) -> Option<CorticalAreaRecord> {
+    let ConnectomeRequest::CorticalAreaAdd {
+        TEMP_adding_id,
+        writer,
+    } = request
+    else {
+        return None;
+    };
+
+    let CorticalWriterByModelQuant::FeagiAdvanced(FeagiAdvancedModelWriter::Standard(writer)) = writer;
+    let FeagiAdvancedModelCorticalWriter::DefaultNewDimensional { dimensions, .. } = writer;
+
+    let axis = |value: usize| value as u64;
+    let x = axis(dimensions.get_x().deref().quant_to_usize());
+    let y = axis(dimensions.get_y().deref().quant_to_usize());
+    let z = axis(dimensions.get_z().deref().quant_to_usize());
+    let d = axis(dimensions.get_d().deref().quant_to_usize());
+
+    Some(CorticalAreaRecord {
+        id: *TEMP_adding_id,
+        dimensions: [x, y, z, d],
+        neuron_count: x * y * z * d,
     })
 }
 
@@ -180,7 +212,10 @@ impl NpuHandle {
 
         state
             .npu
-            .request(ConnectomeRequest::CorticalAreaAdd(record.id, writer.into()));
+            .request(ConnectomeRequest::CorticalAreaAdd {
+                TEMP_adding_id: record.id,
+                writer: writer.into(),
+            });
         state.areas.push(record.clone());
 
         info!(
@@ -193,8 +228,32 @@ impl NpuHandle {
         Ok(record)
     }
 
+    /// Submits pre-built connectome requests, such as those corticogenesis produces from a genome.
+    ///
+    /// The requests are applied under a single lock so a burst cannot observe a half-built
+    /// connectome. The local area registry is rebuilt afterwards from what the NPU accepted,
+    /// rather than predicted from the requests, so the two cannot drift.
+    pub fn submit_connectome_requests(&self, requests: Vec<ConnectomeRequest>) {
+        // Records are read off the requests before submitting, because the requests consume their
+        // writers and the NPU exposes no way to ask an area for its dimensions afterwards.
+        let records: Vec<CorticalAreaRecord> = requests.iter().filter_map(record_for_request).collect();
+
+        let mut state = self.state.lock();
+
+        for request in requests {
+            state.npu.request(request);
+        }
+
+        state.areas.extend(records);
+    }
+
     pub fn cortical_areas(&self) -> Vec<CorticalAreaRecord> {
         self.state.lock().areas.clone()
+    }
+
+    /// The neurons that fired in the most recent burst, grouped by cortical area.
+    pub fn fire_queue_snapshot(&self) -> Vec<(CorticalID, CorticalAreaFireSnapshot<FeagiIndexQuantizationGenomic>)> {
+        self.state.lock().npu.fire_queue_snapshot()
     }
 
     pub fn cortical_area(&self, id: &CorticalID) -> Option<CorticalAreaRecord> {
