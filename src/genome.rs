@@ -64,7 +64,8 @@ pub fn load_genome_json(
     shared_genome: &SharedGenome,
     json: &str,
 ) -> Result<GenomeLoadSummary, GenomeError> {
-    let genome = load_genome_from_json(json).map_err(|error| GenomeError::Parse(error.to_string()))?;
+    let genome =
+        load_genome_from_json(json).map_err(|error| GenomeError::Parse(error.to_string()))?;
 
     let (requests, report) = develop_connectome_requests(&genome)
         .map_err(|error| GenomeError::Corticogenesis(error.to_string()))?;

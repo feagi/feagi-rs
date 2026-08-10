@@ -47,6 +47,15 @@ feagi-io = { path = "../feagi-core/crates/feagi-io", default-features = false, f
     "feagi-server",
     "feagi-client",
 ] }
+# Agent registration: `feagi-agent` owns the command-and-control protocol agents register over,
+# and `feagi-config` supplies the endpoint it listens on. The port has to come from the same
+# configuration the API advertises through `/v1/network/connection_info`, or agents would be told
+# to connect somewhere nothing is bound.
+feagi-agent = { path = "../feagi-core/crates/feagi-agent", default-features = false, features = [
+    "agent-server",
+    "agent-transport-websocket-std",
+] }
+feagi-config = { path = "../feagi-core/crates/feagi-config" }
 
 # Async runtime + HTTP
 tokio = { version = "1.40", features = ["full"] }
@@ -76,6 +85,13 @@ serde_json = "1.0"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
+# The registration test drives a real agent client against the server, so the client half of
+# `feagi-agent` is needed on top of the server half the crate itself uses.
+feagi-agent = { path = "../feagi-core/crates/feagi-agent", default-features = false, features = [
+    "agent-client",
+    "agent-server",
+    "agent-transport-websocket-std",
+] }
 
 [profile.release]
 opt-level = 3

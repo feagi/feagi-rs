@@ -8,8 +8,6 @@
 //! rewrite are registered as explicit `501 Not Implemented` stubs rather than 404s, so clients can
 //! tell "gone for now" apart from "wrong URL".
 
-use std::sync::Arc;
-
 use axum::extract::{OriginalUri, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -21,19 +19,16 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::warn;
 
 use crate::npu::{parse_cortical_id, CorticalAreaRecord, NpuError, NpuHandle};
-use crate::ws::WebSocketBroadcaster;
 
 /// Shared state handed to every handler.
 #[derive(Clone)]
 pub struct ApiState {
     pub npu: NpuHandle,
-    /// `None` when the server runs without the WebSocket transport.
-    pub websocket: Option<Arc<WebSocketBroadcaster>>,
 }
 
 impl ApiState {
-    pub fn new(npu: NpuHandle, websocket: Option<Arc<WebSocketBroadcaster>>) -> Self {
-        Self { npu, websocket }
+    pub fn new(npu: NpuHandle) -> Self {
+        Self { npu }
     }
 }
 
@@ -249,29 +244,6 @@ async fn get_version() -> Json<serde_json::Value> {
     }))
 }
 
-/// `GET /v1/system/websocket` — where to subscribe for the NPU state stream, and how it is doing.
-///
-/// This is how a client discovers the stream endpoint rather than hardcoding a port.
-async fn get_websocket_status(State(state): State<ApiState>) -> Json<serde_json::Value> {
-    let Some(status) = state.websocket.as_ref().map(|ws| ws.status()) else {
-        return Json(json!({
-            "enabled": false,
-            "detail": "server started without the websocket transport",
-        }));
-    };
-
-    Json(json!({
-        "enabled": true,
-        "running": status.running,
-        "url": status.advertised_address,
-        "bind_address": status.bind_address,
-        "publish_hz": status.publish_hz,
-        "frames_published": status.frames_published,
-        "last_error": status.last_error,
-        "payload": "FEAGI byte container holding a JSON npu_state object",
-    }))
-}
-
 //endregion
 
 //region Removed subsystems
@@ -340,8 +312,7 @@ fn create_v1_router() -> Router<ApiState> {
         .route("/burst_engine/burst", post(post_single_burst))
         .route("/burst_engine/burst_frequency", put(put_burst_frequency))
         .route("/system/health_check", get(get_health_check))
-        .route("/system/version", get(get_version))
-        .route("/system/websocket", get(get_websocket_status));
+        .route("/system/version", get(get_version));
 
     for prefix in UNIMPLEMENTED_PREFIXES {
         router = router

@@ -20,7 +20,8 @@ fn barebones_genome_populates_the_npu() {
     let npu = NpuHandle::new(10);
     let shared_genome = feagi::empty_shared_genome();
 
-    let summary = load_genome_file(&npu, &shared_genome, &barebones_genome_path()).expect("genome should load");
+    let summary = load_genome_file(&npu, &shared_genome, &barebones_genome_path())
+        .expect("genome should load");
 
     assert!(
         summary.areas_added > 0,
@@ -42,9 +43,14 @@ fn registry_neuron_counts_match_the_summary() {
     let npu = NpuHandle::new(10);
     let shared_genome = feagi::empty_shared_genome();
 
-    let summary = load_genome_file(&npu, &shared_genome, &barebones_genome_path()).expect("genome should load");
+    let summary = load_genome_file(&npu, &shared_genome, &barebones_genome_path())
+        .expect("genome should load");
 
-    let registry_neurons: u64 = npu.cortical_areas().iter().map(|area| area.neuron_count).sum();
+    let registry_neurons: u64 = npu
+        .cortical_areas()
+        .iter()
+        .map(|area| area.neuron_count)
+        .sum();
 
     assert_eq!(
         registry_neurons, summary.neurons_added,

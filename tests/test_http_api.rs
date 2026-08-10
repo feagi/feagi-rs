@@ -23,15 +23,13 @@ fn barebones_genome_path() -> PathBuf {
 
 /// Starts a server on an OS-assigned port and returns its base URL.
 ///
-/// The WebSocket transport is left off here so these tests don't contend for a fixed port; it has
-/// its own test file.
+/// Only the HTTP surface is started: agent registration binds a fixed port from the configuration,
+/// and it has its own test file.
 async fn start_server() -> (Arc<FeagiInstance>, String) {
     let config = FeagiConfig {
         api_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         api_port: 0,
         burst_hz: 100,
-        // These tests exercise the HTTP contract only, so the broadcast socket is left unbound.
-        websocket: None,
     };
     let instance = Arc::new(FeagiInstance::new(config));
     let listener = instance.bind().await.expect("bind ephemeral port");
@@ -51,13 +49,17 @@ async fn start_server() -> (Arc<FeagiInstance>, String) {
 /// Endpoints that resolve brain regions or read cortical metadata need a genome, because that is
 /// where those structures come from.
 async fn start_server_with_genome() -> (Arc<FeagiInstance>, String) {
+    start_server_loading(&barebones_genome_path()).await
+}
+
+/// Starts a server with the given genome realised in the NPU.
+///
+/// Separate from [`start_server_with_genome`] because the barebones genome is flat and declares no
+/// brain regions, so tests covering the region tree need a genome that does.
+async fn start_server_loading(genome: &std::path::Path) -> (Arc<FeagiInstance>, String) {
     let (instance, base) = start_server().await;
-    feagi::genome::load_genome_file(
-        instance.npu(),
-        instance.genome(),
-        &barebones_genome_path(),
-    )
-    .expect("barebones genome should load");
+    feagi::genome::load_genome_file(instance.npu(), instance.genome(), genome)
+        .unwrap_or_else(|e| panic!("genome '{}' should load: {e}", genome.display()));
     (instance, base)
 }
 
@@ -282,6 +284,266 @@ async fn parameterised_routes_resolve_to_their_handlers() {
     }
 }
 
+/// The morphology endpoints read the genome's morphology registry. Before that read was
+/// implemented they answered 500, so this asserts both the status and that the payload actually
+/// carries the genome's morphologies rather than an empty map.
+#[tokio::test]
+async fn lists_the_morphologies_carried_by_the_genome() {
+    let (_instance, base) = start_server_with_genome().await;
+    let client = reqwest::Client::new();
+
+    let body: serde_json::Value = client
+        .get(format!("{base}/v1/morphology/morphology_list"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+
+    let names = body["morphology_list"]
+        .as_array()
+        .expect("morphology_list is an array");
+    assert!(
+        !names.is_empty(),
+        "the barebones genome defines morphologies, so the list must not be empty"
+    );
+
+    let mut sorted = names.to_vec();
+    sorted.sort_by_key(|value| value.as_str().unwrap_or_default().to_string());
+    assert_eq!(names, &sorted, "the contract promises alphabetical order");
+
+    // Each listed morphology must also be described, which exercises the type and parameter
+    // conversion rather than just the key set.
+    let described: serde_json::Value = client
+        .get(format!("{base}/v1/morphology/morphologies"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+
+    let first = names[0].as_str().expect("morphology name is a string");
+    assert!(
+        described.get(first).is_some(),
+        "morphology '{first}' was listed but not described"
+    );
+}
+
+/// Brain regions come from the genome, and each region's child list is reconstructed from the
+/// parent link the genome records on the children. This covers both the listing and that
+/// reconstruction.
+#[tokio::test]
+async fn describes_brain_regions_and_their_hierarchy() {
+    let genome = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("genomes/memory_genome.json");
+    let (_instance, base) = start_server_loading(&genome).await;
+    let client = reqwest::Client::new();
+
+    let ids: Vec<String> = client
+        .get(format!("{base}/v1/region/regions"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    assert_eq!(
+        ids.len(),
+        2,
+        "the memory genome declares two brain regions, got {ids:?}"
+    );
+
+    let titles: std::collections::HashMap<String, String> = client
+        .get(format!("{base}/v1/region/region_titles"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    for id in &ids {
+        assert!(
+            titles.contains_key(id),
+            "region '{id}' was listed but has no title"
+        );
+    }
+    assert!(
+        titles.values().any(|title| title == "Root Brain Region"),
+        "region names must come from the genome, got {titles:?}"
+    );
+
+    // A region that claims a child must be named as that child's parent, and vice versa. This is
+    // the invariant the reconstruction has to preserve, since the genome stores only one side.
+    let mut children_of = std::collections::HashMap::new();
+    let mut parent_of = std::collections::HashMap::new();
+    for id in &ids {
+        let detail: serde_json::Value = client
+            .get(format!("{base}/v1/region/region/{id}"))
+            .send()
+            .await
+            .expect("request sent")
+            .json()
+            .await
+            .expect("json body");
+
+        // The contract names these `regions` and `parent_region_id`, not after the DTO fields.
+        children_of.insert(id.clone(), detail["regions"].clone());
+        parent_of.insert(id.clone(), detail["parent_region_id"].clone());
+    }
+
+    for (parent, children) in &children_of {
+        for child in children.as_array().into_iter().flatten() {
+            let child = child.as_str().expect("child region id is a string");
+            assert_eq!(
+                parent_of.get(child).and_then(|value| value.as_str()),
+                Some(parent.as_str()),
+                "region '{parent}' claims '{child}' as a child, but '{child}' does not name it as parent"
+            );
+        }
+    }
+}
+
+/// Creating a region writes it into the loaded genome, which is what the region reads and the
+/// genome export both draw from. This walks create, read back, and delete.
+#[tokio::test]
+async fn creates_and_deletes_a_brain_region() {
+    let genome = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("genomes/memory_genome.json");
+    let (_instance, base) = start_server_loading(&genome).await;
+    let client = reqwest::Client::new();
+
+    let existing: Vec<String> = client
+        .get(format!("{base}/v1/region/regions"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    let parent = existing.first().expect("genome has a region").clone();
+
+    let created = client
+        .post(format!("{base}/v1/region/region"))
+        .json(&json!({
+            "title": "Test Region",
+            "parent_region_id": parent,
+            "coordinates_2d": [0, 0],
+            "coordinates_3d": [0, 0, 0],
+        }))
+        .send()
+        .await
+        .expect("request sent");
+    assert!(
+        created.status().is_success(),
+        "creating a region failed: {}",
+        created.text().await.unwrap_or_default()
+    );
+
+    // The new region must be visible to readers, carry its parent, and appear as the parent's
+    // child, which is the derived side of the link.
+    let titles: std::collections::HashMap<String, String> = client
+        .get(format!("{base}/v1/region/region_titles"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    let new_id = titles
+        .iter()
+        .find(|(_, title)| title.as_str() == "Test Region")
+        .map(|(id, _)| id.clone())
+        .unwrap_or_else(|| panic!("the created region should be listed, got {titles:?}"));
+
+    let parent_detail: serde_json::Value = client
+        .get(format!("{base}/v1/region/region/{parent}"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    let children = parent_detail["regions"]
+        .as_array()
+        .expect("the detail response lists child regions under `regions`");
+    assert!(
+        children.iter().any(|child| child.as_str() == Some(&new_id)),
+        "the parent should list the new region as a child, got {children:?}"
+    );
+
+    // The new region holds no cortical areas, so deleting it needs nothing from the engine.
+    let deleted = client
+        .delete(format!("{base}/v1/region/region"))
+        .json(&json!({ "region_id": new_id }))
+        .send()
+        .await
+        .expect("request sent");
+    assert!(
+        deleted.status().is_success(),
+        "deleting an empty region failed: {}",
+        deleted.text().await.unwrap_or_default()
+    );
+
+    let remaining: Vec<String> = client
+        .get(format!("{base}/v1/region/regions"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    assert_eq!(
+        remaining.len(),
+        existing.len(),
+        "the region count should be back to where it started"
+    );
+}
+
+/// A server that has not loaded a genome must still answer the endpoints a monitor or a UI polls
+/// on startup. Reporting "nothing loaded" as a 500 makes the server look broken during the window
+/// before a genome arrives, which is exactly when these are polled hardest.
+#[tokio::test]
+async fn answers_read_endpoints_before_a_genome_is_loaded() {
+    let (_instance, base) = start_server().await;
+    let client = reqwest::Client::new();
+
+    for path in [
+        "/v1/system/health_check",
+        "/v1/region/regions",
+        "/v1/region/region_titles",
+        "/v1/morphology/morphology_list",
+        "/v1/cortical_area/cortical_area_id_list",
+        "/v1/burst_engine/burst_counter",
+    ] {
+        let response = client
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .expect("request sent");
+        let status = response.status();
+        assert!(
+            status.is_success(),
+            "{path} answered {status} with no genome loaded: {}",
+            response.text().await.unwrap_or_default()
+        );
+    }
+
+    // Health has to describe the empty state rather than merely not failing.
+    let health: serde_json::Value = client
+        .get(format!("{base}/v1/system/health_check"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    assert_eq!(health["cortical_area_count"], 0);
+    assert_eq!(
+        health["brain_readiness"], false,
+        "a brain with no areas is not ready"
+    );
+}
+
 #[tokio::test]
 async fn reports_unavailable_npu_introspection_as_not_implemented() {
     let (_instance, base) = start_server_with_genome().await;
@@ -293,7 +555,12 @@ async fn reports_unavailable_npu_introspection_as_not_implemented() {
     // because that would mean the published surface had shrunk.
     let response = client
         .get(format!("{base}/v1/cortical_area/voxel_neurons"))
-        .query(&[("cortical_area", "_death"), ("x", "0"), ("y", "0"), ("z", "0")])
+        .query(&[
+            ("cortical_area", "_death"),
+            ("x", "0"),
+            ("y", "0"),
+            ("z", "0"),
+        ])
         .send()
         .await
         .expect("request sent");
