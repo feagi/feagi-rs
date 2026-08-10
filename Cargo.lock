@@ -916,6 +916,7 @@ dependencies = [
  "feagi-genomic-context",
  "feagi-genomic-data",
  "feagi-io",
+ "feagi-models",
  "feagi-npu",
  "feagi-observability",
  "feagi-serialization",

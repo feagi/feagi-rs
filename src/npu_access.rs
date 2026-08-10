@@ -10,6 +10,7 @@
 
 use feagi_api::services::{NpuAccess, NpuCorticalArea};
 use feagi_genomic_context::cortical_area::CorticalID;
+use feagi_models::connectome_requests::connectome_request::ConnectomeRequest;
 
 use crate::npu::{CorticalAreaRecord, NpuHandle};
 
@@ -45,6 +46,10 @@ impl NpuAccess for NpuHandle {
         NpuHandle::add_cortical_area(self, id, x, y, z, density)
             .map(|record| to_service_area(&record))
             .map_err(|error| error.to_string())
+    }
+
+    fn submit_connectome_requests(&self, requests: Vec<ConnectomeRequest>) {
+        NpuHandle::submit_connectome_requests(self, requests)
     }
 
     fn burst_count(&self) -> u64 {

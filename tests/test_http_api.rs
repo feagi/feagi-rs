@@ -143,6 +143,69 @@ async fn lists_cortical_areas_realised_from_the_genome() {
 }
 
 #[tokio::test]
+async fn uploads_the_barebones_genome_and_realises_it_in_the_npu() {
+    let (instance, base) = start_server().await;
+    let client = reqwest::Client::new();
+
+    assert!(
+        instance.npu().cortical_areas().is_empty(),
+        "the server starts without a genome"
+    );
+
+    let response = client
+        .post(format!("{base}/v1/genome/upload/barebones"))
+        .send()
+        .await
+        .expect("request sent");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = response.json().await.expect("json body");
+    assert_eq!(body["success"], json!(true));
+
+    let reported_areas = body["cortical_area_count"]
+        .as_u64()
+        .expect("the response counts areas");
+    assert!(reported_areas > 0, "the barebones genome contributes areas");
+    assert_eq!(
+        instance.npu().cortical_areas().len() as u64,
+        reported_areas,
+        "every area the response reports should be realised in the NPU"
+    );
+}
+
+/// Loading a genome sets the burst frequency to the reciprocal of the genome's timestep, so a
+/// placeholder timestep of zero would drive the engine at an unrepresentable rate.
+#[tokio::test]
+async fn a_genome_upload_leaves_the_engine_at_the_genomes_own_timestep() {
+    let (_instance, base) = start_server().await;
+    let client = reqwest::Client::new();
+
+    let upload = client
+        .post(format!("{base}/v1/genome/upload/barebones"))
+        .send()
+        .await
+        .expect("request sent");
+    assert_eq!(upload.status(), reqwest::StatusCode::OK);
+
+    let response = client
+        .get(format!("{base}/v1/burst_engine/simulation_timestep"))
+        .send()
+        .await
+        .expect("request sent");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let timestep: f64 = response
+        .json()
+        .await
+        .expect("the engine reports a timestep");
+
+    assert!(
+        timestep.is_finite() && timestep > 0.0,
+        "the engine should run at the genome's timestep rather than a placeholder: got {timestep}"
+    );
+}
+
+#[tokio::test]
 async fn creates_a_custom_cortical_area_and_realises_it_in_the_npu() {
     let (instance, base) = start_server_with_genome().await;
     let client = reqwest::Client::new();

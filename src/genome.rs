@@ -3,18 +3,15 @@
 
 //! Loading a genome file into the running NPU.
 //!
-//! The work splits across three crates and this module is only the seam between them:
-//! `feagi-evolutionary` reads the file and brings it to the current schema, then
-//! `feagi-brain-development` performs corticogenesis to produce connectome requests, and finally
-//! those requests are submitted to the NPU here. Nothing about the genome format or the
-//! translation lives in this crate.
+//! Reading the file is all this module does on its own. Everything after that is the shared
+//! loading path in `feagi-api`, which the REST endpoints use as well: a genome loaded with
+//! `--genome` and one uploaded to `/v1/genome/*` must produce the same brain, and they only do so
+//! if there is one implementation to produce it.
 
 use std::path::Path;
 
-use tracing::{info, warn};
-
-use feagi_brain_development::corticogenesis::develop_connectome_requests;
-use feagi_evolutionary::load_genome_from_json;
+use feagi_api::services::genome::realise_genome_json;
+use feagi_services::types::errors::ServiceError;
 
 use crate::npu::NpuHandle;
 use crate::SharedGenome;
@@ -31,6 +28,17 @@ pub enum GenomeError {
     Parse(String),
     #[error("corticogenesis failed: {0}")]
     Corticogenesis(String),
+}
+
+impl From<ServiceError> for GenomeError {
+    /// Maps the shared loader's failures onto this crate's error, which distinguishes a genome
+    /// that could not be read from one the engine could not build.
+    fn from(error: ServiceError) -> Self {
+        match error {
+            ServiceError::InvalidInput(message) => GenomeError::Parse(message),
+            other => GenomeError::Corticogenesis(other.to_string()),
+        }
+    }
 }
 
 /// What a genome load produced in the NPU.
@@ -64,41 +72,12 @@ pub fn load_genome_json(
     shared_genome: &SharedGenome,
     json: &str,
 ) -> Result<GenomeLoadSummary, GenomeError> {
-    let genome =
-        load_genome_from_json(json).map_err(|error| GenomeError::Parse(error.to_string()))?;
+    let realisation = realise_genome_json(json, shared_genome, npu)?;
 
-    let (requests, report) = develop_connectome_requests(&genome)
-        .map_err(|error| GenomeError::Corticogenesis(error.to_string()))?;
-
-    npu.submit_connectome_requests(requests);
-
-    let summary = GenomeLoadSummary {
-        genome_title: genome.metadata.genome_title.clone(),
-        areas_added: report.areas_added,
-        neurons_added: report.neurons_added,
-        mappings_deferred: report.mappings_deferred,
-    };
-
-    // Publish only after corticogenesis succeeds, so the REST layer never reports a genome the
-    // NPU was unable to realise.
-    *shared_genome.write() = Some(genome);
-
-    info!(
-        target: "feagi-rs",
-        genome = %summary.genome_title,
-        areas = summary.areas_added,
-        neurons = summary.neurons_added,
-        "genome loaded"
-    );
-
-    if summary.mappings_deferred > 0 {
-        warn!(
-            target: "feagi-rs",
-            deferred = summary.mappings_deferred,
-            "genome declares mappings that corticogenesis cannot realise yet; \
-             the brain has no synapses and activity will not propagate between areas"
-        );
-    }
-
-    Ok(summary)
+    Ok(GenomeLoadSummary {
+        genome_title: realisation.info.genome_title,
+        areas_added: realisation.areas_added,
+        neurons_added: realisation.neurons_added,
+        mappings_deferred: realisation.mappings_deferred,
+    })
 }
