@@ -54,8 +54,8 @@ async fn start_server_with_genome() -> (Arc<FeagiInstance>, String) {
 
 /// Starts a server with the given genome realised in the NPU.
 ///
-/// Separate from [`start_server_with_genome`] because the barebones genome is flat and declares no
-/// brain regions, so tests covering the region tree need a genome that does.
+/// Separate from [`start_server_with_genome`] because the barebones genome is flat and its document
+/// declares no brain regions, so tests covering a genome-authored region tree need one that does.
 async fn start_server_loading(genome: &std::path::Path) -> (Arc<FeagiInstance>, String) {
     let (instance, base) = start_server().await;
     feagi::genome::load_genome_file(instance.npu(), instance.genome(), genome)
@@ -465,6 +465,81 @@ async fn describes_brain_regions_and_their_hierarchy() {
             );
         }
     }
+}
+
+/// A genome document need not declare any brain region, and no v2 genome does. Readers resolve the
+/// hierarchy by finding the region that names no parent and cannot place a cortical area without
+/// one, so such a genome has to be served with a root regardless.
+#[tokio::test]
+async fn a_genome_declaring_no_regions_is_served_with_a_root_holding_every_area() {
+    let (_instance, base) = start_server_with_genome().await;
+    let client = reqwest::Client::new();
+
+    let regions: std::collections::HashMap<String, serde_json::Value> = client
+        .get(format!("{base}/v1/region/regions_members"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+
+    let roots: Vec<&String> = regions
+        .iter()
+        .filter(|(_, region)| region["parent_region_id"].is_null())
+        .map(|(region_id, _)| region_id)
+        .collect();
+    assert_eq!(
+        roots.len(),
+        1,
+        "exactly one region must have no parent, got {regions:?}"
+    );
+    let root = roots[0];
+
+    // Nothing else places these areas, so an area missing from the root is an area no reader can
+    // resolve to a region at all.
+    let placed = regions[root]["areas"]
+        .as_array()
+        .expect("a region lists its cortical areas under `areas`");
+    let areas: serde_json::Value = client
+        .get(format!("{base}/v1/cortical_area/cortical_area_id_list"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    let area_ids = areas["cortical_ids"]
+        .as_array()
+        .expect("the id list response carries `cortical_ids`");
+    assert!(!area_ids.is_empty(), "the barebones genome contributes areas");
+    assert_eq!(
+        placed.len(),
+        area_ids.len(),
+        "every cortical area belongs in the root region, got {placed:?}"
+    );
+    for area_id in area_ids {
+        assert!(
+            placed.contains(area_id),
+            "cortical area {area_id} is in no region"
+        );
+    }
+
+    // Clients that read the root from the health check rather than walking the tree have to be
+    // told the same region.
+    let health: serde_json::Value = client
+        .get(format!("{base}/v1/system/health_check"))
+        .send()
+        .await
+        .expect("request sent")
+        .json()
+        .await
+        .expect("json body");
+    assert_eq!(
+        health["brain_regions_root"].as_str(),
+        Some(root.as_str()),
+        "the health check should report the same root the region tree exposes"
+    );
 }
 
 /// Creating a region writes it into the loaded genome, which is what the region reads and the
