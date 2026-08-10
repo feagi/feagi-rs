@@ -14,7 +14,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 use feagi::{
     AgentRegistrationError, FeagiConfig, FeagiInstance, RegistrationConfig, DEFAULT_API_PORT,
@@ -50,12 +52,29 @@ struct Args {
     verbose: bool,
 }
 
+/// Installs the console logger plus the in-process ring buffer that `GET /v1/system/log_tail`
+/// reads from.
+///
+/// The ring buffer is a `tracing` layer, so it only exists if it is registered on the subscriber
+/// at startup. Initialising tracing without it leaves the endpoint permanently reporting
+/// `enabled: false`, which reads as "logging was switched off" rather than "the server never
+/// wired it up". Capacity comes from `FEAGI_LOG_RING_BUFFER_CAPACITY`; setting it to 0 is the
+/// supported way to opt out.
 fn init_logging(verbose: bool) {
     let default_level = if verbose { "debug" } else { "info" };
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("feagi={default_level},{default_level}")));
 
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    let ring_capacity = feagi_observability::capacity_from_env();
+    let ring_layer = (ring_capacity > 0).then(|| {
+        let ring = feagi_observability::install_global_ring(ring_capacity);
+        feagi_observability::RingBufferLayer::new(ring).with_filter(filter.clone())
+    });
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(filter))
+        .with(ring_layer)
+        .init();
 }
 
 #[tokio::main]

@@ -1125,6 +1125,7 @@ dependencies = [
  "feagi-io",
  "feagi-models",
  "feagi-npu",
+ "feagi-observability",
  "feagi-serialization",
  "feagi-services",
  "parking_lot",

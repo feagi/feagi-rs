@@ -68,6 +68,10 @@ clap = { version = "4.5", features = ["derive"], optional = true }
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Supplies the tracing ring buffer that backs `GET /v1/system/log_tail`. The buffer is a
+# subscriber layer, so it has to be installed by whoever initialises tracing -- this binary --
+# or the endpoint served by `feagi-api` has nothing to read and reports itself disabled.
+feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
 
 # Error handling
 anyhow = "1.0"
