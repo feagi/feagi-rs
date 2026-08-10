@@ -21,7 +21,7 @@ use feagi_data::neurons::DimensionalCorticalArea4DDimensions;
 use feagi_data::quantization_levels::feagi_index_quantization::{
     FeagiIndexQuantization, FeagiIndexQuantizationGenomic,
 };
-use feagi_data::values::quantizable::QuantizedIndexCountTrait;
+use feagi_data::values::quantizable::QuantizedUnsignedIntegerTrait;
 use feagi_genomic_context::cortical_area::CorticalID;
 use feagi_models::connectome_requests::connectome_request::ConnectomeRequest;
 use feagi_models::cortical_area::genome_compose::cortical_writer_by_model_quant::{
