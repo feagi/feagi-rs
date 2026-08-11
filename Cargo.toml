@@ -1,6 +1,6 @@
 [package]
 name = "feagi-rs"
-version = "0.0.37"
+version = "0.0.38"
 edition = "2021"
 authors = ["Neuraville Inc. <feagi@neuraville.com>"]
 license = "Apache-2.0"
@@ -21,7 +21,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-# FEAGI Core Components — versions track feagi-core releases on crates.io (currently 0.0.16).
+# FEAGI Core Components — versions track latest FEAGI core component crates on crates.io (currently 0.0.16).
 # For local path overrides: copy `.cargo/config.toml.example` to `.cargo/config.toml`.
 feagi-npu-neural = { version = "^0.0.16" }
 feagi-structures = { version = "^0.0.16" }
