@@ -1,6 +1,7 @@
 //! FEAGI Performance Benchmarks
 //!
-//! Comprehensive benchmarks for FEAGI NPU operations.
+//! Baseline benchmarks only. NPU benchmarks are pending integration of the rewritten feagi-core
+//! NPU (`feagi_npu::wnpu`).
 //!
 //! ## Running Benchmarks
 //! ```bash
@@ -56,34 +57,11 @@ fn bench_hashmap_operations(c: &mut Criterion) {
 }
 
 /// TODO: Benchmark NPU initialization
-/// This will be completed once the feagi-core NPU API is integrated
+///
+/// Placeholder until the rewritten NPU is integrated. The previous sketch targeted the removed
+/// `feagi-npu-burst-engine` API; rewrite it against `feagi_npu::wnpu` instead.
 fn bench_npu_init(_c: &mut Criterion) {
-    println!("⚠️  NPU benchmarks require integration with feagi-core");
-    println!("   See feagi-core/crates/feagi-burst-engine/benches/backend_comparison.rs");
-    println!("   for comprehensive CPU vs GPU burst processing benchmarks");
-
-    // Example placeholder for future implementation:
-    // let mut group = c.benchmark_group("npu_init");
-    //
-    // for (neurons, synapses, label) in [
-    //     (1_000, 10_000, "small"),
-    //     (10_000, 100_000, "medium"),
-    //     (100_000, 1_000_000, "large"),
-    // ] {
-    //     group.throughput(Throughput::Elements(neurons as u64));
-    //     group.bench_with_input(
-    //         BenchmarkId::new("create_npu", label),
-    //         &(neurons, synapses),
-    //         |b, &(n, s)| {
-    //             b.iter(|| {
-    //                 let npu = RustNPU::<f32>::new_cpu_only(n, s, 10);
-    //                 black_box(npu);
-    //             });
-    //         },
-    //     );
-    // }
-    //
-    // group.finish();
+    println!("⚠️  NPU benchmarks are pending integration of the rewritten feagi-core NPU");
 }
 
 criterion_group!(

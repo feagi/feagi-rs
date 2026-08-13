@@ -7,6 +7,13 @@
 //! - **Library Mode:** Embed FEAGI in applications (Godot, Unity, custom tools)
 //! - **Binary Mode:** Run FEAGI as standalone server (via `main.rs`)
 //!
+//! ## Neural processing status
+//!
+//! The old NPU (`feagi-npu-burst-engine` and its `ConnectomeManager`) has been removed ahead of
+//! integrating the rewritten NPU via `feagi_npu::wnpu::WrappedNeuronProcessingUnit`. Transport and
+//! API surfaces are intact, but every method on [`FeagiInstance`] that drives neural state returns
+//! an error until that integration lands.
+//!
 //! ## Example
 //!
 //! ```no_run
@@ -17,52 +24,41 @@
 //!
 //! // Create and initialize FEAGI
 //! let mut feagi = FeagiInstance::new(config).unwrap();
-//! feagi.initialize().unwrap();
 //!
-//! // Register visualization callback
-//! feagi.set_visualization_callback(Box::new(|fire_data| {
-//!     println!("Burst fired: {} areas active", fire_data.len());
-//! }));
-//!
-//! // Start burst engine
-//! feagi.start().unwrap();
-//!
-//! // ... do work ...
+//! // Neural operations are unavailable until the new NPU is wired in.
+//! assert!(feagi.initialize().is_err());
 //!
 //! // Shutdown gracefully
 //! feagi.shutdown().unwrap();
 //! ```
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info};
 
 // Re-export public types
 pub use feagi_config::{load_config, FeagiConfig};
-pub use feagi_npu_burst_engine::backend::GpuConfig;
-pub use feagi_npu_burst_engine::RawFireQueueSnapshot;
 
 // Re-export for embedders who need them
 pub use feagi_agent::server::FeagiAgentHandler;
-pub use feagi_brain_development::ConnectomeManager;
-pub use feagi_npu_burst_engine::BurstLoopRunner;
 pub use feagi_services::*;
 
 // Internal modules (reused from main.rs initialization logic)
 pub mod components;
 pub mod network_provider;
-pub mod plasticity_runtime;
+pub mod stub_services;
 pub mod version;
 
 pub use components::FeagiComponents;
 pub use version::collect_version_info;
 
-/// Visualization callback type
-///
-/// Called every burst cycle with neuron fire data.
-/// The callback runs on FEAGI's worker thread, so keep it fast.
-pub type VisualizationCallback = Box<dyn Fn(&RawFireQueueSnapshot) + Send + Sync>;
+/// Error returned by every [`FeagiInstance`] operation that needs a neural backend.
+fn npu_unavailable(operation: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{operation} is unavailable: the old NPU was removed and the new one \
+         (feagi_npu::wnpu) is not integrated yet"
+    )
+}
 
 /// Main FEAGI instance handle
 ///
@@ -78,8 +74,9 @@ pub struct FeagiInstance {
     components: Arc<Mutex<Option<FeagiComponents>>>,
     #[allow(dead_code)]
     config: FeagiConfig,
+    /// Retained for the NPU integration, which needs a runtime to drive async component setup.
+    #[allow(dead_code)]
     runtime: Arc<tokio::runtime::Runtime>,
-    viz_callback: Arc<Mutex<Option<VisualizationCallback>>>,
     http_server_url: String,
     _runtime_keeper: Option<std::thread::JoinHandle<()>>,
 }
@@ -122,7 +119,6 @@ impl FeagiInstance {
             components: Arc::new(Mutex::new(None)),
             config,
             runtime: runtime_arc,
-            viz_callback: Arc::new(Mutex::new(None)),
             http_server_url,
             _runtime_keeper: None,
         })
@@ -158,7 +154,6 @@ impl FeagiInstance {
                  feagi_api=trace,\
                  feagi_services=debug,\
                  feagi_io=debug,\
-                 feagi_npu_burst_engine=debug,\
                  feagi_brain_development=debug,\
                  feagi_evolutionary=debug,\
                  axum=debug,\
@@ -202,20 +197,6 @@ impl FeagiInstance {
 
     /// Initialize FEAGI components
     ///
-    /// This is a heavy operation that creates:
-    /// - Neural Processing Unit (NPU)
-    /// - Connectome Manager
-    /// - Burst Engine
-    /// - Peripheral Nervous System (PNS)
-    /// - HTTP API Server
-    ///
-    /// Call this once during application startup.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if any component fails to initialize
-    /// Initialize FEAGI components
-    ///
     /// **IMPORTANT:** This method is currently **not supported** for in-process embedding
     /// (e.g., GDExtension, Unity plugins, etc.) due to threading model incompatibilities.
     ///
@@ -242,86 +223,35 @@ impl FeagiInstance {
         ))
     }
 
-    /// Register a visualization callback
-    ///
-    /// This callback will be invoked every burst cycle with neuron fire data.
-    /// The callback runs on FEAGI's thread pool, so keep it fast or queue data
-    /// for processing on another thread.
-    ///
-    /// NOTE: Callback support is pending PNS API additions. Currently, visualization
-    /// data is published via ZMQ/WebSocket.
-    ///
-    /// # Arguments
-    ///
-    /// * `callback` - Function to call with fire data
-    pub fn set_visualization_callback(&self, callback: VisualizationCallback) {
-        *self.viz_callback.lock().unwrap() = Some(callback);
-        info!("📊 Visualization callback registered (pending PNS integration)");
-    }
-
     //
     // ============ BURST ENGINE CONTROL ============
     //
 
     /// Start the burst engine
     ///
-    /// Begins neural processing loop. Visualization data will be published.
-    ///
     /// # Errors
     ///
-    /// Returns error if FEAGI is not initialized or burst engine fails to start
+    /// Always errors: there is no burst engine until the new NPU is integrated.
     pub fn start(&self) -> Result<()> {
-        let components = self.components.lock().unwrap();
-        let components = components
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("FEAGI not initialized. Call initialize() first."))?;
-
-        let _ = components.burst_runner.write().start();
-        info!("▶️ Burst engine started");
-
-        Ok(())
+        Err(npu_unavailable("Starting the burst engine"))
     }
 
     /// Stop the burst engine
     ///
-    /// Halts neural processing. Can be restarted with `start()`.
-    ///
     /// # Errors
     ///
-    /// Returns error if FEAGI is not initialized
+    /// Always errors: there is no burst engine until the new NPU is integrated.
     pub fn stop(&self) -> Result<()> {
-        let components = self.components.lock().unwrap();
-        let components = components
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("FEAGI not initialized"))?;
-
-        components.burst_runner.write().stop();
-        info!("⏸️ Burst engine stopped");
-
-        Ok(())
+        Err(npu_unavailable("Stopping the burst engine"))
     }
 
     /// Set burst frequency (Hz)
     ///
-    /// Changes the neural processing speed.
-    ///
-    /// # Arguments
-    ///
-    /// * `hz` - Frequency in Hz (e.g., 100.0 for 100Hz)
-    ///
     /// # Errors
     ///
-    /// Returns error if FEAGI is not initialized
-    pub fn set_burst_frequency(&self, hz: f64) -> Result<()> {
-        let components = self.components.lock().unwrap();
-        let components = components
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("FEAGI not initialized"))?;
-
-        components.burst_runner.write().set_frequency(hz);
-        info!("⚡ Burst frequency set to {:.1}Hz", hz);
-
-        Ok(())
+    /// Always errors: there is no burst engine until the new NPU is integrated.
+    pub fn set_burst_frequency(&self, _hz: f64) -> Result<()> {
+        Err(npu_unavailable("Setting the burst frequency"))
     }
 
     //
@@ -330,45 +260,25 @@ impl FeagiInstance {
 
     /// Check if burst engine is running
     ///
-    /// This is a fast read.
+    /// Always `false`: there is no burst engine until the new NPU is integrated.
     pub fn is_running(&self) -> bool {
-        let components = self.components.lock().unwrap();
-        if let Some(ref components) = *components {
-            components.burst_runner.read().is_running()
-        } else {
-            false
-        }
+        false
     }
 
     /// Get neuron count
     ///
-    /// Returns the total number of neurons in the loaded genome.
-    ///
     /// # Errors
     ///
-    /// Returns error if FEAGI is not initialized
+    /// Always errors: neuron storage lived in the removed NPU.
     pub fn get_neuron_count(&self) -> Result<usize> {
-        let components = self.components.lock().unwrap();
-        let components = components
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("FEAGI not initialized"))?;
-
-        let manager = components.connectome_manager.read();
-        Ok(manager.get_neuron_count())
+        Err(npu_unavailable("Reading the neuron count"))
     }
 
     /// Check if a genome is loaded
     ///
-    /// Returns true if neuroembryogenesis has completed successfully.
+    /// Always `false`: genome loading needs an NPU to develop the connectome into.
     pub fn is_genome_loaded(&self) -> bool {
-        let components = self.components.lock().unwrap();
-        if let Some(ref components) = *components {
-            let npu = components.npu.lock().unwrap();
-            // If NPU has neurons, genome is loaded
-            npu.neuron_count() > 0
-        } else {
-            false
-        }
+        false
     }
 
     //
@@ -377,37 +287,11 @@ impl FeagiInstance {
 
     /// Load a genome from file
     ///
-    /// Performs neuroembryogenesis to create neurons and synapses.
-    /// This is a heavy operation that can take several seconds.
-    ///
-    /// # Arguments
-    ///
-    /// * `genome_path` - Path to .brain.json genome file
-    ///
     /// # Errors
     ///
-    /// Returns error if genome file is invalid or neuroembryogenesis fails
+    /// Always errors: neuroembryogenesis needs an NPU to develop the connectome into.
     pub fn load_genome(&self, genome_path: &str) -> Result<()> {
-        let components = self.components.lock().unwrap();
-        let components = components
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("FEAGI not initialized"))?;
-
-        let path = PathBuf::from(genome_path);
-
-        info!("🧠 Loading genome: {}", genome_path);
-
-        self.runtime.block_on(async {
-            components::load_genome_with_agent_handler(
-                &components.connectome_manager,
-                &components.agent_handler,
-                &path,
-            )
-            .await?;
-
-            info!("✅ Genome loaded successfully");
-            Ok(())
-        })
+        Err(npu_unavailable(&format!("Loading genome '{genome_path}'")))
     }
 
     //
@@ -436,8 +320,7 @@ impl FeagiInstance {
 
     /// Shutdown FEAGI gracefully
     ///
-    /// Stops burst engine, closes streams, and saves state.
-    /// Blocks until shutdown is complete.
+    /// Closes streams and releases components. Blocks until shutdown is complete.
     ///
     /// # Errors
     ///
@@ -445,11 +328,7 @@ impl FeagiInstance {
     pub fn shutdown(&self) -> Result<()> {
         info!("🛑 Shutting down FEAGI...");
 
-        let components = self.components.lock().unwrap();
-        if let Some(ref components) = *components {
-            // Stop burst engine
-            components.burst_runner.write().stop();
-
+        if self.components.lock().unwrap().take().is_some() {
             info!("✅ FEAGI shutdown complete");
         }
 

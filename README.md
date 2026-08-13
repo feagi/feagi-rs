@@ -148,17 +148,19 @@ http://<api-host>:<api-port>/swagger-ui/
 
 ### Use local `feagi-core` crates
 
-For local development, you can override crates.io with local paths:
+`feagi-core` is mid-rewrite and version 0.1.x is not on crates.io yet, so `Cargo.toml` depends on the
+sibling checkout directly with `path = "../feagi-core/crates/..."`. Clone `feagi-core` next to this
+repository and no further setup is needed:
 
-```bash
-cp .cargo/config.toml.example .cargo/config.toml
+```
+RustroverProjects/
+├── feagi-core/
+└── feagi-rs/
 ```
 
-To return to crates.io behavior:
-
-```bash
-rm .cargo/config.toml
-```
+The old `.cargo/config.toml` `[patch.crates-io]` toggle and its `scripts/switch-feagi-core-source.sh`
+helper were removed with that change. Switch back to registry dependencies once `feagi-core` 0.1.x
+publishes.
 
 ### Tests and linting
 

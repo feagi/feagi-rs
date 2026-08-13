@@ -21,23 +21,28 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-# FEAGI Core Components — versions track feagi-core releases on crates.io (currently 0.0.16).
-# For local path overrides: copy `.cargo/config.toml.example` to `.cargo/config.toml`.
-feagi-npu-neural = { version = "^0.0.16" }
-feagi-structures = { version = "^0.0.16" }
-feagi-npu-runtime = { version = "^0.0.16", features = ["std"] }
-feagi-config = { version = "^0.0.16" }
-# GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "^0.0.16" }
-feagi-brain-development = { version = "^0.0.16" }
-feagi-evolutionary = { version = "^0.0.16" }
-feagi-services = { version = "^0.0.16" }
-feagi-api = { version = "^0.0.16", features = ["services"] }
-feagi-io = { version = "^0.0.16", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
-feagi-agent = { version = "^0.0.16", features = ["agent-server", "agent-client-asynchelper-tokio"] }
-feagi-state-manager = { version = "^0.0.16" }
-feagi-npu-plasticity = { version = "^0.0.16" }
-feagi-serialization = { version = "^0.0.16" }
+# FEAGI Core Components.
+#
+# feagi-core is mid-rewrite: the split NPU crates (feagi-npu-neural, feagi-npu-runtime,
+# feagi-npu-burst-engine, feagi-npu-plasticity) and feagi-structures were dissolved, and the
+# replacements are not published yet. Until feagi-core 0.1.x is on crates.io these are path
+# dependencies on the sibling checkout.
+#
+# The new NPU (`feagi-npu`, consumed through `feagi_npu::wnpu::WrappedNeuronProcessingUnit`) is
+# deliberately NOT a direct dependency yet: its wrapper is still `todo!()`. Neural operations are
+# served by `crate::stub_services` until it is ready. Note that `feagi-npu` still arrives
+# transitively via feagi-api/feagi-brain-development/feagi-services.
+feagi-config = { path = "../feagi-core/crates/feagi-config" }
+feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
+feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
+# `connectome-io` is requested explicitly: it gates `ConnectomeService::{export,import}_connectome`,
+# which `crate::stub_services` implements unconditionally.
+feagi-services = { path = "../feagi-core/crates/feagi-services", features = ["connectome-io"] }
+feagi-api = { path = "../feagi-core/crates/feagi-api", features = ["services"] }
+feagi-io = { path = "../feagi-core/crates/feagi-io", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
+feagi-agent = { path = "../feagi-core/crates/feagi-agent", features = ["agent-server", "agent-client-asynchelper-tokio"] }
+feagi-state-manager = { path = "../feagi-core/crates/feagi-state-manager" }
+feagi-serialization = { path = "../feagi-core/crates/feagi-serialization" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -47,7 +52,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "^0.0.16" }
+feagi-observability = { path = "../feagi-core/crates/feagi-observability" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
@@ -84,7 +89,7 @@ tempfile = "3.8"
 serde_json = "1.0"
 
 # Example dependencies
-feagi-sensorimotor = { version = "^0.0.16" }
+feagi-sensorimotor = { path = "../feagi-core/crates/feagi-sensorimotor" }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [profile.release]
@@ -125,7 +130,7 @@ path = "tests/profile_storage.rs"
 
 [features]
 default = ["cli", "plasticity", "feagi-agent", "zmq-transport"]
-gpu = ["feagi-npu-burst-engine/gpu"]
+gpu = []                        # Placeholder: re-point at the new NPU's GPU backend once it exists
 plasticity = ["feagi-services/plasticity"]  # Neuroplasticity and STDP support (wires service-layer runtime updates)
 cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
 embedded = []                    # For library usage (no CLI)

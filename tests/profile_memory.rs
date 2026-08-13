@@ -84,18 +84,15 @@ fn profile_basic_allocations() -> Vec<MemoryMetrics> {
 }
 
 /// TODO: Profile NPU memory usage
-/// This needs to be updated to use the actual FEAGI Rust API
+///
+/// Placeholder until the rewritten NPU is integrated. The previous sketch targeted the removed
+/// `feagi-npu-burst-engine` API; rewrite it against `feagi_npu::wnpu` instead.
 fn profile_npu_memory() -> Vec<MemoryMetrics> {
     vec![MemoryMetrics {
         rss_kb: 0,
         virtual_kb: 0,
         component: "npu_todo".to_string(),
     }]
-
-    // TODO: Uncomment and fix when API is understood
-    // let npu = RustNPU::new(1_000, 10_000, 10);
-    // let m = get_current_memory();
-    // ...
 }
 
 /// Print memory metrics table
@@ -180,8 +177,8 @@ fn test_memory_profiling() {
 
     println!("\n✅ Memory profiling complete!");
     println!("\nTo complete this test:");
-    println!("1. Study the current FEAGI Rust API");
+    println!("1. Integrate the rewritten NPU (feagi_npu::wnpu)");
     println!("2. Add NPU initialization and measurement");
-    println!("3. Add ConnectomeManager measurement");
+    println!("3. Add connectome measurement");
     println!("4. Add neuron creation measurement");
 }

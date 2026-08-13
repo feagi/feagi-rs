@@ -1,5 +1,19 @@
 //! Executable example: register a frame-based agent and stream frames to FEAGI.
 //!
+//! DISABLED (`.rs.disabled`, matching the convention used inside feagi-core) because it targets
+//! the pre-refactor sensorimotor API. Porting it needs three separate changes:
+//!
+//! - `feagi-structures` was dissolved. `CorticalUnitIndex` now lives in
+//!   `feagi_genomic_context::cortical_unit::indexes` and `FrameChangeHandling` in
+//!   `feagi_genomic_context::cortical_area::io_cortical_area_configuration_flag`, so
+//!   `feagi-genomic-context` has to be added as a dev-dependency.
+//! - `CorticalChannelCount` and `CorticalChannelIndex` were merged into a single
+//!   `feagi_genomic_context::cortical_area::wrapped_indexes::CorticalChannelIndexCount`.
+//! - `SensorDeviceCache::segmented_vision_replace_all_stages` no longer exists; the pipeline-stage
+//!   installation path has to be rewritten against the current `data_pipeline` API.
+//!
+//! None of this is NPU-related, which is why it was deferred rather than guessed at.
+//!
 //! Demo folder structure: each demo has an `assets/` subfolder (images, videos) and
 //! an optional `genome.json`. If genome.json is present, it is loaded on FEAGI via
 //! the REST API before starting sensory streaming.

@@ -4,7 +4,10 @@
 
 This repository automatically builds and publishes FEAGI binaries for all platforms when you create a version tag.
 
-**Dependencies:** `feagi-core` crates are pulled from [crates.io](https://crates.io) (see `Cargo.toml` / `Cargo.lock`). CI verifies locked metadata resolves only registry sources for `feagi-*` dependencies. For local path overrides, use `scripts/switch-feagi-core-source.sh local` (see `.cargo/config.toml.example`).
+**Dependencies:** `feagi-core` crates are currently consumed as `path` dependencies on a sibling
+checkout, because the post-NPU-rewrite 0.1.x crates are not published yet. The release workflow's
+"Verify feagi-* dependencies resolve from crates.io" gate therefore fails today; either publish
+`feagi-core` 0.1.x and switch `Cargo.toml` back to versioned dependencies, or relax that gate.
 
 ---
 
@@ -208,7 +211,10 @@ File: `.github/workflows/release.yml`
 
 This repository automatically builds and publishes FEAGI binaries for all platforms when you create a version tag.
 
-**Dependencies:** `feagi-core` crates are pulled from [crates.io](https://crates.io) (see `Cargo.toml` / `Cargo.lock`). CI verifies locked metadata resolves only registry sources for `feagi-*` dependencies. For local path overrides, use `scripts/switch-feagi-core-source.sh local` (see `.cargo/config.toml.example`).
+**Dependencies:** `feagi-core` crates are currently consumed as `path` dependencies on a sibling
+checkout, because the post-NPU-rewrite 0.1.x crates are not published yet. The release workflow's
+"Verify feagi-* dependencies resolve from crates.io" gate therefore fails today; either publish
+`feagi-core` 0.1.x and switch `Cargo.toml` back to versioned dependencies, or relax that gate.
 
 ---
 

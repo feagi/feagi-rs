@@ -14,6 +14,10 @@ use std::collections::HashMap;
 ///
 /// NO HARDCODING - all versions come from env!("CARGO_PKG_VERSION") exported
 /// by each crate as `pub const VERSION`
+///
+/// The split NPU crates (`feagi-npu-neural`, `feagi-npu-runtime`, `feagi-npu-burst-engine`,
+/// `feagi-npu-plasticity`) were dissolved in the NPU rewrite and their replacement is not linked
+/// into this binary yet, so no NPU version is reported.
 pub fn collect_version_info() -> VersionInfo {
     let mut crates = HashMap::new();
 
@@ -23,16 +27,8 @@ pub fn collect_version_info() -> VersionInfo {
         feagi_brain_development::VERSION.to_string(),
     );
     crates.insert(
-        "feagi_npu_burst_engine".to_string(),
-        feagi_npu_burst_engine::VERSION.to_string(),
-    );
-    crates.insert(
         "feagi_evolutionary".to_string(),
         feagi_evolutionary::VERSION.to_string(),
-    );
-    crates.insert(
-        "feagi_npu_plasticity".to_string(),
-        feagi_npu_plasticity::VERSION.to_string(),
     );
 
     // Service & API layer
@@ -41,16 +37,11 @@ pub fn collect_version_info() -> VersionInfo {
         "feagi_services".to_string(),
         feagi_services::VERSION.to_string(),
     );
-    crates.insert("feagi_io".to_string(), "0.0.1-beta.12".to_string()); // TODO: Get from feagi-io crate metadata
 
     // Infrastructure
     crates.insert(
         "feagi_state_manager".to_string(),
         feagi_state_manager::VERSION.to_string(),
-    );
-    crates.insert(
-        "feagi_npu_neural".to_string(),
-        feagi_npu_neural::VERSION.to_string(),
     );
     crates.insert(
         "feagi_config".to_string(),
@@ -59,14 +50,6 @@ pub fn collect_version_info() -> VersionInfo {
     crates.insert(
         "feagi_observability".to_string(),
         feagi_observability::VERSION.to_string(),
-    );
-    // feagi-connectome-serialization moved to feagi-io::connectome (types in feagi-npu-neural)
-    crates.insert("feagi_io_connectome".to_string(), "0.0.0".to_string());
-
-    // Runtime (consolidated - std/embedded via features)
-    crates.insert(
-        "feagi_npu_runtime".to_string(),
-        feagi_npu_runtime::VERSION.to_string(),
     );
 
     // Main binary
@@ -77,7 +60,11 @@ pub fn collect_version_info() -> VersionInfo {
         .unwrap_or("not configured (add vergen to build.rs)")
         .to_string();
 
-    let rust_version = env!("CARGO_PKG_RUST_VERSION").to_string();
+    // Cargo sets this to the empty string when the package declares no `rust-version`.
+    let rust_version = match option_env!("CARGO_PKG_RUST_VERSION") {
+        Some(version) if !version.is_empty() => version.to_string(),
+        _ => "not declared (add rust-version to Cargo.toml)".to_string(),
+    };
 
     VersionInfo {
         crates,

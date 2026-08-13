@@ -93,6 +93,9 @@ fn profile_basic_operations() -> Vec<CpuMetrics> {
 }
 
 /// TODO: Profile NPU operations
+///
+/// Placeholder until the rewritten NPU is integrated. The previous sketch targeted the removed
+/// `feagi-npu-burst-engine` API; rewrite it against `feagi_npu::wnpu` instead.
 fn profile_npu_operations() -> Vec<CpuMetrics> {
     vec![CpuMetrics {
         operation: "npu_operations_todo".to_string(),
@@ -100,10 +103,6 @@ fn profile_npu_operations() -> Vec<CpuMetrics> {
         iterations: 0,
         ops_per_second: 0.0,
     }]
-
-    // TODO: Add actual NPU profiling
-    // let npu = RustNPU::new(...);
-    // Profile initialization, neuron creation, burst processing, etc.
 }
 
 /// Print CPU metrics table
@@ -186,10 +185,10 @@ fn test_cpu_profiling() {
 
     println!("\n✅ CPU profiling complete!");
     println!("\nTo complete this test:");
-    println!("1. Study the current FEAGI Rust API");
+    println!("1. Integrate the rewritten NPU (feagi_npu::wnpu)");
     println!("2. Add NPU initialization timing");
     println!("3. Add burst processing timing");
-    println!("4. Add ConnectomeManager operation timing");
+    println!("4. Add connectome operation timing");
     println!("\nFor detailed profiling:");
     println!("  cargo install flamegraph");
     println!("  cargo flamegraph --bin feagi --release");

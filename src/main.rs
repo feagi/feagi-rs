@@ -4,27 +4,33 @@
 //!
 //! ## Features
 //! - REST API (HTTP) for brain management and control
-//! - ZMQ streams for sensory input and motor output
-//! - Real-time neural processing with burst engine
-//! - Genome loading and neuroembryogenesis
+//! - ZMQ and WebSocket streams for sensory input, motor output and visualization
 //! - Agent registration and management
-//! - Brain visualization support
 //! - Configuration-driven (no hardcoded values)
+//!
+//! ## Neural processing status
+//!
+//! The old NPU (`feagi-npu-burst-engine`, `feagi-npu-plasticity` and the `ConnectomeManager` they
+//! were wired to) has been removed ahead of integrating the rewritten NPU through
+//! `feagi_npu::wnpu::WrappedNeuronProcessingUnit`. Every interface below still starts and every
+//! route still resolves, but operations that need neural state answer with a not-implemented
+//! error. See `crate::stub_services` in the library half of this crate.
 //!
 //! ## License
 //! Apache-2.0
 
 use anyhow::{Context, Result};
 use clap::Parser;
-#[cfg(feature = "plasticity")]
-use feagi::plasticity_runtime::wire_plasticity_callbacks;
-use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use feagi::network_provider::FeagiNetworkConnectionInfoProvider;
+use feagi::stub_services::{
+    StubAgentService, StubAnalyticsService, StubConnectomeService, StubGenomeService,
+    StubNeuronService, StubRuntimeService, StubSnapshotService, StubSystemService,
+};
 use feagi_agent::command_and_control::agent_embodiment_configuration_message::AgentEmbodimentConfigurationMessage;
 use feagi_agent::command_and_control::FeagiMessage;
 use feagi_api::common::agent_registration::{
@@ -34,59 +40,18 @@ use feagi_api::common::agent_registration::{
 };
 use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
-use feagi_brain_development::models::cortical_area::CorticalAreaExt;
-use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_io::{AgentID, SensoryIntakeQueue};
-use feagi_npu_burst_engine::backend::GpuConfig;
-use feagi_npu_burst_engine::{BurstLoopRunner, SensoryIngressPayload, SensoryIntake, TracingMutex};
 use feagi_observability::{init_logging_default, parse_debug_flags};
-use feagi_services::impls::AgentServiceImpl;
-use feagi_services::impls::SystemServiceImpl;
 use feagi_services::traits::agent_service::AgentService;
-use feagi_services::types::LoadGenomeParams;
-use feagi_services::*;
+use feagi_services::traits::SystemService as SystemServiceTrait;
+use feagi_services::{
+    AnalyticsService, ConnectomeService, GenomeService, NeuronService, RuntimeService,
+    SnapshotService,
+};
 use feagi_state_manager::StateManager;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::mpsc::{self, Sender};
-
-#[cfg(feature = "plasticity")]
-fn build_plasticity_config(config: &FeagiConfig) -> feagi_npu_plasticity::PlasticityConfig {
-    use feagi_npu_plasticity::{MemoryNeuronLifecycleConfig, PatternConfig, STDPConfig};
-
-    let stdp_cfg = STDPConfig {
-        lookback_steps: config.plasticity.stdp.lookback_steps as u32,
-        tau_pre: config.plasticity.stdp.tau_pre as f32,
-        tau_post: config.plasticity.stdp.tau_post as f32,
-        a_plus: config.plasticity.stdp.a_plus as f32,
-        a_minus: config.plasticity.stdp.a_minus as f32,
-        // max_pairs_per_synapse is not yet configurable in FeagiConfig.
-        max_pairs_per_synapse: STDPConfig::default().max_pairs_per_synapse,
-    };
-
-    let pattern_cfg = PatternConfig {
-        default_temporal_depth: config.plasticity.memory.default_temporal_depth as u32,
-        min_activity_threshold: config.plasticity.memory.min_activation_count,
-        max_pattern_cache_size: config.plasticity.memory.pattern_cache_size,
-    };
-
-    let lifecycle_cfg = MemoryNeuronLifecycleConfig {
-        initial_lifespan: config.plasticity.memory.initial_lifespan,
-        lifespan_growth_rate: config.plasticity.memory.lifespan_growth_rate,
-        longterm_threshold: config.plasticity.memory.longterm_threshold,
-        max_reactivations: config.plasticity.memory.max_reactivations,
-    };
-
-    feagi_npu_plasticity::PlasticityConfig {
-        queue_capacity: config.plasticity.queue_capacity,
-        max_ops_per_burst: config.plasticity.max_ops_per_burst,
-        memory_array_capacity: config.plasticity.memory.array_capacity,
-        stdp: Some(stdp_cfg),
-        pattern_config: pattern_cfg,
-        memory_lifecycle_config: lifecycle_cfg,
-    }
-}
 
 /// Mask for agent_data_hash to keep within JSON-safe integer range (BV expects int).
 const AGENT_HASH_SAFE_MASK: u64 = (1u64 << 53) - 1;
@@ -269,20 +234,9 @@ struct Args {
     #[arg(long, value_parser = ["auto", "websocket", "shm"])]
     viz_transport: Option<String>,
 
-    /// Override NPU quantization precision (bypasses genome peek).
-    ///
-    /// Supported values:
-    /// - fp32
-    /// - int8
-    ///
-    /// Example:
-    ///   --precision fp32
-    #[arg(long, value_parser = ["fp32", "int8"])]
-    precision: Option<String>,
-
     /// Enable debug logging for specific crates
-    /// Example: --debug feagi-api --debug feagi-burst-engine
-    /// Or use: --debug-feagi-api --debug-feagi-burst-engine
+    /// Example: --debug feagi-api --debug feagi-services
+    /// Or use: --debug-feagi-api --debug-feagi-services
     /// Use --debug-all to enable debug for all crates
     #[arg(long, action = clap::ArgAction::Append)]
     debug: Vec<String>,
@@ -290,125 +244,16 @@ struct Args {
     /// Enable debug logging for all crates
     #[arg(long)]
     debug_all: bool,
-
     // Note: --debug-{crate-name} flags are parsed automatically via parse_debug_flags()
-    /// Enable NPU trace logging (synapse + dynamics) via a single switch.
-    /// This enables the `feagi-npu-trace` tracing target at DEBUG level and turns on the
-    /// internal NPU trace emitters (power excluded).
-    ///
-    /// Optional filters:
-    /// - --npu-trace-chain-upstream / --npu-trace-chain-downstream <NEURON_ID> (CHAIN latency lines)
-    /// - --npu-trace-src <NEURON_ID>
-    /// - --npu-trace-dst <NEURON_ID>
-    /// - --npu-trace-neuron <NEURON_ID>
-    /// - --npu-trace-cortical-idx <U32> (runtime cortical_idx; enables dynamics + FCL summary)
-    /// - --npu-trace-cortical-id <BASE64> (genome cortical id; enables synapse traces to that area;
-    ///   after genome load, cortical_idx is resolved for dynamics/FCL when idx not set explicitly)
-    ///
-    /// Synapse per-edge lines: set env `FEAGI_NPU_TRACE_SYNAPSE_VERBOSE=1` (default is summary only).
-    #[arg(long)]
-    npu_trace: bool,
-
-    /// Enable only synapse contribution traces (power excluded).
-    #[arg(long)]
-    npu_trace_synapse: bool,
-
-    /// Enable only neural dynamics traces (power excluded).
-    #[arg(long)]
-    npu_trace_dynamics: bool,
-
-    /// Filter synapse traces to a single source neuron id.
-    #[arg(long)]
-    npu_trace_src: Option<u32>,
-
-    /// Filter synapse traces to a single destination neuron id.
-    #[arg(long)]
-    npu_trace_dst: Option<u32>,
-
-    /// Filter dynamics traces to a single neuron id.
-    #[arg(long)]
-    npu_trace_neuron: Option<u32>,
-
-    /// Filter dynamics / FCL instrumentation to neurons with this runtime `cortical_idx`.
-    /// Implies dynamics tracing if `--npu-trace` / `--npu-trace-dynamics` are not set.
-    #[arg(long)]
-    npu_trace_cortical_idx: Option<u32>,
-
-    /// Filter synapse traces to edges whose **target** is in this cortical area (base64 id, e.g. from genome).
-    /// Implies synapse tracing if `--npu-trace` / `--npu-trace-synapse` are not set.
-    #[arg(long)]
-    npu_trace_cortical_id: Option<String>,
-
-    /// Log `CHAIN upstream_fired` / `CHAIN downstream_fired` with burst deltas (pair with downstream).
-    #[arg(long)]
-    npu_trace_chain_upstream: Option<u32>,
-
-    /// Log `CHAIN downstream_fired` with `delta_bursts_since_upstream` (pair with upstream).
-    #[arg(long)]
-    npu_trace_chain_downstream: Option<u32>,
-
-    /// After load: log every neuron id in the traced cortical area; each burst: `AREA_FIRES` with ids + inter-fire burst deltas. Use with `--npu-trace-cortical-idx` or `--npu-trace-cortical-id` (no coordinates).
-    #[arg(long)]
-    npu_trace_area_fire_ids: bool,
+    //
+    // The `--precision` and `--npu-trace-*` flags were removed with the old NPU. Equivalent
+    // instrumentation must be re-introduced against the new NPU's own tracing surface.
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
-
-    // Configure NPU tracing BEFORE logging initialization (trace config is cached via OnceLock)
-    let enable_any_trace = args.npu_trace
-        || args.npu_trace_synapse
-        || args.npu_trace_dynamics
-        || args.npu_trace_cortical_idx.is_some()
-        || args.npu_trace_cortical_id.is_some()
-        || args.npu_trace_chain_upstream.is_some()
-        || args.npu_trace_chain_downstream.is_some()
-        || args.npu_trace_area_fire_ids;
-
-    if enable_any_trace {
-        // Gate emitters
-        if args.npu_trace || args.npu_trace_synapse {
-            std::env::set_var("FEAGI_NPU_TRACE_SYNAPSE", "1");
-        }
-        if args.npu_trace || args.npu_trace_dynamics {
-            std::env::set_var("FEAGI_NPU_TRACE_DYNAMICS", "1");
-        }
-        if let Some(src) = args.npu_trace_src {
-            std::env::set_var("FEAGI_NPU_TRACE_SRC", src.to_string());
-        }
-        if let Some(dst) = args.npu_trace_dst {
-            std::env::set_var("FEAGI_NPU_TRACE_DST", dst.to_string());
-        }
-        if let Some(n) = args.npu_trace_neuron {
-            std::env::set_var("FEAGI_NPU_TRACE_NEURON", n.to_string());
-        }
-        if let Some(idx) = args.npu_trace_cortical_idx {
-            std::env::set_var("FEAGI_NPU_TRACE_CORTICAL_IDX", idx.to_string());
-            if !(args.npu_trace || args.npu_trace_dynamics) {
-                std::env::set_var("FEAGI_NPU_TRACE_DYNAMICS", "1");
-            }
-        }
-        if let Some(ref id) = args.npu_trace_cortical_id {
-            std::env::set_var("FEAGI_NPU_TRACE_CORTICAL_ID", id.trim());
-            if !(args.npu_trace || args.npu_trace_synapse) {
-                std::env::set_var("FEAGI_NPU_TRACE_SYNAPSE", "1");
-            }
-        }
-        if let Some(u) = args.npu_trace_chain_upstream {
-            std::env::set_var("FEAGI_NPU_TRACE_CHAIN_UPSTREAM", u.to_string());
-        }
-        if let Some(d) = args.npu_trace_chain_downstream {
-            std::env::set_var("FEAGI_NPU_TRACE_CHAIN_DOWNSTREAM", d.to_string());
-        }
-        if args.npu_trace_area_fire_ids {
-            std::env::set_var("FEAGI_NPU_TRACE_AREA_FIRE_IDS", "1");
-            if !(args.npu_trace || args.npu_trace_dynamics) {
-                std::env::set_var("FEAGI_NPU_TRACE_DYNAMICS", "1");
-            }
-        }
-    }
 
     // Initialize observability with per-crate debug flags
     // This automatically parses --debug-{crate-name} flags from command line
@@ -438,14 +283,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // If NPU tracing was requested, ensure the trace target is visible.
-    // Note: this is a tracing target name, but EnvFilter can match it the same way as a crate/module path.
-    if enable_any_trace {
-        debug_flags
-            .enabled_crates
-            .insert("feagi-npu-trace".to_string(), true);
-    }
-
     // Initialize logging with file output
     let _log_guard = init_logging_default(&debug_flags).context("Failed to initialize logging")?;
 
@@ -463,6 +300,11 @@ async fn main() -> Result<()> {
 
     // Print banner
     print_banner();
+
+    warn!("⚠️  Neural processing is offline: the old NPU has been removed.");
+    warn!(
+        "    Transports and the REST API are live; neural operations return 501/not-implemented."
+    );
 
     // Load configuration (REQUIRED - no hardcoded fallbacks)
     info!("Loading FEAGI configuration...");
@@ -502,7 +344,7 @@ async fn main() -> Result<()> {
 
     // Initialize core components
     info!("Initializing FEAGI core components...");
-    let components = initialize_components(&config, &args).await?;
+    let components = initialize_components(&config).await?;
     info!("✓ Core components initialized");
 
     // Start agent handler polling loop IMMEDIATELY (servers need polling to accept connections)
@@ -510,7 +352,6 @@ async fn main() -> Result<()> {
     let shutdown_flag_for_polling = Arc::clone(&shutdown_flag);
     let runtime_service_for_polling = components.runtime_service.clone();
     let sensory_intake_queue_for_polling = Arc::clone(&components.sensory_intake_queue);
-    let connectome_manager_for_polling = Arc::clone(&components.connectome_manager);
     let sensory_drain_budget_per_cycle =
         ((1.0 / config.neural.burst_engine_timestep).ceil() as usize).max(1);
 
@@ -612,7 +453,7 @@ async fn main() -> Result<()> {
                                 }
                                 None => {
                                     warn!(
-                                        "[MOTOR-REG] ApiState not yet available (genome may still be loading); \
+                                        "[MOTOR-REG] ApiState not yet available; \
                                          auto_create deferred to Pass 2"
                                     );
                                 }
@@ -799,13 +640,11 @@ async fn main() -> Result<()> {
                             if derivation_failed || expected_ids.is_empty() {
                                 true
                             } else {
-                                let connectome_guard = connectome_manager_for_polling.read();
-                                !expected_ids.iter().all(|id_b64| {
-                                    feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
-                                        .ok()
-                                        .map(|id| connectome_guard.has_cortical_area(&id))
-                                        .unwrap_or(false)
-                                })
+                                !all_cortical_areas_present(
+                                    &rt_handle,
+                                    &api_state_holder,
+                                    &expected_ids,
+                                )
                             }
                         };
                         if needs_auto_create {
@@ -834,9 +673,13 @@ async fn main() -> Result<()> {
                 }
 
                 // Pass 2: Derive motor cortical IDs and build pending_motor.
-                // Gate motor registration attempts until API/connectome state is ready.
-                // During startup/restart, agents can connect before genome/connectome is ready,
-                // which causes repeated unresolved motor-ID resolution attempts.
+                // Gate motor registration attempts until API state is ready. During startup/restart,
+                // agents can connect before that, which causes repeated unresolved motor-ID
+                // resolution attempts.
+                //
+                // The pre-refactor fallback — deriving motor areas from the ConnectomeManager's
+                // output areas when an agent sends no device_registrations — is gone with the old
+                // NPU. Agents without device_registrations are deferred instead.
                 let motor_registration_ready = api_state_holder
                     .lock()
                     .unwrap()
@@ -873,21 +716,11 @@ async fn main() -> Result<()> {
                             }
                         } else {
                             debug!(
-                                "[MOTOR-REG] No device registrations for agent '{}' (descriptor {:?}); using connectome output areas as fallback",
+                                "[MOTOR-REG] No device registrations for agent '{}' (descriptor {:?}); cannot resolve motor areas without an NPU-backed connectome",
                                 agent_id,
                                 agent_descriptor
                             );
-                            let connectome_guard = connectome_manager_for_polling.read();
-                            connectome_guard
-                                .get_cortical_area_ids()
-                                .iter()
-                                .filter_map(|cortical_id| {
-                                    connectome_guard
-                                        .get_cortical_area(cortical_id)
-                                        .filter(|area| area.is_output_area())
-                                        .map(|_| cortical_id.as_base_64())
-                                })
-                                .collect()
+                            Vec::new()
                         };
 
                         if motor_cortical_ids.is_empty() {
@@ -937,14 +770,13 @@ async fn main() -> Result<()> {
                 }
 
                 // Pass 2 (outside handler lock): Auto-create missing cortical areas from
-                // device_registrations. This can be expensive and must not hold `agent_handler`,
-                // otherwise burst-loop publish path can block and stall burst progress.
+                // device_registrations. This can be expensive and must not hold `agent_handler`.
                 //
-                // Guard: skip entirely when no genome is loaded. cortical area creation requires
-                // an active genome. The genome endpoint already calls auto_create post-load, so
-                // there is no need to retry here before a genome is present — doing so only floods
-                // the log with repeated "No genome loaded" warnings.
-                let genome_is_ready = connectome_manager_for_polling.read().is_initialized();
+                // Guard: skip entirely when the brain is not initialized. Cortical area creation
+                // requires an active genome; without one this only floods the log with repeated
+                // "No genome loaded" warnings. With no NPU attached the brain is never initialized,
+                // so this branch stays dormant until the new NPU lands.
+                let genome_is_ready = brain_is_initialized(&rt_handle, &api_state_holder);
                 if !device_regs_to_auto_create.is_empty() && genome_is_ready {
                     if let Some(api) = api_state_holder.lock().unwrap().as_ref() {
                         debug!(
@@ -981,18 +813,14 @@ async fn main() -> Result<()> {
                                     device_regs,
                                 ),
                             );
-                            // Mark as completed only after expected motor cortical IDs exist.
-                            // This avoids false-positive completion when initial payload/state
-                            // causes auto_create to no-op.
-                            let all_expected_present = {
-                                let connectome_guard = connectome_manager_for_polling.read();
-                                expected_ids.iter().all(|id_b64| {
-                                    feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
-                                        .ok()
-                                        .map(|id| connectome_guard.has_cortical_area(&id))
-                                        .unwrap_or(false)
-                                })
-                            };
+                            // Mark as completed only after expected cortical IDs exist. This avoids
+                            // false-positive completion when initial payload/state causes
+                            // auto_create to no-op.
+                            let all_expected_present = expected_ids.iter().all(|id_b64| {
+                                rt_handle
+                                    .block_on(api.connectome_service.cortical_area_exists(id_b64))
+                                    .unwrap_or(false)
+                            });
                             if !derivation_failed
                                 && !expected_ids.is_empty()
                                 && all_expected_present
@@ -1009,9 +837,7 @@ async fn main() -> Result<()> {
                             }
                         }
                     } else {
-                        debug!(
-                            "[MOTOR-REG] Auto-create deferred: ApiState not yet available (genome may still be loading)"
-                        );
+                        debug!("[MOTOR-REG] Auto-create deferred: ApiState not yet available");
                     }
                 }
 
@@ -1021,6 +847,9 @@ async fn main() -> Result<()> {
                 //
                 // Drain up to a bounded per-cycle budget and keep only the newest payload
                 // so sustained streams do not accumulate stale frames in memory.
+                //
+                // The queue currently has no consumer: the burst engine used to drain it. It is
+                // depth-bounded, so payloads are simply discarded until an NPU is attached.
                 for _ in 0..sensory_drain_budget_per_cycle {
                     let mut should_break = false;
                     {
@@ -1048,7 +877,7 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                // Unregister stale agents (e.g. descriptor replacement) from burst runner.
+                // Unregister stale agents (e.g. descriptor replacement).
                 for sid in &stale_motor {
                     let agent_id_b64 = sid.to_base64();
                     info!(
@@ -1194,132 +1023,48 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Report whether every `cortical_id` (base64) is present in the connectome.
+///
+/// Replaces the pre-refactor `ConnectomeManager::has_cortical_area` lookups: the polling loop now
+/// asks the service layer instead of holding a connectome handle.
+fn all_cortical_areas_present(
+    rt_handle: &tokio::runtime::Handle,
+    api_state_holder: &Arc<Mutex<Option<Arc<ApiState>>>>,
+    cortical_ids: &std::collections::HashSet<String>,
+) -> bool {
+    let Some(api) = api_state_holder.lock().unwrap().as_ref().cloned() else {
+        return false;
+    };
+    cortical_ids.iter().all(|id_b64| {
+        rt_handle
+            .block_on(api.connectome_service.cortical_area_exists(id_b64))
+            .unwrap_or(false)
+    })
+}
+
+/// Report whether a genome has been developed into a usable brain.
+fn brain_is_initialized(
+    rt_handle: &tokio::runtime::Handle,
+    api_state_holder: &Arc<Mutex<Option<Arc<ApiState>>>>,
+) -> bool {
+    let Some(api) = api_state_holder.lock().unwrap().as_ref().cloned() else {
+        return false;
+    };
+    rt_handle
+        .block_on(api.analytics_service.is_brain_initialized())
+        .unwrap_or(false)
+}
+
 /// Core FEAGI components (matches components.rs)
 struct FeagiComponents {
-    #[allow(dead_code)]
-    npu: Arc<feagi_npu_burst_engine::TracingMutex<feagi_npu_burst_engine::DynamicNPU>>,
-    connectome_manager: Arc<RwLock<ConnectomeManager>>,
-    runtime_service: Arc<RuntimeServiceImpl>,
-    burst_runner: Arc<RwLock<BurstLoopRunner>>,
+    runtime_service: Arc<StubRuntimeService>,
     agent_handler: Arc<std::sync::Mutex<feagi_agent::server::FeagiAgentHandler>>,
     /// Transport-agnostic sensory queue (feagi-io); polling loop pushes here when agents send sensory
     sensory_intake_queue: Arc<SensoryIntakeQueue>,
-    #[cfg(feature = "plasticity")]
-    plasticity_executor:
-        Option<Arc<std::sync::Mutex<feagi_npu_plasticity::AsyncPlasticityExecutor>>>,
-    #[cfg(feature = "plasticity")]
-    memory_stats_cache: Option<feagi_npu_plasticity::MemoryStatsCache>,
-    #[cfg(not(feature = "plasticity"))]
-    plasticity_executor: Option<()>,
-    #[cfg(not(feature = "plasticity"))]
-    memory_stats_cache: Option<()>,
-    use_post_burst_processor: bool,
 }
 
 /// Initialize all core FEAGI components
-async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
-    // Determine quantization precision:
-    // - If CLI override is present, use it.
-    // - Else, peek genome if provided.
-    // - Else, default to fp32 to avoid implicit threshold clipping.
-    let precision = if let Some(p) = &args.precision {
-        info!("  Precision override from CLI: {}", p);
-        p.clone()
-    } else if let Some(genome_path) = &args.genome {
-        match feagi_evolutionary::peek_quantization_precision(genome_path) {
-            Ok(p) => {
-                info!("  Genome specifies quantization precision: {}", p);
-                p
-            }
-            Err(e) => {
-                warn!(
-                    "  Failed to peek genome precision ({}), defaulting to fp32",
-                    e
-                );
-                "fp32".to_string()
-            }
-        }
-    } else {
-        info!("  No genome provided at startup, defaulting to fp32 quantization");
-        "fp32".to_string()
-    };
-
-    // Initialize NPU with appropriate precision
-    info!(
-        "  Initializing NPU with {} quantization...",
-        precision.to_uppercase()
-    );
-
-    // GPU config is available but not yet used in NPU initialization
-    let _gpu_config = GpuConfig {
-        use_gpu: config.resources.use_gpu,
-        hybrid_enabled: config.neural.hybrid.enabled,
-        gpu_threshold: config.neural.hybrid.gpu_threshold,
-        gpu_memory_fraction: config.resources.gpu_memory_fraction,
-    };
-
-    // Create NPU based on quantization precision
-    use feagi_npu_burst_engine::backend::CPUBackend;
-    use feagi_npu_runtime::StdRuntime;
-
-    let runtime = StdRuntime;
-    let backend = CPUBackend::new();
-
-    // Wrap NPU in TracingMutex (or Mutex if tracing disabled) to automatically log all lock acquisitions
-    // When npu-lock-tracing feature is disabled, TracingMutex is a type alias for std::sync::Mutex (zero overhead)
-    let npu = Arc::new(TracingMutex::new(
-        match precision.as_str() {
-            "fp32" | "f32" => {
-                info!("    Creating FP32 NPU (32-bit floating point, highest precision)");
-                feagi_npu_burst_engine::DynamicNPU::F32(feagi_npu_burst_engine::RustNPU::new(
-                    runtime,
-                    backend,
-                    config.connectome.neuron_space,
-                    config.connectome.synapse_space,
-                    10, // fire_ledger_window
-                )?)
-            }
-            "int8" => {
-                info!("    Creating INT8 NPU (8-bit integer, 42% memory reduction)");
-                feagi_npu_burst_engine::DynamicNPU::INT8(feagi_npu_burst_engine::RustNPU::new(
-                    runtime,
-                    backend,
-                    config.connectome.neuron_space,
-                    config.connectome.synapse_space,
-                    10, // fire_ledger_window
-                )?)
-            }
-            _ => {
-                warn!("    Unknown precision '{}', defaulting to FP32", precision);
-                feagi_npu_burst_engine::DynamicNPU::F32(feagi_npu_burst_engine::RustNPU::new(
-                    runtime,
-                    backend,
-                    config.connectome.neuron_space,
-                    config.connectome.synapse_space,
-                    10, // fire_ledger_window
-                )?)
-            }
-        },
-        "NPU",
-    ));
-
-    info!(
-        "    ✓ NPU initialized with {} precision (capacity: {} neurons, {} synapses)",
-        match &*npu.lock().unwrap() {
-            feagi_npu_burst_engine::DynamicNPU::F32(_) => "fp32",
-            feagi_npu_burst_engine::DynamicNPU::INT8(_) => "int8",
-        },
-        config.connectome.neuron_space,
-        config.connectome.synapse_space
-    );
-
-    // Initialize ConnectomeManager
-    info!("  Initializing ConnectomeManager...");
-    let manager = ConnectomeManager::instance(); // Already returns Arc<RwLock<>>
-    manager.write().set_npu(Arc::clone(&npu));
-    info!("    ✓ ConnectomeManager initialized and connected to NPU");
-
-    // Initialize agent handler and burst runner (from components.rs pattern)
+async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> {
     info!("  Creating Agent Handler (new architecture)...");
 
     use feagi_agent::server::auth::DummyAuth;
@@ -1472,412 +1217,29 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
     let agent_handler = Arc::new(Mutex::new(agent_handler));
     info!("    ✓ Agent Handler created");
 
-    // Initialize BurstLoopRunner
-    info!("  Initializing BurstLoopRunner...");
-    let burst_timestep = config.neural.burst_engine_timestep;
-    let burst_hz = 1.0 / burst_timestep;
+    let burst_hz = 1.0 / config.neural.burst_engine_timestep;
+    let runtime_service = Arc::new(StubRuntimeService::new(burst_hz));
+    info!(
+        "    ✓ Runtime service created (no burst engine: reports {:.0}Hz, not running)",
+        burst_hz
+    );
 
-    enum AgentPublishJob {
-        Visualization {
-            agent_id: String,
-            fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
-        },
-        Motor {
-            agent_id: String,
-            data: Vec<u8>,
-        },
-    }
-
-    let (publish_tx, publish_rx) = mpsc::channel::<AgentPublishJob>();
-    let publish_handler = Arc::clone(&agent_handler);
-    std::thread::Builder::new()
-        .name("agent-publish-dispatch".to_string())
-        .spawn(move || {
-            info!("    ✓ Agent publish dispatcher started");
-            while let Ok(job) = publish_rx.recv() {
-                let mut handler_guard = match publish_handler.lock() {
-                    Ok(guard) => guard,
-                    Err(e) => {
-                        error!("[AGENT-PUBLISH] Failed to lock agent handler: {}", e);
-                        continue;
-                    }
-                };
-
-                match job {
-                    AgentPublishJob::Visualization { agent_id, fire_data } => {
-                        use feagi_serialization::FeagiByteContainer;
-                        use feagi_structures::genomic::cortical_area::CorticalID;
-                        use feagi_structures::neuron_voxels::xyzp::{
-                            CorticalMappedXYZPNeuronVoxels, NeuronVoxelXYZPArrays,
-                        };
-
-                        let mut cortical_mapped = CorticalMappedXYZPNeuronVoxels::new();
-                        for (_area_idx, fire_queue_data) in fire_data {
-                            if let Ok(cortical_id) =
-                                CorticalID::try_from_base_64(&fire_queue_data.cortical_id)
-                            {
-                                if let Ok(neuron_voxels) = NeuronVoxelXYZPArrays::new_from_vectors(
-                                    fire_queue_data.coords_x,
-                                    fire_queue_data.coords_y,
-                                    fire_queue_data.coords_z,
-                                    fire_queue_data.potentials,
-                                ) {
-                                    cortical_mapped.insert(cortical_id, neuron_voxels);
-                                }
-                            }
-                        }
-
-                        let parsed_agent_id = match AgentID::try_from_base64(&agent_id) {
-                            Ok(id) => id,
-                            Err(e) => {
-                                static WARNED_VIZ: std::sync::OnceLock<
-                                    std::sync::Mutex<std::collections::HashSet<String>>,
-                                > = std::sync::OnceLock::new();
-                                let warned = WARNED_VIZ.get_or_init(|| {
-                                    std::sync::Mutex::new(std::collections::HashSet::new())
-                                });
-                                let mut warned = warned.lock().unwrap();
-                                if warned.insert(agent_id.to_string()) {
-                                    tracing::warn!(
-                                        "Visualization agent_id '{}' is not valid base64 AgentID ({}). \
-                                         Skipping viz publish. Ensure agents register with base64-encoded AgentDescriptor.",
-                                        agent_id, e
-                                    );
-                                }
-                                continue;
-                            }
-                        };
-
-                        let mut container = FeagiByteContainer::new_empty();
-                        if let Err(e) = container.set_agent_identifier(parsed_agent_id) {
-                            error!(
-                                "[AGENT-PUBLISH] Failed to set visualization agent identifier: {:?}",
-                                e
-                            );
-                            continue;
-                        }
-                        if let Err(e) =
-                            container.overwrite_byte_data_with_single_struct_data(&cortical_mapped, 0)
-                        {
-                            error!("[AGENT-PUBLISH] Failed to wrap visualization payload: {:?}", e);
-                            continue;
-                        }
-                        if let Err(e) = handler_guard.send_visualization_data(parsed_agent_id, &container)
-                        {
-                            warn!("[AGENT-PUBLISH] Failed to send visualization data: {}", e);
-                        }
-                    }
-                    AgentPublishJob::Motor { agent_id, data } => {
-                        use feagi_serialization::FeagiByteContainer;
-
-                        let parsed_agent_id = match AgentID::try_from_base64(&agent_id) {
-                            Ok(id) => id,
-                            Err(e) => {
-                                static WARNED_MOTOR: std::sync::OnceLock<
-                                    std::sync::Mutex<std::collections::HashSet<String>>,
-                                > = std::sync::OnceLock::new();
-                                let warned = WARNED_MOTOR.get_or_init(|| {
-                                    std::sync::Mutex::new(std::collections::HashSet::new())
-                                });
-                                let mut warned = warned.lock().unwrap();
-                                if warned.insert(agent_id.to_string()) {
-                                    tracing::warn!(
-                                        "Motor agent_id '{}' is not valid base64 AgentID ({}). \
-                                         Skipping motor publish. Ensure agents register with base64-encoded AgentDescriptor.",
-                                        agent_id, e
-                                    );
-                                }
-                                continue;
-                            }
-                        };
-
-                        let mut container = FeagiByteContainer::new_empty();
-                        if let Err(e) = container.try_write_data_by_copy_and_verify(&data) {
-                            error!("[AGENT-PUBLISH] Failed to parse motor data: {:?}", e);
-                            continue;
-                        }
-
-                        if let Err(e) = handler_guard.send_motor_data(parsed_agent_id, &container) {
-                            warn!("[AGENT-PUBLISH] Failed to send motor data: {}", e);
-                        }
-                    }
-                }
-            }
-            warn!("Agent publish dispatcher stopped: channel closed");
-        })
-        .context("Failed to spawn agent publish dispatcher thread")?;
-
-    // Create agent-handler-backed publishers
-    struct AgentHandlerVisualizationPublisher {
-        tx: Sender<AgentPublishJob>,
-    }
-
-    impl feagi_npu_burst_engine::VisualizationPublisher for AgentHandlerVisualizationPublisher {
-        fn publish_raw_fire_queue_for_agent(
-            &self,
-            agent_id: &str,
-            fire_data: feagi_npu_burst_engine::RawFireQueueSnapshot,
-        ) -> Result<(), String> {
-            if fire_data.is_empty() {
-                return Ok(());
-            }
-
-            self.tx
-                .send(AgentPublishJob::Visualization {
-                    agent_id: agent_id.to_string(),
-                    fire_data,
-                })
-                .map_err(|e| format!("Failed to queue visualization publish job: {}", e))
-        }
-    }
-
-    struct AgentHandlerMotorPublisher {
-        tx: Sender<AgentPublishJob>,
-    }
-
-    impl feagi_npu_burst_engine::MotorPublisher for AgentHandlerMotorPublisher {
-        fn publish_motor(&self, agent_id: &str, data: &[u8]) -> Result<(), String> {
-            if data.is_empty() {
-                return Ok(());
-            }
-
-            self.tx
-                .send(AgentPublishJob::Motor {
-                    agent_id: agent_id.to_string(),
-                    data: data.to_vec(),
-                })
-                .map_err(|e| format!("Failed to queue motor publish job: {}", e))
-        }
-    }
-
-    let viz_publisher = Arc::new(Mutex::new(AgentHandlerVisualizationPublisher {
-        tx: publish_tx.clone(),
-    }));
-    let motor_publisher = Arc::new(Mutex::new(AgentHandlerMotorPublisher { tx: publish_tx }));
-
-    let burst_runner = Arc::new(RwLock::new(BurstLoopRunner::new(
-        Arc::clone(&npu),
-        Some(viz_publisher),
-        Some(motor_publisher),
-        burst_hz,
-    )));
-    info!("    ✓ BurstLoopRunner initialized ({:.0}Hz)", burst_hz);
-
-    // Initialize plasticity executor (if plasticity feature enabled) BEFORE RuntimeService
-    #[cfg(feature = "plasticity")]
-    let (plasticity_executor, memory_stats_cache, use_post_burst_processor, plasticity_service) = {
-        use feagi_npu_plasticity::{
-            create_memory_stats_cache, AsyncPlasticityExecutor, PlasticityExecutor,
-        };
-        use std::sync::Mutex;
-
-        info!("╔═══════════════════════════════════════════════════════════════╗");
-        info!("║  PLASTICITY SUBSYSTEM INITIALIZATION                          ║");
-        info!("╚═══════════════════════════════════════════════════════════════╝");
-        info!("  📊 Creating memory stats cache...");
-        let cache = create_memory_stats_cache();
-        let plasticity_config = build_plasticity_config(config);
-
-        info!("  🧠 Creating AsyncPlasticityExecutor with NPU reference...");
-        // Create executor with NPU reference (for querying CPU-resident FireLedger)
-        let executor = Arc::new(Mutex::new(AsyncPlasticityExecutor::new(
-            plasticity_config,
-            cache.clone(),
-            Arc::clone(&npu),
-        )));
-
-        info!("  🚀 Starting PlasticityService background thread...");
-        // Start the plasticity service thread
-        {
-            let mut exec = executor.lock().unwrap();
-            PlasticityExecutor::start(&mut *exec);
-        }
-
-        // Get PlasticityService for RuntimeService wiring
-        let plasticity_service = executor.lock().unwrap().get_service().map(Arc::new);
-
-        info!("  🔗 Wiring PlasticityExecutor into ConnectomeManager...");
-        // Wire plasticity executor into ConnectomeManager for automatic memory area registration
-        ConnectomeManager::instance()
-            .write()
-            .set_plasticity_executor(Arc::clone(&executor));
-
-        info!("  🔗 Wiring PlasticityExecutor into BurstLoopRunner...");
-        wire_plasticity_callbacks(&burst_runner, Arc::clone(&executor), Arc::clone(&npu));
-        let use_post_burst_processor = burst_runner.read().has_post_burst_callback();
-
-        info!("╔═══════════════════════════════════════════════════════════════╗");
-        info!("║  ✅ PLASTICITY SUBSYSTEM READY                                ║");
-        info!("║     • Memory neuron pattern detection: ENABLED                ║");
-        info!("║     • STDP synaptic plasticity: ENABLED                       ║");
-        info!("║     • Background processing thread: ACTIVE                    ║");
-        info!("╚═══════════════════════════════════════════════════════════════╝");
-        (
-            Some(executor),
-            Some(cache),
-            use_post_burst_processor,
-            plasticity_service,
-        )
-    };
-
-    #[cfg(not(feature = "plasticity"))]
-    let (plasticity_executor, memory_stats_cache, use_post_burst_processor, plasticity_service): (
-        Option<()>,
-        Option<()>,
-        bool,
-        Option<Arc<feagi_npu_plasticity::PlasticityService>>,
-    ) = {
-        info!("  ℹ️  Plasticity feature disabled (compiled without --features plasticity)");
-        (None, None, false, None)
-    };
-
-    // Create RuntimeService with plasticity support if available
-    let runtime_service = if let Some(service) = plasticity_service {
-        info!("    ✓ Creating Runtime service WITH plasticity support");
-        Arc::new(RuntimeServiceImpl::new_with_plasticity(
-            Arc::clone(&burst_runner),
-            service,
-        ))
-    } else {
-        info!("    ✓ Creating Runtime service WITHOUT plasticity support");
-        Arc::new(RuntimeServiceImpl::new(Arc::clone(&burst_runner)))
-    };
-    info!("    ✓ Runtime service created");
-
-    // Wire up bidirectional connections between PNS and BurstLoopRunner
-    info!("  Wiring PNS ↔ BurstLoopRunner connections...");
-
-    // Transport-agnostic sensory intake (feagi-io): burst loop consumes from queue; polling loop feeds it
+    // Transport-agnostic sensory intake (feagi-io): the polling loop feeds it. The burst engine
+    // used to drain it; nothing does until the new NPU is attached.
     let sensory_intake_queue = Arc::new(SensoryIntakeQueue::new());
-    struct SensoryIntakeAdapter {
-        queue: Arc<SensoryIntakeQueue>,
-    }
-    impl SensoryIntake for SensoryIntakeAdapter {
-        fn poll_sensory_data(&mut self) -> Result<Option<SensoryIngressPayload>, String> {
-            let packet = self.queue.poll_next().map(|packet| SensoryIngressPayload {
-                bytes: packet.bytes,
-                source_id: packet.source_id,
-                received_at: packet.received_at,
-            });
-            Ok(packet)
-        }
-    }
-    burst_runner
-        .write()
-        .set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
-            queue: Arc::clone(&sensory_intake_queue),
-        })) as Arc<Mutex<dyn SensoryIntake>>);
-    info!("    ✓ Sensory intake (feagi-io) wired to BurstLoopRunner");
-    info!("      ✓ Sensory: transports → queue → BurstLoopRunner");
-    info!("      ✓ Motor: BurstLoopRunner → Handler (publishing)");
-    info!("      ✓ Visualization: BurstLoopRunner → Handler (publishing)");
+    info!("    ⚠ Sensory intake queue has no consumer (awaiting new NPU)");
+    info!("      ✓ Sensory: transports → queue → (no consumer)");
+    info!("      ⚠ Motor: no burst engine to publish from");
+    info!("      ⚠ Visualization: no burst engine to publish from");
 
     Ok(FeagiComponents {
-        npu,
-        connectome_manager: manager,
         runtime_service,
-        burst_runner,
         agent_handler,
         sensory_intake_queue,
-        plasticity_executor,
-        memory_stats_cache,
-        use_post_burst_processor,
     })
 }
 
-/// Load genome (new architecture - agent handler notification TODO)
-/// Returns the genome's simulation_timestep (in seconds) if available
-async fn load_genome_with_agent_handler(
-    genome_service: &Arc<GenomeServiceImpl>,
-    _agent_handler: &Arc<std::sync::Mutex<feagi_agent::server::FeagiAgentHandler>>,
-    genome_path: &PathBuf,
-) -> Result<Option<f64>> {
-    info!("    [GENOME-LOAD] Step 1: Reading genome file...");
-
-    // Read genome file to JSON string
-    let json_str = std::fs::read_to_string(genome_path).context("Failed to read genome file")?;
-
-    info!("    [GENOME-LOAD] Step 2: Loading genome via GenomeService...");
-
-    // Use GenomeService::load_genome which properly stores RuntimeGenome
-    let genome_info = genome_service
-        .load_genome(LoadGenomeParams { json_str })
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to load genome: {}", e))?;
-
-    let simulation_timestep = genome_info.simulation_timestep;
-    info!(
-        "    [GENOME-LOAD] Genome loaded: {} cortical areas, {}s timestep ({:.0}Hz)",
-        genome_info.cortical_area_count,
-        simulation_timestep,
-        1.0 / simulation_timestep
-    );
-
-    info!("    [GENOME-LOAD] Step 3: Genome loaded (stream evaluation TODO)");
-    // TODO: Implement genome notification in new architecture
-    info!("    [GENOME-LOAD] Step 4: Complete");
-
-    Ok(Some(simulation_timestep))
-}
-
-/// Lookup runtime cortical index from base64 cortical id (post-neurogenesis).
-fn lookup_cortical_idx_from_trace_cortical_id(
-    npu: &feagi_npu_burst_engine::DynamicNPU,
-    id_b64: &str,
-) -> Option<u32> {
-    use feagi_structures::genomic::cortical_area::CorticalID;
-    CorticalID::try_from_base_64(id_b64.trim())
-        .ok()
-        .and_then(|cid| npu.get_cortical_area_id(&cid.as_base_64()))
-}
-
-/// True when CLI idx and id-resolved idx both exist and differ (FCL vs synapse trace mismatch).
-fn cortical_trace_cli_disagrees_with_id_lookup(cli: Option<u32>, idx_from_id: Option<u32>) -> bool {
-    matches!((cli, idx_from_id), (Some(a), Some(b)) if a != b)
-}
-
-fn warn_if_npu_trace_cortical_idx_and_id_mismatch(
-    args: &Args,
-    npu: &feagi_npu_burst_engine::DynamicNPU,
-) {
-    let (Some(cli_idx), Some(id_b64)) = (
-        args.npu_trace_cortical_idx,
-        args.npu_trace_cortical_id.as_ref(),
-    ) else {
-        return;
-    };
-    let Some(id_idx) = lookup_cortical_idx_from_trace_cortical_id(npu, id_b64) else {
-        return;
-    };
-    if cortical_trace_cli_disagrees_with_id_lookup(Some(cli_idx), Some(id_idx)) {
-        tracing::warn!(
-            target: "feagi-npu-trace",
-            cli_cortical_idx = cli_idx,
-            cortical_id_base64 = id_b64.trim(),
-            resolved_cortical_idx_from_id = id_idx,
-            "NPU trace: --npu-trace-cortical-idx does not match the runtime index for --npu-trace-cortical-id. FCL/dynamics/AREA_FIRES use the CLI idx; synapse trace filters by postsynaptic cortical id. Logs will disagree until both refer to the same cortical area."
-        );
-    }
-}
-
-/// Resolve trace cortical index for FCL/dynamics: `--npu-trace-cortical-idx` wins, else lookup from id.
-///
-/// When both CLI idx and id are set, the idx is returned without validating id; synapse trace still
-/// filters by [`FEAGI_NPU_TRACE_CORTICAL_ID`]. Call [`warn_if_npu_trace_cortical_idx_and_id_mismatch`]
-/// to detect inconsistent pairs.
-fn resolve_npu_trace_cortical_idx(
-    args: &Args,
-    npu: &feagi_npu_burst_engine::DynamicNPU,
-) -> Option<u32> {
-    if let Some(idx) = args.npu_trace_cortical_idx {
-        return Some(idx);
-    }
-    args.npu_trace_cortical_id
-        .as_deref()
-        .and_then(|id| lookup_cortical_idx_from_trace_cortical_id(npu, id))
-}
-
-/// Start all FEAGI services (API, ZMQ, Burst Engine)
+/// Start all FEAGI services (API + transports)
 async fn start_services(
     components: FeagiComponents,
     config: &FeagiConfig,
@@ -1887,65 +1249,17 @@ async fn start_services(
 ) -> Result<()> {
     // Signal handler already setup in main()
 
-    // Create genome service FIRST (needed for genome loading at startup)
-    info!("  Creating service layer...");
+    info!("  Creating service layer (placeholder implementations)...");
 
-    // Get parameter queue from burst runner for async parameter updates
-    let parameter_queue = components.burst_runner.read().parameter_queue.clone();
+    let genome_service = Arc::new(StubGenomeService);
+    let connectome_service = Arc::new(StubConnectomeService);
+    let analytics_service = Arc::new(StubAnalyticsService);
+    let neuron_service = Arc::new(StubNeuronService);
+    let snapshot_service = Arc::new(StubSnapshotService);
+    let agent_service = Arc::new(StubAgentService);
+    let system_service = Arc::new(StubSystemService::new(feagi::collect_version_info()));
 
-    // Create GenomeServiceImpl and get reference to current_genome for sharing with ConnectomeService
-    let mut genome_service_impl = GenomeServiceImpl::new_with_parameter_queue(
-        Arc::clone(&components.connectome_manager),
-        parameter_queue,
-    );
-    // Wire burst runner for cache refresh
-    genome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
-    let genome_service_impl = Arc::new(genome_service_impl);
-    let current_genome = genome_service_impl.get_current_genome_arc();
-    let genome_service = genome_service_impl;
-    info!("    ✓ Genome service created (with RuntimeGenome storage)");
-
-    // Now create remaining services (share current_genome with ConnectomeService for mapping persistence)
-    let mut connectome_service_impl = ConnectomeServiceImpl::new(
-        Arc::clone(&components.connectome_manager),
-        current_genome.clone(),
-    );
-    // Wire burst runner for cache refresh
-    connectome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
-    let connectome_service = Arc::new(connectome_service_impl);
-    let analytics_service = Arc::new(AnalyticsServiceImpl::new(
-        Arc::clone(&components.connectome_manager),
-        Some(Arc::clone(&components.burst_runner)),
-    ));
-    let neuron_service = Arc::new(NeuronServiceImpl::new(Arc::clone(
-        &components.connectome_manager,
-    )));
-
-    // Collect version information for all crates in this binary
-    let version_info = feagi::collect_version_info();
-
-    let system_service = Arc::new(SystemServiceImpl::new(
-        Arc::clone(&components.connectome_manager),
-        Some(Arc::clone(&components.burst_runner)),
-        version_info,
-    ));
-
-    // TODO: Get agent registry from agent_handler in new architecture
-    // For now, create minimal agent service with empty registry
-    use parking_lot::RwLock as PRwLock;
-    let empty_registry = Arc::new(PRwLock::new(feagi_services::AgentRegistry::new(100, 60000)));
-
-    // Wire GenomeService and ConnectomeService to RegistrationHandler (required for auto-creation feature)
-    // Create agent service with empty registry (new architecture)
-    let agent_service_impl =
-        AgentServiceImpl::new(Arc::clone(&components.connectome_manager), empty_registry);
-    let agent_service = Arc::new(agent_service_impl);
-    info!("    ✓ Agent service created");
-
-    // Create API state (runtime_service already created in components)
-    // Create snapshot service
-    let snapshot_dir = std::path::PathBuf::from("./snapshots");
-    let snapshot_service = Arc::new(feagi_services::SnapshotServiceImpl::new(snapshot_dir));
+    info!("    ✓ Services created (neural operations report not-implemented)");
 
     // Get FEAGI session timestamp (when this instance started)
     let feagi_session_timestamp = std::time::SystemTime::now()
@@ -1988,28 +1302,22 @@ async fn start_services(
         "    ✓ Filesystem data root ([system].data_dir / FEAGI_DATA_DIR, else ~/.feagi): {}",
         filesystem_data_root.display()
     );
-    info!(
-        "    ✓ Default genome autosave dir: {}/cache/.genome/",
-        filesystem_data_root.display()
-    );
 
     let api_state = ApiState {
         network_connection_info_provider: Some(network_provider),
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
-        genome_service: genome_service.clone() as Arc<dyn GenomeService + Send + Sync>,
+        genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
         connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
         runtime_service: components.runtime_service.clone()
             as Arc<dyn RuntimeService + Send + Sync>,
         neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
-        system_service: system_service
-            as Arc<dyn feagi_services::traits::SystemService + Send + Sync>,
-        snapshot_service: Some(
-            snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>,
-        ),
+        system_service: system_service as Arc<dyn SystemServiceTrait + Send + Sync>,
+        snapshot_service: Some(snapshot_service as Arc<dyn SnapshotService + Send + Sync>),
         feagi_session_timestamp,
         filesystem_data_root,
-        memory_stats_cache: components.memory_stats_cache.clone(),
+        // Memory area stats came from the plasticity executor, which went with the old NPU.
+        memory_stats_cache: None,
         amalgamation_state: ApiState::init_amalgamation_state(),
         genome_transition_lock,
         genome_transition_in_progress,
@@ -2022,7 +1330,7 @@ async fn start_services(
     // Agent handler streams already started during initialization
     info!("  ✓ Agent handler control streams active (registration ready)");
 
-    // Start HTTP API server (before genome load in case it hangs)
+    // Start HTTP API server
     info!(
         "  Starting HTTP API server on {}:{} (advertised as {}:{})...",
         api_bind_host, api_port, api_advertised_host, api_port
@@ -2052,338 +1360,28 @@ async fn start_services(
             .expect("API server error");
     });
 
-    // IMPORTANT:
-    // Do NOT start the burst engine before genome load completes.
-    //
-    // Rationale:
-    // - Genome load performs neuroembryogenesis/synaptogenesis and mutates ConnectomeManager + NPU.
-    // - Running bursts concurrently with connectome mutation is a correctness and determinism risk.
-    //
-    // The burst engine, plasticity executor, and NPU↔sensory wiring are started AFTER genome load below.
-
-    // Load genome AFTER the HTTP API is online.
-    //
-    // Rationale:
-    // - NIFTI-scale genomes can take a long time to load (neuroembryogenesis/synaptogenesis).
-    // - BV's startup health probe requires the API server to be listening.
-    // - Starting the API first improves observability and avoids "API never came online" false negatives.
-    //
-    // Determinism:
-    // - If --genome is provided and loading fails, FEAGI exits (same behavior as before).
+    // Genome loading performed neuroembryogenesis against the old NPU. There is nowhere to develop
+    // a connectome into, so `--genome` is reported and ignored rather than aborting startup: the
+    // API and transports are still useful while the new NPU is being integrated.
     if let Some(genome_path) = &args.genome {
-        info!(
-            "  Loading genome from: {} (API is already online)",
+        error!(
+            "  ✗ Cannot load genome '{}': neuroembryogenesis requires an NPU",
             genome_path.display()
         );
-        match load_genome_with_agent_handler(
-            &genome_service,
-            &components.agent_handler,
-            genome_path,
-        )
-        .await
-        {
-            Ok(Some(genome_timestep)) => {
-                info!("    ✓ Genome loaded via GenomeService (RuntimeGenome stored)");
-                info!("    ✓ Dynamic stream evaluation triggered");
-
-                // Update burst frequency to match genome's simulation_timestep
-                let new_freq = 1.0 / genome_timestep;
-                info!(
-                    "    ✓ Updating burst frequency from genome: {}Hz ({}s timestep)",
-                    new_freq, genome_timestep
-                );
-                components.burst_runner.write().set_frequency(new_freq);
-                info!("    ✓ Burst frequency updated successfully");
-            }
-            Ok(None) => {
-                info!("    ✓ Genome loaded (using config burst frequency)");
-                info!("    ✓ Dynamic stream evaluation triggered");
-            }
-            Err(e) => {
-                error!("    ✗ Failed to load genome: {}", e);
-                error!("    ✗ --genome was provided, so FEAGI will exit");
-                // Best-effort graceful shutdown of the API server task before returning.
-                let _ = shutdown_tx_api.send(());
-                let _ = api_handle.await;
-                return Err(e);
-            }
-        }
+        error!("    Continuing without a genome. Re-run once the new NPU is integrated.");
     } else {
         info!("  No genome specified, starting with empty connectome");
-        info!("    ⚠️  Data streams will not start until genome is loaded");
-    }
-
-    // @npu-debug-instrumentation: resolve cortical_id -> cortical_idx; optional full-area neuron id list
-    if args.genome.is_some() {
-        use feagi_npu_burst_engine::set_runtime_trace_cortical_idx;
-
-        let npu = components.npu.lock().unwrap();
-        let idx_resolved = resolve_npu_trace_cortical_idx(args, &npu);
-
-        warn_if_npu_trace_cortical_idx_and_id_mismatch(args, &npu);
-
-        // Log id -> idx from NPU vs effective idx for FCL (CLI idx overrides id lookup).
-        if let Some(ref id_b64) = args.npu_trace_cortical_id {
-            match lookup_cortical_idx_from_trace_cortical_id(&npu, id_b64) {
-                Some(idx_from_id) => {
-                    tracing::info!(
-                        target: "feagi-npu-trace",
-                        cortical_id_base64 = id_b64.trim(),
-                        cortical_idx_from_id = idx_from_id,
-                        effective_cortical_idx_for_fcl = idx_resolved,
-                        "NPU trace: cortical_id maps to cortical_idx (post-neurogenesis); FCL/dynamics use effective idx (CLI --npu-trace-cortical-idx wins when set)"
-                    );
-                }
-                None => {
-                    tracing::warn!(
-                        target: "feagi-npu-trace",
-                        cortical_id_base64 = id_b64.trim(),
-                        "NPU trace: could not resolve cortical_id to cortical_idx (unknown id or parse error)"
-                    );
-                }
-            }
-        }
-
-        // Dynamics/FCL/AREA_FIRES need cortical_idx: set runtime atomic + env when only cortical_id was given.
-        // Include --npu-trace-area-fire-ids (not only --npu-trace) so id-only + area fires works.
-        let needs_runtime_idx_from_id = args.npu_trace_cortical_idx.is_none()
-            && args.npu_trace_cortical_id.is_some()
-            && (args.npu_trace || args.npu_trace_dynamics || args.npu_trace_area_fire_ids);
-
-        if needs_runtime_idx_from_id {
-            set_runtime_trace_cortical_idx(idx_resolved);
-            if let Some(idx) = idx_resolved {
-                std::env::set_var("FEAGI_NPU_TRACE_CORTICAL_IDX", idx.to_string());
-            }
-        }
-
-        if args.npu_trace_area_fire_ids {
-            match idx_resolved {
-                Some(idx) => {
-                    let ids = npu.get_neurons_in_cortical_area(idx);
-                    tracing::info!(
-                        target: "feagi-npu-trace",
-                        cortical_idx = idx,
-                        neuron_count = ids.len(),
-                        neuron_ids = ?ids,
-                        "NPU trace: all neuron ids in cortical area (post-neurogenesis)"
-                    );
-                }
-                None => {
-                    tracing::warn!(
-                        target: "feagi-npu-trace",
-                        "NPU trace: --npu-trace-area-fire-ids requires a resolvable --npu-trace-cortical-id or --npu-trace-cortical-idx"
-                    );
-                }
-            }
-        }
-    } else if args.npu_trace_area_fire_ids {
-        tracing::warn!(
-            target: "feagi-npu-trace",
-            "NPU trace: --npu-trace-area-fire-ids requires --genome so the connectome/NPU are populated"
-        );
     }
 
     // Make ApiState available to polling loop for auto_create when device_registrations arrive.
-    // Set after genome load so cortical area creation has a valid connectome.
     *api_state_holder.lock().unwrap() = Some(Arc::new(api_state.clone()));
 
-    // Start burst engine via service layer (safe after genome load / connectome reset completes)
+    // Start burst engine via service layer.
     info!("  Starting burst engine...");
-    components
-        .runtime_service
-        .start()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to start burst engine: {}", e))?;
-    info!("    ✓ Burst engine running");
-
-    // NPU lock watchdog: detect possible deadlock when burst loop stops making progress
-    let runtime_svc_watchdog = components.runtime_service.clone();
-    let shutdown_for_watchdog = shutdown_flag.clone();
-    let rt_handle_for_watchdog = tokio::runtime::Handle::current();
-    std::thread::Builder::new()
-        .name("feagi-npu-watchdog".to_string())
-        .spawn(move || {
-            let rt = rt_handle_for_watchdog;
-            let mut last_burst: u64 = 0;
-            let mut last_progress_at = std::time::Instant::now();
-            let stall_threshold = std::time::Duration::from_secs(15);
-            let check_interval = std::time::Duration::from_secs(5);
-
-            while shutdown_for_watchdog.load(Ordering::SeqCst) {
-                std::thread::sleep(check_interval);
-                if !shutdown_for_watchdog.load(Ordering::SeqCst) {
-                    break;
-                }
-                match rt.block_on(runtime_svc_watchdog.get_status()) {
-                    Ok(status) if status.is_running => {
-                        let current = status.burst_count;
-                        if current != last_burst {
-                            last_burst = current;
-                            last_progress_at = std::time::Instant::now();
-                        } else if last_burst > 0 && last_progress_at.elapsed() > stall_threshold {
-                            warn!(
-                                "[NPU-WATCHDOG] Burst loop stalled: no progress for {:.1}s (burst_count={}) - possible deadlock or NPU lock contention",
-                                last_progress_at.elapsed().as_secs_f64(),
-                                last_burst
-                            );
-                            last_progress_at = std::time::Instant::now();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        })
-        .expect("Failed to spawn NPU watchdog thread");
-
-    // Start plasticity executor and command processing loop (if enabled)
-    #[cfg(feature = "plasticity")]
-    if let Some(ref plasticity_exec) = components.plasticity_executor {
-        use feagi_npu_plasticity::PlasticityExecutor;
-
-        info!("  Starting plasticity executor...");
-        plasticity_exec.lock().unwrap().start();
-        info!("    ✓ Plasticity executor running");
-
-        if !components.use_post_burst_processor {
-            // Spawn plasticity command processing loop
-            // This loop reads commands from the PlasticityService and executes them on the NPU
-            let npu_for_plasticity = Arc::clone(&components.npu);
-            let plasticity_for_loop = Arc::clone(plasticity_exec);
-            let burst_runner_for_plasticity = Arc::clone(&components.burst_runner);
-
-            std::thread::Builder::new()
-                .name("feagi-plasticity-cmd-processor".to_string())
-                .spawn(move || {
-                    use feagi_npu_plasticity::{PlasticityCommand, PlasticityExecutor};
-                    use tracing::{debug, info, warn};
-
-                    info!("[PLASTICITY-CMD] Command processor thread started");
-
-                    // BurstLoopRunner already notifies plasticity exactly once per completed burst
-                    // via `set_plasticity_notify_callback()`. This thread must NOT call `notify_burst()`
-                    // again, otherwise neurons get aged/pruned multiple times per burst and indices
-                    // get rapidly reused (appearing as "memory count barely increases").
-                    let mut last_seen_burst: u64 = 0;
-
-                    loop {
-                        // Wait for burst to complete (check every 10ms)
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-
-                        // Track burst progress (draining can happen multiple times per burst; notify must not)
-                        let current_burst = burst_runner_for_plasticity.read().get_burst_count();
-                        if current_burst != last_seen_burst {
-                            last_seen_burst = current_burst;
-                        }
-
-                        // Drain and process commands
-                        let commands = plasticity_for_loop.lock().unwrap().drain_commands();
-
-                        if !commands.is_empty() {
-                            debug!("[PLASTICITY-CMD] Processing {} commands", commands.len());
-                            let mut npu_lock = npu_for_plasticity.lock().unwrap();
-
-                            for cmd in commands {
-                                match cmd {
-                                    PlasticityCommand::RegisterMemoryNeuron {
-                                        neuron_id,
-                                        area_idx: _,
-                                        threshold: _,
-                                        membrane_potential: _,
-                                    } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Registering memory neuron id={}",
-                                            neuron_id
-                                        );
-                                        // Memory neurons are already created by the plasticity service
-                                        // This command serves as a notification
-                                    }
-                                    PlasticityCommand::MemoryNeuronConvertedToLtm { neuron_id, .. } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Memory neuron converted to LTM id={}",
-                                            neuron_id
-                                        );
-                                    }
-                                    PlasticityCommand::InjectMemoryNeuronToFCL {
-                                        neuron_id,
-                                        area_idx,
-                                        membrane_potential,
-                                        pattern_hash,
-                                        is_reactivation: _,
-                                        replay_frames: _,
-                                    } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Injecting memory neuron id={} area_idx={} potential={} pattern={}",
-                                            neuron_id, area_idx, membrane_potential, pattern_hash
-                                        );
-
-                                        // Get cortical ID from ConnectomeManager (required for propagation engine mapping).
-                                        let cortical_id_opt = {
-                                            let instance = ConnectomeManager::instance();
-                                            let cm = instance.read();
-                                            cm.get_cortical_id(area_idx).cloned()
-                                        };
-
-                                        if let Some(cortical_id) = cortical_id_opt {
-                                            // Register mapping so synaptic propagation can resolve the cortical area for this ID.
-                                            npu_lock.register_dynamic_neuron_mapping(neuron_id, cortical_id);
-
-                                            // Stage injection to next burst’s FCL using the *actual* memory neuron ID.
-                                            npu_lock.inject_memory_neuron_to_fcl(
-                                                neuron_id,
-                                                area_idx,
-                                                membrane_potential,
-                                            );
-
-                                            debug!(
-                                                "[PLASTICITY-CMD] Memory neuron staged to FCL (id={}, area_idx={}, pattern={})",
-                                                neuron_id, area_idx, pattern_hash
-                                            );
-                                        } else {
-                                            warn!(
-                                                "[PLASTICITY-CMD] Missing cortical ID for area_idx={}",
-                                                area_idx
-                                            );
-                                        }
-                                    }
-                                    PlasticityCommand::UpdateWeightsDelta { .. } => {
-                                        // TODO: Implement STDP weight updates
-                                        warn!("[PLASTICITY-CMD] STDP weight updates not yet implemented");
-                                    }
-                                    PlasticityCommand::UpdateStateCounters { .. } => {
-                                        // Stats tracking only, no NPU action needed
-                                    }
-                                    PlasticityCommand::ResetMemoryNeuronsInArea { cortical_idx } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Memory neurons reset in cortical area {}",
-                                            cortical_idx
-                                        );
-                                        // Memory neuron reset is handled by PlasticityService.reset_memory_neurons_in_area()
-                                        // This command is for notification/logging only
-                                    }
-                                }
-                            }
-                        }
-                    }
-                })
-                .expect("Failed to spawn plasticity command processor thread");
-
-            info!("    ✓ Plasticity command processor running");
-        } else {
-            info!("    ✓ Plasticity command processor running in post-burst callback");
-        }
+    match components.runtime_service.start().await {
+        Ok(_) => info!("    ✓ Burst engine running"),
+        Err(e) => warn!("    ⚠ Burst engine not started: {}", e),
     }
-
-    // TODO: Wire NPU to agent_handler sensory stream in new architecture
-    info!("  ⚠ NPU ↔ Agent Handler sensory wiring TODO");
-
-    // Data streams start DYNAMICALLY based on:
-    // 1. Genome loaded (NPU has neurons)
-    // 2. At least one agent with matching capability registered
-    info!("  ⏸️  Data streams will start automatically when conditions are met:");
-    info!("      - Sensory: genome loaded + sensory agent registered");
-    info!("      - Motor: genome loaded + motor agent registered");
-    info!("      - Visualization: genome loaded + viz agent registered");
 
     info!("");
     info!("🚀 FEAGI server is running!");
@@ -2391,13 +1389,13 @@ async fn start_services(
         "   REST API (advertised): http://{}:{}",
         config.api.advertised_host, api_port
     );
+    info!("   Neural processing: OFFLINE (awaiting new NPU integration)");
     info!("   Press Ctrl+C to stop");
     info!("");
 
-    // Wait for shutdown signal using tokio's signal handling (recommended approach)
+    // Wait for shutdown signal (polling loop already started after initialization)
     info!("Waiting for shutdown signal...");
 
-    // Wait for shutdown signal (polling loop already started after initialization)
     loop {
         let flag_value = shutdown_flag.load(Ordering::SeqCst);
 
@@ -2413,13 +1411,9 @@ async fn start_services(
     info!("Shutting down FEAGI...");
 
     info!("  Stopping burst engine...");
-    let stop_result = components.runtime_service.stop().await;
-    match stop_result {
+    match components.runtime_service.stop().await {
         Ok(_) => info!("    ✓ Burst engine stopped"),
-        Err(e) => {
-            error!("    ✗ Failed to stop burst engine: {}", e);
-            return Err(anyhow::anyhow!("Failed to stop burst engine: {}", e));
-        }
+        Err(e) => warn!("    ⚠ Burst engine stop reported: {}", e),
     }
 
     info!("  Stopping Agent Handler...");
@@ -2498,27 +1492,4 @@ fn print_banner() {
 ╚═══════════════════════════════════════════════════════════════════╝
 "#
     );
-}
-
-#[cfg(test)]
-mod npu_trace_resolve_tests {
-    #[test]
-    fn cortical_trace_cli_disagrees_with_id_lookup_cases() {
-        assert!(!super::cortical_trace_cli_disagrees_with_id_lookup(
-            None,
-            Some(3)
-        ));
-        assert!(!super::cortical_trace_cli_disagrees_with_id_lookup(
-            Some(2),
-            None
-        ));
-        assert!(!super::cortical_trace_cli_disagrees_with_id_lookup(
-            Some(2),
-            Some(2)
-        ));
-        assert!(super::cortical_trace_cli_disagrees_with_id_lookup(
-            Some(2),
-            Some(3)
-        ));
-    }
 }
