@@ -1019,6 +1019,10 @@ async fn main() -> Result<()> {
                 // IMPORTANT ORDERING: this runs after registration-driven auto-create work so
                 // first sensory payloads do not race ahead of cortical area provisioning.
                 //
+                // Guard: drop sensory payloads until a genome/connectome is initialized.
+                // Without this, NPU sensory injection can run against an empty cortical-area map
+                // and emit repeated "Unknown cortical area" errors.
+                //
                 // Drain up to a bounded per-cycle budget and keep only the newest payload
                 // so sustained streams do not accumulate stale frames in memory.
                 for _ in 0..sensory_drain_budget_per_cycle {
@@ -1027,12 +1031,16 @@ async fn main() -> Result<()> {
                         let mut handler_guard = agent_handler_for_loop.lock().unwrap();
                         match handler_guard.poll_agent_sensors() {
                             Ok(Some(container)) => {
-                                let source_id = container
-                                    .get_agent_identifier_bytes()
-                                    .ok()
-                                    .map(|bytes| AgentID::new(*bytes).to_base64());
-                                sensory_intake_queue_for_polling
-                                    .push_with_source(container.get_byte_ref().to_vec(), source_id);
+                                if genome_is_ready {
+                                    let source_id = container
+                                        .get_agent_identifier_bytes()
+                                        .ok()
+                                        .map(|bytes| AgentID::new(*bytes).to_base64());
+                                    sensory_intake_queue_for_polling.push_with_source(
+                                        container.get_byte_ref().to_vec(),
+                                        source_id,
+                                    );
+                                }
                             }
                             Ok(None) => {
                                 should_break = true;
