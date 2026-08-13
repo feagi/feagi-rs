@@ -1,6 +1,6 @@
 [package]
 name = "feagi-rs"
-version = "0.0.39"
+version = "0.0.40"
 edition = "2021"
 authors = ["Neuraville Inc. <feagi@neuraville.com>"]
 license = "Apache-2.0"
@@ -21,12 +21,13 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-# FEAGI Core Components — versions track latest FEAGI core component crates on crates.io (currently 0.0.18).
+# FEAGI Core Components — versions track latest FEAGI core crates on crates.io.
+# Some components are currently published at 0.0.19 while others remain at 0.0.18.
 # For local path overrides: copy `.cargo/config.toml.example` to `.cargo/config.toml`.
-feagi-npu-neural = { version = "^0.0.18" }
-feagi-structures = { version = "^0.0.18" }
-feagi-npu-runtime = { version = "^0.0.18", features = ["std"] }
-feagi-config = { version = "^0.0.18" }
+feagi-npu-neural = { version = "^0.0.19" }
+feagi-structures = { version = "^0.0.19" }
+feagi-npu-runtime = { version = "^0.0.19", features = ["std"] }
+feagi-config = { version = "^0.0.19" }
 # GPU acceleration enabled by default (disable with --no-default-features)
 feagi-npu-burst-engine = { version = "^0.0.18" }
 feagi-brain-development = { version = "^0.0.18" }
@@ -35,9 +36,9 @@ feagi-services = { version = "^0.0.18" }
 feagi-api = { version = "^0.0.18", features = ["services"] }
 feagi-io = { version = "^0.0.18", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
 feagi-agent = { version = "^0.0.18", features = ["agent-server", "agent-client-asynchelper-tokio"] }
-feagi-state-manager = { version = "^0.0.18" }
+feagi-state-manager = { version = "^0.0.19" }
 feagi-npu-plasticity = { version = "^0.0.18" }
-feagi-serialization = { version = "^0.0.18" }
+feagi-serialization = { version = "^0.0.19" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -47,7 +48,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "^0.0.18" }
+feagi-observability = { version = "^0.0.19" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
