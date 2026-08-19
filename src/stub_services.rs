@@ -20,12 +20,11 @@
 //! - The subscription bookkeeping on [`StubRuntimeService`] accepts registrations and reports the
 //!   configured burst frequency, so the agent polling loop reaches a steady state instead of
 //!   retrying every cycle. Nothing is published until an NPU is attached.
+//!
+//! `AnalyticsService` is deliberately absent: it is what `/v1/system/health_check` reads, and it is
+//! answered for real from the BDU by [`crate::brain_development::BduAnalyticsService`].
 
-use async_trait::async_trait;
-use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
+use axum::async_trait;
 use feagi_services::traits::agent_service::{
     AgentError, AgentProperties, AgentRegistration, AgentRegistrationResponse, AgentResult,
     AgentService, HeartbeatRequest, ManualStimulationMode as AgentManualStimulationMode,
@@ -34,9 +33,12 @@ use feagi_services::traits::runtime_service::ManualStimulationMode;
 use feagi_services::traits::SystemService;
 use feagi_services::types::*;
 use feagi_services::{
-    AnalyticsService, ConnectomeService, GenomeService, NeuronService, RuntimeService,
-    SnapshotCreateOptions, SnapshotMetadata, SnapshotService,
+    ConnectomeService, GenomeService, NeuronService, RuntimeService, SnapshotCreateOptions,
+    SnapshotMetadata, SnapshotService,
 };
+use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Reason attached to every `NotImplemented` error these services return.
 const PENDING_NPU: &str =
@@ -249,71 +251,6 @@ impl ConnectomeService for StubConnectomeService {
 
     async fn import_connectome(&self, _snapshot: ConnectomeSnapshot) -> ServiceResult<()> {
         Err(pending("import_connectome"))
-    }
-}
-
-// ============================================================================
-// ANALYTICS
-// ============================================================================
-
-#[derive(Default)]
-pub struct StubAnalyticsService;
-
-#[async_trait]
-impl AnalyticsService for StubAnalyticsService {
-    async fn get_system_health(&self) -> ServiceResult<SystemHealth> {
-        Err(pending("get_system_health"))
-    }
-
-    async fn get_cortical_area_stats(
-        &self,
-        _cortical_id: &str,
-    ) -> ServiceResult<CorticalAreaStats> {
-        Err(pending("get_cortical_area_stats"))
-    }
-
-    async fn get_all_cortical_area_stats(&self) -> ServiceResult<Vec<CorticalAreaStats>> {
-        Err(pending("get_all_cortical_area_stats"))
-    }
-
-    async fn get_connectivity_stats(
-        &self,
-        _source_area: &str,
-        _target_area: &str,
-    ) -> ServiceResult<ConnectivityStats> {
-        Err(pending("get_connectivity_stats"))
-    }
-
-    async fn get_total_neuron_count(&self) -> ServiceResult<usize> {
-        Ok(0)
-    }
-
-    async fn get_total_synapse_count(&self) -> ServiceResult<usize> {
-        Ok(0)
-    }
-
-    async fn get_populated_areas(&self) -> ServiceResult<Vec<(String, usize)>> {
-        Ok(Vec::new())
-    }
-
-    async fn get_neuron_density(&self, _cortical_id: &str) -> ServiceResult<f32> {
-        Err(pending("get_neuron_density"))
-    }
-
-    async fn is_brain_initialized(&self) -> ServiceResult<bool> {
-        Ok(false)
-    }
-
-    async fn is_burst_engine_ready(&self) -> ServiceResult<bool> {
-        Ok(false)
-    }
-
-    async fn get_regular_neuron_count(&self) -> ServiceResult<usize> {
-        Ok(0)
-    }
-
-    async fn get_memory_neuron_count(&self) -> ServiceResult<usize> {
-        Ok(0)
     }
 }
 

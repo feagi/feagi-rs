@@ -28,10 +28,11 @@ required-features = ["cli"]
 # replacements are not published yet. Until feagi-core 0.1.x is on crates.io these are path
 # dependencies on the sibling checkout.
 #
-# The new NPU (`feagi-npu`, consumed through `feagi_npu::wnpu::WrappedNeuronProcessingUnit`) is
-# deliberately NOT a direct dependency yet: its wrapper is still `todo!()`. Neural operations are
-# served by `crate::stub_services` until it is ready. Note that `feagi-npu` still arrives
-# transitively via feagi-api/feagi-brain-development/feagi-services.
+# The new NPU is consumed through `feagi_npu::wnpu::WrappedNeuronProcessingUnit`, whose methods are
+# still `todo!()`. Operations that need a running engine are served by `crate::stub_services` until
+# it is ready; `/v1/system/health_check` does not need one and is served from the BDU by
+# `crate::brain_development`.
+feagi-npu = { path = "../feagi-core/crates/feagi-npu"}
 feagi-config = { path = "../feagi-core/crates/feagi-config" }
 feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
 feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
@@ -71,6 +72,7 @@ parking_lot = "0.12"
 
 # JSON (used by agent registration / device_registrations)
 serde_json = "1.0"
+
 
 [dev-dependencies]
 # Benchmarking

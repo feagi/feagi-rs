@@ -1153,6 +1153,7 @@ dependencies = [
  "ahash",
  "feagi-logging-and-errors",
  "half",
+ "heapless",
  "paste",
  "rayon",
  "serde",
@@ -1244,6 +1245,7 @@ dependencies = [
  "feagi-genomic-context",
  "half",
  "paste",
+ "serde",
 ]
 
 [[package]]
@@ -1253,7 +1255,9 @@ dependencies = [
  "ahash",
  "feagi-data",
  "feagi-genomic-context",
+ "feagi-logging-and-errors",
  "feagi-models",
+ "flume",
  "futures",
  "half",
  "parking_lot",
@@ -1296,6 +1300,7 @@ dependencies = [
  "feagi-config",
  "feagi-evolutionary",
  "feagi-io",
+ "feagi-npu",
  "feagi-observability",
  "feagi-sensorimotor",
  "feagi-serialization",
@@ -1389,6 +1394,17 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+]
+
+[[package]]
+name = "flume"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin",
 ]
 
 [[package]]
@@ -1624,6 +1640,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1634,6 +1659,16 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "heapless"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
 
 [[package]]
 name = "heck"
@@ -3629,6 +3664,9 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+dependencies = [
+ "lock_api",
+]
 
 [[package]]
 name = "stable_deref_trait"

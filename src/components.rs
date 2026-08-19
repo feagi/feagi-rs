@@ -5,17 +5,20 @@
 //!
 //! The neural half of this module was removed with the old NPU. What remains is the transport and
 //! API surface: the agent handler with its ZMQ/WebSocket servers, the sensory intake queue, and
-//! the HTTP API backed by [`crate::stub_services`]. Re-attaching a burst engine means giving
-//! [`FeagiComponents`] an NPU handle again and replacing the stub services.
+//! the HTTP API backed by [`crate::stub_services`], except for analytics, which
+//! [`crate::brain_development`] serves from the BDU so the health endpoint reports real figures.
+//! Re-attaching a burst engine means giving [`FeagiComponents`] an NPU handle again and replacing
+//! the remaining stub services.
 
 use anyhow::{Context, Result};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info};
 
+use crate::brain_development::{BduAnalyticsService, DevelopedBrain};
 use crate::network_provider::FeagiNetworkConnectionInfoProvider;
 use crate::stub_services::{
-    StubAgentService, StubAnalyticsService, StubConnectomeService, StubGenomeService,
-    StubNeuronService, StubRuntimeService, StubSnapshotService, StubSystemService,
+    StubAgentService, StubConnectomeService, StubGenomeService, StubNeuronService,
+    StubRuntimeService, StubSnapshotService, StubSystemService,
 };
 use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
@@ -47,6 +50,11 @@ use feagi_io::protocol_implementations::zmq::{
 /// All components are wrapped in Arc/Mutex for thread-safe access.
 pub struct FeagiComponents {
     pub runtime_service: Arc<StubRuntimeService>,
+    /// What the BDU has developed; the source of the health endpoint's brain figures.
+    ///
+    /// Nothing develops a genome on this path yet, so it stays empty and health reports an
+    /// undeveloped brain.
+    pub developed_brain: Arc<DevelopedBrain>,
     pub agent_handler: Arc<Mutex<FeagiAgentHandler>>,
     /// Transport-agnostic sensory queue (feagi-io); feed from polling loop when agents send sensory
     ///
@@ -240,11 +248,14 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         burst_hz
     );
 
+    let developed_brain = Arc::new(DevelopedBrain::new(&config.connectome));
+
     let sensory_intake_queue = Arc::new(SensoryIntakeQueue::new());
     info!("    ⚠ Sensory intake queue created without a consumer (awaiting new NPU)");
 
     Ok(FeagiComponents {
         runtime_service,
+        developed_brain,
         agent_handler,
         sensory_intake_queue,
     })
@@ -254,11 +265,16 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
 ///
 /// Spawns Axum server on Tokio runtime (non-blocking).
 pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfig) -> Result<()> {
-    info!("  Creating service layer (placeholder implementations)...");
+    info!("  Creating service layer (analytics from BDU, rest placeholder)...");
 
     let genome_service = Arc::new(StubGenomeService);
     let connectome_service = Arc::new(StubConnectomeService);
-    let analytics_service = Arc::new(StubAnalyticsService);
+    // Analytics is not a stub: `/v1/system/health_check` is served from the BDU's development
+    // report plus the runtime service's burst state. See [`crate::brain_development`].
+    let analytics_service = Arc::new(BduAnalyticsService::new(
+        Arc::clone(&components.developed_brain),
+        components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
+    ));
     let neuron_service = Arc::new(StubNeuronService);
     let snapshot_service = Arc::new(StubSnapshotService);
     let agent_service = Arc::new(StubAgentService);

@@ -13,8 +13,11 @@
 //! The old NPU (`feagi-npu-burst-engine`, `feagi-npu-plasticity` and the `ConnectomeManager` they
 //! were wired to) has been removed ahead of integrating the rewritten NPU through
 //! `feagi_npu::wnpu::WrappedNeuronProcessingUnit`. Every interface below still starts and every
-//! route still resolves, but operations that need neural state answer with a not-implemented
-//! error. See `crate::stub_services` in the library half of this crate.
+//! route still resolves, but operations that need a running engine answer with a not-implemented
+//! error. See `feagi::stub_services`.
+//!
+//! `/v1/system/health_check` is an exception, because it describes the brain rather than driving it:
+//! it is served from what the BDU developed, via `feagi::brain_development`.
 //!
 //! ## License
 //! Apache-2.0
@@ -26,10 +29,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
+use feagi::brain_development::{develop_genome_file, BduAnalyticsService, DevelopedBrain};
 use feagi::network_provider::FeagiNetworkConnectionInfoProvider;
 use feagi::stub_services::{
-    StubAgentService, StubAnalyticsService, StubConnectomeService, StubGenomeService,
-    StubNeuronService, StubRuntimeService, StubSnapshotService, StubSystemService,
+    StubAgentService, StubConnectomeService, StubGenomeService, StubNeuronService,
+    StubRuntimeService, StubSnapshotService, StubSystemService,
 };
 use feagi_agent::command_and_control::agent_embodiment_configuration_message::AgentEmbodimentConfigurationMessage;
 use feagi_agent::command_and_control::FeagiMessage;
@@ -42,6 +46,8 @@ use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_io::{AgentID, SensoryIntakeQueue};
+use feagi_npu::wnpu::wnpu::WrappedNeuronProcessingUnit;
+use feagi_npu::NPUTargetFrequency;
 use feagi_observability::{init_logging_default, parse_debug_flags};
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::traits::SystemService as SystemServiceTrait;
@@ -1057,6 +1063,9 @@ fn brain_is_initialized(
 
 /// Core FEAGI components (matches components.rs)
 struct FeagiComponents {
+    neuron_processing_unit: Arc<WrappedNeuronProcessingUnit>,
+    /// What the BDU has developed; the source of the health endpoint's brain figures.
+    developed_brain: Arc<DevelopedBrain>,
     runtime_service: Arc<StubRuntimeService>,
     agent_handler: Arc<std::sync::Mutex<feagi_agent::server::FeagiAgentHandler>>,
     /// Transport-agnostic sensory queue (feagi-io); polling loop pushes here when agents send sensory
@@ -1083,6 +1092,8 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
 
     let auth_backend = Box::new(DummyAuth {});
     let mut agent_handler = FeagiAgentHandler::new(auth_backend);
+
+    let mut npu = WrappedNeuronProcessingUnit::new();
 
     // Add ZMQ servers (multiple slots so multiple agents can register)
     #[cfg(feature = "zmq-transport")]
@@ -1218,10 +1229,20 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
     info!("    ✓ Agent Handler created");
 
     let burst_hz = 1.0 / config.neural.burst_engine_timestep;
+
+    let burst_frequency = NPUTargetFrequency::new_from_frequency(burst_hz);
+    npu.run_at(burst_frequency);
+
     let runtime_service = Arc::new(StubRuntimeService::new(burst_hz));
     info!(
         "    ✓ Runtime service created (no burst engine: reports {:.0}Hz, not running)",
         burst_hz
+    );
+
+    let developed_brain = Arc::new(DevelopedBrain::new(&config.connectome));
+    info!(
+        "    ✓ Brain development state created (capacity: {} neurons, {} synapses)",
+        config.connectome.neuron_space, config.connectome.synapse_space
     );
 
     // Transport-agnostic sensory intake (feagi-io): the polling loop feeds it. The burst engine
@@ -1233,6 +1254,8 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
     info!("      ⚠ Visualization: no burst engine to publish from");
 
     Ok(FeagiComponents {
+        neuron_processing_unit: Arc::new(npu),
+        developed_brain,
         runtime_service,
         agent_handler,
         sensory_intake_queue,
@@ -1249,17 +1272,22 @@ async fn start_services(
 ) -> Result<()> {
     // Signal handler already setup in main()
 
-    info!("  Creating service layer (placeholder implementations)...");
+    info!("  Creating service layer (analytics from BDU, rest placeholder)...");
 
     let genome_service = Arc::new(StubGenomeService);
     let connectome_service = Arc::new(StubConnectomeService);
-    let analytics_service = Arc::new(StubAnalyticsService);
+    // Analytics is not a stub: `/v1/system/health_check` is served from the BDU's development
+    // report plus the runtime service's burst state. See `feagi::brain_development`.
+    let analytics_service = Arc::new(BduAnalyticsService::new(
+        Arc::clone(&components.developed_brain),
+        components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
+    ));
     let neuron_service = Arc::new(StubNeuronService);
     let snapshot_service = Arc::new(StubSnapshotService);
     let agent_service = Arc::new(StubAgentService);
     let system_service = Arc::new(StubSystemService::new(feagi::collect_version_info()));
 
-    info!("    ✓ Services created (neural operations report not-implemented)");
+    info!("    ✓ Services created (health check live; other neural operations report not-implemented)");
 
     // Get FEAGI session timestamp (when this instance started)
     let feagi_session_timestamp = std::time::SystemTime::now()
@@ -1360,17 +1388,28 @@ async fn start_services(
             .expect("API server error");
     });
 
-    // Genome loading performed neuroembryogenesis against the old NPU. There is nowhere to develop
-    // a connectome into, so `--genome` is reported and ignored rather than aborting startup: the
-    // API and transports are still useful while the new NPU is being integrated.
+    // Development is run for its report, not for a simulation: the BDU produces the connectome
+    // requests but the wrapped NPU has no entry point to accept them, so the brain is described to
+    // callers (health, readiness) without being simulated. A genome that fails to develop is
+    // reported and startup continues, because the API and transports are still useful without one.
     if let Some(genome_path) = &args.genome {
-        error!(
-            "  ✗ Cannot load genome '{}': neuroembryogenesis requires an NPU",
-            genome_path.display()
-        );
-        error!("    Continuing without a genome. Re-run once the new NPU is integrated.");
+        info!("  Developing genome '{}'...", genome_path.display());
+        match develop_genome_file(genome_path, &components.developed_brain) {
+            Ok(report) => info!(
+                "    ✓ Brain developed: {} cortical areas, {} neurons",
+                report.areas_added, report.neurons_added
+            ),
+            Err(e) => {
+                error!(
+                    "  ✗ Could not develop genome '{}': {:#}",
+                    genome_path.display(),
+                    e
+                );
+                error!("    Continuing with an undeveloped brain.");
+            }
+        }
     } else {
-        info!("  No genome specified, starting with empty connectome");
+        info!("  No genome specified, starting with an undeveloped brain");
     }
 
     // Make ApiState available to polling loop for auto_create when device_registrations arrive.

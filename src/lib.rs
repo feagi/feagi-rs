@@ -14,6 +14,9 @@
 //! API surfaces are intact, but every method on [`FeagiInstance`] that drives neural state returns
 //! an error until that integration lands.
 //!
+//! [`brain_development`] is the exception: it reports the brain the BDU developed, which is what
+//! `/v1/system/health_check` answers with and needs no engine.
+//!
 //! ## Example
 //!
 //! ```no_run
@@ -44,6 +47,7 @@ pub use feagi_agent::server::FeagiAgentHandler;
 pub use feagi_services::*;
 
 // Internal modules (reused from main.rs initialization logic)
+pub mod brain_development;
 pub mod components;
 pub mod network_provider;
 pub mod stub_services;
