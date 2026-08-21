@@ -196,7 +196,7 @@ pub fn wire_plasticity_callbacks(
                         let twin_id_u64 = {
                             let instance = ConnectomeManager::instance();
                             let mut cm = instance.write();
-                            cm.add_neuron(
+                            cm.add_auxiliary_neuron(
                                 &cortical_id,
                                 0,
                                 0,
