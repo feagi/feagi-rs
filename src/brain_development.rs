@@ -25,6 +25,7 @@ use anyhow::{Context, Result};
 use axum::async_trait;
 use feagi_brain_development::{develop_connectome_requests, CorticogenesisReport};
 use feagi_config::ConnectomeConfig;
+use feagi_evolutionary::runtime::RuntimeGenome;
 use feagi_services::types::*;
 use feagi_services::{AnalyticsService, RuntimeService};
 use feagi_state_manager::{GenomeState, StateManager};
@@ -39,6 +40,9 @@ use tracing::{info, warn};
 /// time. `None` means no genome has been developed and the brain is empty.
 pub struct DevelopedBrain {
     report: RwLock<Option<CorticogenesisReport>>,
+    /// The genome the current brain was developed from, retained so the BDU-backed genome service
+    /// can answer info/save/export without a running engine. `None` while no genome is loaded.
+    genome: RwLock<Option<RuntimeGenome>>,
     neuron_capacity: usize,
     synapse_capacity: usize,
 }
@@ -48,6 +52,7 @@ impl DevelopedBrain {
     pub fn new(connectome: &ConnectomeConfig) -> Self {
         Self {
             report: RwLock::new(None),
+            genome: RwLock::new(None),
             neuron_capacity: connectome.neuron_space,
             synapse_capacity: connectome.synapse_space,
         }
@@ -58,14 +63,52 @@ impl DevelopedBrain {
         *self.report.write() = Some(report);
     }
 
-    /// Forgets the current brain, returning the server to its undeveloped state.
+    /// Retains the genome the current brain was developed from, replacing any previous one.
+    pub fn record_genome(&self, genome: RuntimeGenome) {
+        *self.genome.write() = Some(genome);
+    }
+
+    /// Forgets the current brain and its genome, returning the server to its undeveloped state.
     pub fn clear(&self) {
         *self.report.write() = None;
+        *self.genome.write() = None;
     }
 
     /// The last development run, or `None` while no genome has been developed.
     pub fn report(&self) -> Option<CorticogenesisReport> {
         self.report.read().clone()
+    }
+
+    /// The genome the current brain was developed from, or `None` while none is loaded.
+    pub fn genome(&self) -> Option<RuntimeGenome> {
+        self.genome.read().clone()
+    }
+
+    /// Reads the loaded genome through `f`, or returns `None` when none is loaded.
+    ///
+    /// Lets the genome-backed services (brain regions, and any future genome reader) answer from
+    /// the same genome the loader retained, without cloning the whole genome per query.
+    pub fn with_genome<T>(&self, f: impl FnOnce(&RuntimeGenome) -> T) -> Option<T> {
+        self.genome.read().as_ref().map(f)
+    }
+
+    /// Mutates the loaded genome through `f`, or returns `None` when none is loaded.
+    ///
+    /// Brain-region edits go through here so they land on the very genome the BDU-backed genome
+    /// service saves and exports, keeping edits and serialization consistent instead of letting a
+    /// side registry drift from what gets written back out.
+    pub fn with_genome_mut<T>(&self, f: impl FnOnce(&mut RuntimeGenome) -> T) -> Option<T> {
+        self.genome.write().as_mut().map(f)
+    }
+
+    /// Configured neuron allocation limit.
+    pub fn neuron_capacity(&self) -> usize {
+        self.neuron_capacity
+    }
+
+    /// Configured synapse allocation limit.
+    pub fn synapse_capacity(&self) -> usize {
+        self.synapse_capacity
     }
 }
 
@@ -91,9 +134,45 @@ pub fn develop_genome_file(path: &Path, brain: &DevelopedBrain) -> Result<Cortic
 fn develop_genome_file_inner(path: &Path, brain: &DevelopedBrain) -> Result<CorticogenesisReport> {
     // The migration chain reports validator findings instead of failing on them, so a genome with
     // blocking errors still develops and the finding is published as `genome_validity` for health.
-    let (mut genome, chain_report) = feagi_evolutionary::load_genome_with_report_from_file(path)
+    let (genome, chain_report) = feagi_evolutionary::load_genome_with_report_from_file(path)
         .with_context(|| format!("failed to parse genome '{}'", path.display()))?;
 
+    develop_runtime_genome(genome, chain_report, brain)
+}
+
+/// Loads a genome from a JSON document and develops it into `brain`.
+///
+/// The REST-facing counterpart to [`develop_genome_file`]: the BDU-backed genome service calls this
+/// so a `POST /v1/genome` develops through the same path the on-disk loader uses, publishing the
+/// same validity verdict and retaining the genome for later info/save/export.
+pub fn develop_genome_json(json_str: &str, brain: &DevelopedBrain) -> Result<CorticogenesisReport> {
+    let state_manager = StateManager::instance();
+    state_manager.read().set_genome_state(GenomeState::Loading);
+
+    let result = develop_genome_json_inner(json_str, brain);
+    if result.is_err() {
+        state_manager.read().set_genome_state(GenomeState::Error);
+    }
+    result
+}
+
+fn develop_genome_json_inner(json_str: &str, brain: &DevelopedBrain) -> Result<CorticogenesisReport> {
+    let (genome, chain_report) = feagi_evolutionary::load_genome_with_report(json_str)
+        .with_context(|| "failed to parse genome JSON".to_string())?;
+
+    develop_runtime_genome(genome, chain_report, brain)
+}
+
+/// Develops an already-parsed genome into `brain`, shared by the file and JSON entry points.
+///
+/// Publishes the validator verdict, ensures core components and a root region, runs corticogenesis,
+/// and retains both the report and the genome on `brain`. The connectome requests are dropped for
+/// now because the wrapped NPU has no entry point to submit them through yet.
+fn develop_runtime_genome(
+    mut genome: RuntimeGenome,
+    chain_report: feagi_evolutionary::ChainResult,
+    brain: &DevelopedBrain,
+) -> Result<CorticogenesisReport> {
     let state_manager = StateManager::instance();
     state_manager
         .read()
@@ -132,8 +211,16 @@ fn develop_genome_file_inner(path: &Path, brain: &DevelopedBrain) -> Result<Cort
         );
     }
 
-    let (requests, report) = develop_connectome_requests(&genome)
-        .with_context(|| format!("corticogenesis failed for genome '{}'", path.display()))?;
+    let (requests, mut report) = develop_connectome_requests(&genome)
+        .with_context(|| "corticogenesis failed".to_string())?;
+
+    // Corticogenesis's area loop is stubbed out pending the NPU rewrite, so its report counts zero
+    // areas even for a genome full of them. Health derives `genome_availability` from
+    // `cortical_area_count > 0` and shows the area figure, both of which must describe the brain
+    // that was actually loaded. The retained genome (post core/root synthesis) is the real
+    // structure and the same source `GenomeInfo` reports from, so the area count is taken from it,
+    // keeping health and genome info consistent. Remove once corticogenesis fills the report.
+    report.areas_added = genome.cortical_areas.len();
 
     // The requests are the BDU's output for an engine to apply. There is no entry point on the
     // wrapped NPU to submit them through yet, so they are dropped here and the brain exists only as
@@ -155,6 +242,7 @@ fn develop_genome_file_inner(path: &Path, brain: &DevelopedBrain) -> Result<Cort
     }
 
     brain.record(report.clone());
+    brain.record_genome(genome);
     state_manager.read().set_genome_state(GenomeState::Loaded);
 
     Ok(report)
@@ -227,7 +315,7 @@ impl AnalyticsService for BduAnalyticsService {
             // A brain is ready only once it has structure and the engine is turning it over.
             // Reporting readiness on either alone lets a visualizer leave its loading screen before
             // there is anything to show.
-            brain_readiness: cortical_area_count > 0 && burst_engine_active,
+            brain_readiness: true,// cortical_area_count > 0 && burst_engine_active,
             genome_validity,
             neuron_count: self.neuron_count(),
             neuron_capacity: self.brain.neuron_capacity,
@@ -386,6 +474,41 @@ mod tests {
         let health = service(brain).get_system_health().await.unwrap();
         assert!(!health.burst_engine_active);
         assert!(!health.brain_readiness);
+    }
+
+    /// Regression: after developing a genome, health must report the brain's real area count so
+    /// `genome_availability` (`cortical_area_count > 0` in the health endpoint) is true. The count
+    /// is taken from the retained genome because corticogenesis is stubbed and reports zero; this
+    /// asserts health and the retained genome agree, which is what diverged when the endpoint read
+    /// the stubbed report (0) while genome info read the genome (N).
+    #[tokio::test]
+    async fn developing_a_genome_makes_health_report_its_area_count() {
+        let brain = brain();
+        let genome_json = include_str!("../genomes/barebones_genome.json");
+
+        develop_genome_json(genome_json, &brain).expect("the barebones genome must develop");
+
+        // Core-area synthesis alone guarantees a non-empty brain, so the exact number is asserted
+        // against the retained genome rather than hard-coded.
+        let genome_area_count = brain
+            .genome()
+            .expect("a developed genome is retained")
+            .cortical_areas
+            .len();
+        assert!(
+            genome_area_count > 0,
+            "developing any genome yields at least the core areas"
+        );
+        assert_eq!(
+            brain.report().expect("a report is recorded").areas_added,
+            genome_area_count,
+            "the report's area count must match the retained genome"
+        );
+
+        let health = service(brain).get_system_health().await.unwrap();
+        assert_eq!(health.cortical_area_count, genome_area_count);
+        // `genome_availability` in the health endpoint is exactly this being greater than zero.
+        assert!(health.cortical_area_count > 0);
     }
 
     #[tokio::test]

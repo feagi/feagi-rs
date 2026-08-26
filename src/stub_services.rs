@@ -1,29 +1,39 @@
 // Copyright 2025 Neuraville Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Service-layer adapters that forward every REST/ZMQ/WebSocket call into the wrapped NPU.
+//! Service-layer adapters that back FEAGI's REST/ZMQ/WebSocket surface.
 //!
 //! The old NPU stack (`feagi-npu-burst-engine` + `ConnectomeManager`) backed every
 //! `feagi-services` implementation that FEAGI's transports were wired to. That stack is gone and
 //! `feagi-services` no longer ships built-in implementations, so adapters are expected to supply
 //! their own — this file is that adapter.
 //!
-//! Every method here holds a shared handle to [`WrappedNeuronProcessingUnit`] and calls whichever
-//! WNPU method matches. Where a call needs a richer parameter than WNPU currently accepts, this
-//! file constructs a default WNPU-shaped payload and forwards it. Every return value is either
-//! synthesized from WNPU's response or built as an empty / defaulted DTO.
+//! Responsibilities are split along the same line as the wrapped NPU's surface:
+//!
+//! - Anything the NPU owns — cortical areas, cortical mappings, burst lifecycle/frequency, runtime
+//!   probes, sensory injection, and the NPU-side agent data channels — is forwarded to
+//!   [`WrappedNeuronProcessingUnit`].
+//! - Anything the legacy Brain Development code owns — genome load/validate/save/export/info,
+//!   brain regions, and morphology definitions, plus the developed-brain figures behind system
+//!   status/capacity — is answered from the BDU-side
+//!   [`crate::brain_development::DevelopedBrain`] and its retained genome. Realising a morphology
+//!   into synapses is a separate NPU concern, forwarded through `update_cortical_mapping`.
+//! - Surfaces that have no backend on this server yet — snapshots, whole-connectome transport,
+//!   engine runtime/memory metrics, and the agent registry — report themselves as unavailable
+//!   rather than returning fabricated data.
 //!
 //! `AnalyticsService` is deliberately absent from this file: it is what `/v1/system/health_check`
 //! reads, and it is answered from the BDU by [`crate::brain_development::BduAnalyticsService`].
 
 use axum::async_trait;
 use feagi_data::neurons::wrapped_types::CorticalVoxelDimensionsGenomic;
+use feagi_genomic_context::brain_region::{BrainRegion, RegionID, RegionType};
 use feagi_genomic_context::cortical_area::CorticalID;
 use feagi_npu::standard::npu::npu_target_frequency::NPUTargetFrequency;
-use feagi_npu::standard::wnpu::wnpu::{
-    CorticalAreaParameters, WnpuAgentProperties, WnpuBrainRegionInfo, WnpuGenomeMetadata,
-    WnpuMorphologyInfo, WrappedNeuronProcessingUnit,
-};
+use feagi_npu::standard::wnpu::wnpu::{CorticalAreaParameters, WrappedNeuronProcessingUnit};
+
+use crate::brain_development::{develop_genome_json, DevelopedBrain};
+use feagi_evolutionary::runtime::RuntimeGenome;
 use feagi_services::traits::agent_service::{
     AgentError, AgentProperties, AgentRegistration, AgentRegistrationResponse, AgentResult,
     AgentService, HeartbeatRequest, ManualStimulationMode as AgentManualStimulationMode,
@@ -51,6 +61,13 @@ fn parse_cortical_id(cortical_id: &str) -> ServiceResult<CorticalID> {
     CorticalID::try_from_base_64(cortical_id).map_err(|e| {
         ServiceError::InvalidInput(format!("invalid cortical area ID '{cortical_id}': {e}"))
     })
+}
+
+/// Derives the wrapped NPU's mapping name for a source->destination pair. The NPU references
+/// mappings by name; a pair identifies a single mapping, so the two base64 cortical IDs joined
+/// with an arrow form a stable unique name the NPU can later resolve for removal.
+fn cortical_mapping_name(source_b64: &str, destination_b64: &str) -> String {
+    format!("{source_b64}->{destination_b64}")
 }
 
 /// Build a [`CorticalAreaParameters`] with the fields the WNPU write path currently reads,
@@ -133,71 +150,34 @@ fn cortical_area_info_from_create(
     info
 }
 
-/// Convert WNPU's brain region info into the service-layer DTO.
-fn brain_region_info_from_wnpu(info: WnpuBrainRegionInfo) -> BrainRegionInfo {
-    BrainRegionInfo {
-        region_id: info.region_id,
-        name: info.name,
-        region_type: info.region_type,
-        parent_id: info.parent_id,
-        cortical_areas: info.cortical_areas,
-        child_regions: info.child_regions,
-        properties: info.properties,
-    }
-}
-
-/// Convert WNPU's morphology info into the service-layer DTO.
-fn morphology_info_from_wnpu(info: WnpuMorphologyInfo) -> MorphologyInfo {
-    MorphologyInfo {
-        morphology_type: info.morphology_type,
-        class: info.class,
-        parameters: info.parameters,
-    }
-}
-
-/// Convert WNPU's genome metadata into the service-layer DTO.
-fn genome_info_from_wnpu(
-    metadata: WnpuGenomeMetadata,
-    cortical_area_count: usize,
-    brain_region_count: usize,
-) -> GenomeInfo {
+/// The genome DTO reported when no genome has been developed yet.
+fn empty_genome_info() -> GenomeInfo {
     GenomeInfo {
-        genome_id: metadata.genome_id,
-        genome_title: metadata.genome_title,
-        version: metadata.version,
-        cortical_area_count,
-        brain_region_count,
-        simulation_timestep: metadata.simulation_timestep,
-        genome_num: metadata.genome_num,
-        genome_timestamp: metadata.genome_timestamp,
+        genome_id: String::new(),
+        genome_title: String::new(),
+        version: String::new(),
+        cortical_area_count: 0,
+        brain_region_count: 0,
+        simulation_timestep: 0.0,
+        genome_num: None,
+        genome_timestamp: None,
     }
 }
 
-/// Convert WNPU's agent property snapshot into the service-layer DTO.
-fn agent_properties_from_wnpu(props: WnpuAgentProperties) -> AgentProperties {
-    AgentProperties {
-        agent_type: props.agent_type,
-        agent_ip: props.agent_ip,
-        agent_data_port: props.agent_data_port,
-        agent_router_address: props.agent_router_address,
-        agent_version: props.agent_version,
-        controller_version: props.controller_version,
-        capabilities: props.capabilities,
-        chosen_transport: props.chosen_transport,
-    }
-}
-
-/// Convert WNPU's snapshot metadata into the service-layer DTO.
-fn snapshot_metadata_from_wnpu(
-    metadata: feagi_npu::standard::wnpu::wnpu::WnpuSnapshotMetadata,
-) -> SnapshotMetadata {
-    SnapshotMetadata {
-        snapshot_id: metadata.snapshot_id,
-        created_at: metadata.created_at,
-        name: metadata.name,
-        description: metadata.description,
-        stateful: metadata.stateful,
-        size_bytes: metadata.size_bytes,
+/// Build the service-layer genome DTO from the BDU's retained runtime genome.
+///
+/// Every field is read straight off the developed genome: this is the "BDU contains the genome
+/// state" path, so the service never fabricates metadata it does not hold.
+fn genome_info_from_runtime(genome: &RuntimeGenome) -> GenomeInfo {
+    GenomeInfo {
+        genome_id: genome.metadata.genome_id.clone(),
+        genome_title: genome.metadata.genome_title.clone(),
+        version: genome.metadata.version.clone(),
+        cortical_area_count: genome.cortical_areas.len(),
+        brain_region_count: genome.brain_regions.len(),
+        simulation_timestep: genome.physiology.simulation_timestep,
+        genome_num: None,
+        genome_timestamp: Some(genome.metadata.timestamp as i64),
     }
 }
 
@@ -207,68 +187,81 @@ fn snapshot_metadata_from_wnpu(
 
 pub struct StubGenomeService {
     wnpu: SharedWnpu,
+    /// BDU-side brain state. Genome load/validate/save/export/info are answered from here rather
+    /// than the NPU, which owns only cortical areas and mappings.
+    brain: Arc<DevelopedBrain>,
 }
 
 impl StubGenomeService {
-    pub fn new(wnpu: SharedWnpu) -> Self {
-        Self { wnpu }
+    pub fn new(wnpu: SharedWnpu, brain: Arc<DevelopedBrain>) -> Self {
+        Self { wnpu, brain }
     }
 }
 
 #[async_trait]
 impl GenomeService for StubGenomeService {
     async fn load_genome(&self, params: LoadGenomeParams) -> ServiceResult<GenomeInfo> {
-        let mut wnpu = self.wnpu.lock();
-        wnpu.load_genome_json(&params.json_str)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.load_genome_json: {e}")))?;
-        let metadata = wnpu.genome_metadata();
-        let cortical_area_count = wnpu.cortical_area_ids().len();
-        let brain_region_count = wnpu.brain_region_ids().len();
-        Ok(genome_info_from_wnpu(
-            metadata,
-            cortical_area_count,
-            brain_region_count,
-        ))
+        develop_genome_json(&params.json_str, &self.brain)
+            .map_err(|e| ServiceError::Backend(format!("develop_genome_json: {e}")))?;
+        self.brain
+            .genome()
+            .as_ref()
+            .map(genome_info_from_runtime)
+            .ok_or_else(|| {
+                ServiceError::Backend("genome developed but not retained by the BDU".to_string())
+            })
     }
 
     async fn save_genome(&self, _params: SaveGenomeParams) -> ServiceResult<String> {
-        self.wnpu
-            .lock()
-            .save_genome_json()
-            .map_err(|e| ServiceError::Backend(format!("wnpu.save_genome_json: {e}")))
+        let genome = self
+            .brain
+            .genome()
+            .ok_or_else(|| ServiceError::InvalidInput("no genome is currently loaded".to_string()))?;
+        feagi_evolutionary::save_genome_to_json(&genome)
+            .map_err(|e| ServiceError::Backend(format!("save_genome_to_json: {e}")))
     }
 
     async fn export_region_genome(&self, region_id: String) -> ServiceResult<String> {
-        self.wnpu
-            .lock()
-            .export_region_genome_json(&region_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.export_region_genome_json: {e}")))
+        let genome = self
+            .brain
+            .genome()
+            .ok_or_else(|| ServiceError::InvalidInput("no genome is currently loaded".to_string()))?;
+        let subset =
+            feagi_evolutionary::subset_runtime_genome_for_region_branch(&genome, &region_id)
+                .map_err(|e| {
+                    ServiceError::Backend(format!("subset_runtime_genome_for_region_branch: {e}"))
+                })?;
+        feagi_evolutionary::save_genome_to_json(&subset)
+            .map_err(|e| ServiceError::Backend(format!("save_genome_to_json: {e}")))
     }
 
     async fn get_genome_info(&self) -> ServiceResult<GenomeInfo> {
-        let wnpu = self.wnpu.lock();
-        let metadata = wnpu.genome_metadata();
-        let cortical_area_count = wnpu.cortical_area_ids().len();
-        let brain_region_count = wnpu.brain_region_ids().len();
-        Ok(genome_info_from_wnpu(
-            metadata,
-            cortical_area_count,
-            brain_region_count,
-        ))
+        Ok(self
+            .brain
+            .genome()
+            .as_ref()
+            .map(genome_info_from_runtime)
+            .unwrap_or_else(empty_genome_info))
     }
 
     async fn validate_genome(&self, json_str: String) -> ServiceResult<bool> {
-        self.wnpu
-            .lock()
-            .validate_genome_json(&json_str)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.validate_genome_json: {e}")))
+        // A genome that does not even parse is not valid; a genome that parses is valid only when
+        // the migration chain reports no blocking findings.
+        Ok(match feagi_evolutionary::load_genome_with_report(&json_str) {
+            Ok((_, chain_report)) => chain_report.is_blocking_clean(),
+            Err(_) => false,
+        })
     }
 
     async fn reset_connectome(&self) -> ServiceResult<()> {
+        // Clear both sides: the NPU discards its cortical areas/mappings, and the BDU forgets the
+        // developed brain and its genome so health reports an undeveloped brain again.
         self.wnpu
             .lock()
             .clear_connectome()
-            .map_err(|e| ServiceError::Backend(format!("wnpu.clear_connectome: {e}")))
+            .map_err(|e| ServiceError::Backend(format!("wnpu.clear_connectome: {e}")))?;
+        self.brain.clear();
+        Ok(())
     }
 
     async fn update_cortical_area(
@@ -316,11 +309,14 @@ impl GenomeService for StubGenomeService {
 
 pub struct StubConnectomeService {
     wnpu: SharedWnpu,
+    /// The BDU-side developed brain, whose retained genome owns the brain-region tree. Region
+    /// reads and edits go through it so they stay consistent with genome save/export.
+    brain: Arc<DevelopedBrain>,
 }
 
 impl StubConnectomeService {
-    pub fn new(wnpu: SharedWnpu) -> Self {
-        Self { wnpu }
+    pub fn new(wnpu: SharedWnpu, brain: Arc<DevelopedBrain>) -> Self {
+        Self { wnpu, brain }
     }
 }
 
@@ -454,29 +450,126 @@ impl ConnectomeService for StubConnectomeService {
         Ok(self.wnpu.lock().neuron_properties(neuron_id))
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Brain regions live in the genome, not the NPU. They are read from and edited on the genome
+    // the BDU retained on load, so region edits stay consistent with genome save/export. This
+    // mirrors the genome-backed connectome service in `feagi-api`.
+    // ------------------------------------------------------------------------------------------
+
     async fn create_brain_region(
         &self,
         params: CreateBrainRegionParams,
     ) -> ServiceResult<BrainRegionInfo> {
-        let mut wnpu = self.wnpu.lock();
-        wnpu.add_brain_region(&params.region_id, params.parent_id.as_deref())
-            .map_err(|e| ServiceError::Backend(format!("wnpu.add_brain_region: {e}")))?;
-        Ok(BrainRegionInfo {
-            region_id: params.region_id,
-            name: params.name,
-            region_type: params.region_type,
-            parent_id: params.parent_id,
-            cortical_areas: Vec::new(),
-            child_regions: Vec::new(),
-            properties: params.properties.unwrap_or_default(),
-        })
+        let region_id = RegionID::from_string(&params.region_id).map_err(|e| {
+            ServiceError::InvalidInput(format!(
+                "invalid region ID '{}': {}",
+                params.region_id, e
+            ))
+        })?;
+
+        // The genome carries a single region type, so anything else is a caller mistake rather
+        // than a value to coerce.
+        if !params.region_type.eq_ignore_ascii_case("undefined") {
+            return Err(ServiceError::InvalidInput(format!(
+                "unknown region type '{}'; the genome format defines only 'undefined'",
+                params.region_type
+            )));
+        }
+
+        let mut region = BrainRegion::new(region_id, params.name, RegionType::Undefined)
+            .map_err(|e| ServiceError::InvalidInput(e.to_string()))?;
+
+        for (key, value) in params.properties.unwrap_or_default() {
+            region.add_property(key, value);
+        }
+        // The parent link lives in the child's properties; this is the same representation the
+        // genome parser writes and the saver reads back.
+        if let Some(parent_id) = params.parent_id {
+            region.add_property(
+                "parent_region_id".to_string(),
+                serde_json::Value::String(parent_id),
+            );
+        }
+
+        let region_id_key = params.region_id;
+        self.brain
+            .with_genome_mut(|g| {
+                if g.brain_regions.contains_key(&region_id_key) {
+                    return Err(ServiceError::AlreadyExists {
+                        resource: "brain_region".to_string(),
+                        id: region_id_key.clone(),
+                    });
+                }
+                if let Some(parent_id) = region
+                    .properties
+                    .get("parent_region_id")
+                    .and_then(|value| value.as_str())
+                {
+                    if !g.brain_regions.contains_key(parent_id) {
+                        return Err(ServiceError::NotFound {
+                            resource: "brain_region".to_string(),
+                            id: parent_id.to_string(),
+                        });
+                    }
+                }
+
+                g.brain_regions.insert(region_id_key.clone(), region);
+                let created = &g.brain_regions[&region_id_key];
+                Ok(region_to_info(&region_id_key, created, &g.brain_regions))
+            })
+            .ok_or_else(|| no_genome_loaded("brain region creation"))?
     }
 
     async fn delete_brain_region(&self, region_id: &str) -> ServiceResult<()> {
-        self.wnpu
-            .lock()
-            .remove_brain_region(region_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.remove_brain_region: {e}")))
+        // Deleting a region deletes the cortical areas beneath it, and the engine has no operation
+        // for removing an area, so a region that still holds areas is reported rather than partly
+        // deleted. Matches the genome-backed service in `feagi-api`.
+        let has_areas = self
+            .brain
+            .with_genome(|g| {
+                g.brain_regions
+                    .get(region_id)
+                    .map(|region| !region.cortical_areas.is_empty())
+            })
+            .flatten()
+            .ok_or_else(|| region_not_found(region_id))?;
+
+        if has_areas {
+            return Err(ServiceError::NotImplemented(
+                "deleting a region that holds cortical areas requires removing those areas from \
+                 the engine, which the current NPU cannot do"
+                    .to_string(),
+            ));
+        }
+
+        self.brain
+            .with_genome_mut(|g| {
+                // A region cannot be removed while others still point at it as their parent.
+                let orphans: Vec<String> = g
+                    .brain_regions
+                    .iter()
+                    .filter(|(_, candidate)| {
+                        candidate
+                            .properties
+                            .get("parent_region_id")
+                            .and_then(|value| value.as_str())
+                            == Some(region_id)
+                    })
+                    .map(|(child_id, _)| child_id.clone())
+                    .collect();
+
+                if !orphans.is_empty() {
+                    return Err(ServiceError::Conflict(format!(
+                        "region '{}' still has child regions: {}",
+                        region_id,
+                        orphans.join(", ")
+                    )));
+                }
+
+                g.brain_regions.remove(region_id);
+                Ok(())
+            })
+            .ok_or_else(|| no_genome_loaded("brain region deletion"))?
     }
 
     async fn update_brain_region(
@@ -484,110 +577,282 @@ impl ConnectomeService for StubConnectomeService {
         region_id: &str,
         properties: HashMap<String, serde_json::Value>,
     ) -> ServiceResult<BrainRegionInfo> {
-        let mut wnpu = self.wnpu.lock();
-        wnpu.update_brain_region(region_id, properties.clone())
-            .map_err(|e| ServiceError::Backend(format!("wnpu.update_brain_region: {e}")))?;
-        let mut info = wnpu
-            .brain_region_info(region_id)
-            .map(brain_region_info_from_wnpu)
-            .unwrap_or_else(|| BrainRegionInfo {
-                region_id: region_id.to_string(),
-                name: String::new(),
-                region_type: String::new(),
-                parent_id: None,
-                cortical_areas: Vec::new(),
-                child_regions: Vec::new(),
-                properties: HashMap::new(),
-            });
-        for (key, value) in properties {
-            info.properties.insert(key, value);
-        }
-        Ok(info)
+        self.brain
+            .with_genome_mut(|g| {
+                if !g.brain_regions.contains_key(region_id) {
+                    return Err(region_not_found(region_id));
+                }
+
+                // Reparenting is applied through the same property the hierarchy is read from, so
+                // it must name a region that exists and cannot be the region itself.
+                if let Some(parent_id) = properties
+                    .get("parent_region_id")
+                    .and_then(|value| value.as_str())
+                {
+                    if !g.brain_regions.contains_key(parent_id) {
+                        return Err(ServiceError::NotFound {
+                            resource: "brain_region".to_string(),
+                            id: parent_id.to_string(),
+                        });
+                    }
+                    if parent_id == region_id {
+                        return Err(ServiceError::InvalidInput(
+                            "a region cannot be its own parent".to_string(),
+                        ));
+                    }
+                }
+
+                let region = g
+                    .brain_regions
+                    .get_mut(region_id)
+                    .expect("presence checked above");
+                for (key, value) in properties {
+                    // `name` is a field rather than a property, so it is applied where readers look.
+                    if key == "name" || key == "title" {
+                        if let Some(name) = value.as_str() {
+                            region.name = name.to_string();
+                            continue;
+                        }
+                    }
+                    region.add_property(key, value);
+                }
+
+                let updated = &g.brain_regions[region_id];
+                Ok(region_to_info(region_id, updated, &g.brain_regions))
+            })
+            .ok_or_else(|| no_genome_loaded("brain region update"))?
     }
 
     async fn get_brain_region(&self, region_id: &str) -> ServiceResult<BrainRegionInfo> {
-        Ok(self
-            .wnpu
-            .lock()
-            .brain_region_info(region_id)
-            .map(brain_region_info_from_wnpu)
-            .unwrap_or_else(|| BrainRegionInfo {
-                region_id: region_id.to_string(),
-                name: String::new(),
-                region_type: String::new(),
-                parent_id: None,
-                cortical_areas: Vec::new(),
-                child_regions: Vec::new(),
-                properties: HashMap::new(),
-            }))
+        self.brain
+            .with_genome(|g| {
+                g.brain_regions
+                    .get(region_id)
+                    .map(|region| region_to_info(region_id, region, &g.brain_regions))
+            })
+            .flatten()
+            .ok_or_else(|| region_not_found(region_id))
     }
 
     async fn list_brain_regions(&self) -> ServiceResult<Vec<BrainRegionInfo>> {
-        let wnpu = self.wnpu.lock();
-        Ok(wnpu
-            .brain_region_ids()
-            .into_iter()
-            .filter_map(|id| wnpu.brain_region_info(&id))
-            .map(brain_region_info_from_wnpu)
-            .collect())
+        Ok(self
+            .brain
+            .with_genome(|g| {
+                g.brain_regions
+                    .iter()
+                    .map(|(region_id, region)| region_to_info(region_id, region, &g.brain_regions))
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     async fn get_brain_region_ids(&self) -> ServiceResult<Vec<String>> {
-        Ok(self.wnpu.lock().brain_region_ids())
+        Ok(self
+            .brain
+            .with_genome(|g| g.brain_regions.keys().cloned().collect())
+            .unwrap_or_default())
     }
 
     async fn brain_region_exists(&self, region_id: &str) -> ServiceResult<bool> {
-        Ok(self.wnpu.lock().has_brain_region(region_id))
+        Ok(self
+            .brain
+            .with_genome(|g| g.brain_regions.contains_key(region_id))
+            .unwrap_or(false))
     }
 
     async fn get_root_region_id(&self) -> ServiceResult<Option<String>> {
-        Ok(self.wnpu.lock().root_brain_region_id())
+        // The genome parser records each region's parent under `parent_region_id`; the root is the
+        // one that has none. Matches `BrainRegionHierarchy::get_root_region_id`.
+        Ok(self
+            .brain
+            .with_genome(|g| {
+                g.brain_regions
+                    .iter()
+                    .find(|(_, region)| {
+                        !matches!(
+                            region.properties.get("parent_region_id"),
+                            Some(v) if !v.is_null()
+                        )
+                    })
+                    .map(|(region_id, _)| region_id.clone())
+            })
+            .flatten())
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Morphologies are user-defined rule sets for wiring cortical areas. Their definitions and
+    // names are metadata that lives in the genome, so they are read and edited on the retained
+    // genome (same as brain regions, mirroring `feagi-api`). Realising a mapping into actual
+    // synapses is a separate concern handled by the NPU through `update_cortical_mapping`; the
+    // morphology payload (type, parameters, name) is forwarded there for the NPU to act on and to
+    // track by name for later removal.
+    // ------------------------------------------------------------------------------------------
+
     async fn get_morphologies(&self) -> ServiceResult<HashMap<String, MorphologyInfo>> {
-        let wnpu = self.wnpu.lock();
-        Ok(wnpu
-            .morphology_ids()
-            .into_iter()
-            .filter_map(|id| wnpu.morphology_info(&id).map(|info| (id, info)))
-            .map(|(id, info)| (id, morphology_info_from_wnpu(info)))
-            .collect())
+        // No genome loaded means no morphologies, the same empty answer the other listings give.
+        // The per-morphology conversion can fail, so the closure yields a `Result`.
+        let Some(result) = self.brain.with_genome(|g| {
+            g.morphologies
+                .morphology_ids()
+                .into_iter()
+                .map(|morphology_id| {
+                    // `morphology_ids` returned this key, so the registry holds it.
+                    let morphology = g.morphologies.get(&morphology_id).ok_or_else(|| {
+                        ServiceError::Internal(format!(
+                            "morphology registry listed '{}' but cannot return it",
+                            morphology_id
+                        ))
+                    })?;
+                    let parameters =
+                        serde_json::to_value(&morphology.parameters).map_err(|err| {
+                            ServiceError::Internal(format!(
+                                "morphology '{}' has parameters that cannot be serialised: {}",
+                                morphology_id, err
+                            ))
+                        })?;
+                    Ok((
+                        morphology_id,
+                        MorphologyInfo {
+                            morphology_type: morphology_type_name(&morphology.morphology_type)
+                                .to_string(),
+                            class: morphology.class.clone(),
+                            parameters,
+                        },
+                    ))
+                })
+                .collect::<ServiceResult<HashMap<String, MorphologyInfo>>>()
+        }) else {
+            return Ok(HashMap::new());
+        };
+        result
     }
 
     async fn create_morphology(
         &self,
         morphology_id: String,
-        _morphology: feagi_evolutionary::Morphology,
+        morphology: feagi_evolutionary::Morphology,
     ) -> ServiceResult<()> {
-        self.wnpu
-            .lock()
-            .add_morphology(&morphology_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.add_morphology: {e}")))
+        if morphology_id.trim().is_empty() {
+            return Err(ServiceError::InvalidInput(
+                "morphology_id must be non-empty".to_string(),
+            ));
+        }
+
+        self.brain
+            .with_genome_mut(|g| {
+                if g.morphologies.contains(&morphology_id) {
+                    return Err(ServiceError::AlreadyExists {
+                        resource: "morphology".to_string(),
+                        id: morphology_id.clone(),
+                    });
+                }
+                g.morphologies.add_morphology(morphology_id, morphology);
+                Ok(())
+            })
+            .ok_or_else(|| no_genome_loaded("morphology creation"))?
     }
 
     async fn update_morphology(
         &self,
-        morphology_id: String,
+        _morphology_id: String,
         _morphology: feagi_evolutionary::Morphology,
     ) -> ServiceResult<()> {
-        self.wnpu
-            .lock()
-            .update_morphology_definition(&morphology_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.update_morphology_definition: {e}")))
+        // Redefining a morphology has to regenerate the synapses of every mapping that uses it.
+        // The NPU builds connectivity from mapping submissions and offers no regeneration
+        // operation, so writing the new definition to the genome alone would leave the running
+        // brain wired to the old one.
+        Err(ServiceError::NotImplemented(
+            "changing a morphology requires regenerating the synapses of the mappings that use \
+             it, which the current NPU cannot do"
+                .to_string(),
+        ))
     }
 
     async fn delete_morphology(&self, morphology_id: &str) -> ServiceResult<()> {
-        self.wnpu
-            .lock()
-            .remove_morphology(morphology_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.remove_morphology: {e}")))
+        if morphology_id.trim().is_empty() {
+            return Err(ServiceError::InvalidInput(
+                "morphology_id must be non-empty".to_string(),
+            ));
+        }
+
+        self.brain
+            .with_genome_mut(|g| {
+                if g.morphologies.remove_morphology(morphology_id) {
+                    Ok(())
+                } else {
+                    Err(ServiceError::NotFound {
+                        resource: "morphology".to_string(),
+                        id: morphology_id.to_string(),
+                    })
+                }
+            })
+            .ok_or_else(|| no_genome_loaded("morphology deletion"))?
     }
 
     async fn rename_morphology(&self, old_id: &str, new_id: &str) -> ServiceResult<()> {
-        self.wnpu
-            .lock()
-            .rename_morphology(old_id, new_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.rename_morphology: {e}")))
+        let old_id = old_id.trim();
+        let new_id = new_id.trim();
+
+        if old_id.is_empty() {
+            return Err(ServiceError::InvalidInput(
+                "old_id must be non-empty".to_string(),
+            ));
+        }
+        if new_id.is_empty() {
+            return Err(ServiceError::InvalidInput(
+                "new_id must be non-empty".to_string(),
+            ));
+        }
+        if old_id == new_id {
+            return Err(ServiceError::InvalidInput(
+                "old_id and new_id must differ".to_string(),
+            ));
+        }
+
+        self.brain
+            .with_genome_mut(|g| {
+                let morphology =
+                    g.morphologies
+                        .get(old_id)
+                        .cloned()
+                        .ok_or_else(|| ServiceError::NotFound {
+                            resource: "morphology".to_string(),
+                            id: old_id.to_string(),
+                        })?;
+
+                if morphology.class == "core" {
+                    return Err(ServiceError::InvalidInput(format!(
+                        "core morphologies cannot be renamed: '{}'",
+                        old_id
+                    )));
+                }
+                if g.morphologies.contains(new_id) {
+                    return Err(ServiceError::AlreadyExists {
+                        resource: "morphology".to_string(),
+                        id: new_id.to_string(),
+                    });
+                }
+
+                g.morphologies.remove_morphology(old_id);
+                g.morphologies.add_morphology(new_id.to_string(), morphology);
+
+                // Mapping rules name their morphology by id, so a rename that stopped at the
+                // registry would leave those rules pointing at something that no longer exists.
+                let mut replaced = 0usize;
+                for area in g.cortical_areas.values_mut() {
+                    for value in area.properties.values_mut() {
+                        rename_morphology_references(value, old_id, new_id, &mut replaced);
+                    }
+                }
+                for region in g.brain_regions.values_mut() {
+                    for value in region.properties.values_mut() {
+                        rename_morphology_references(value, old_id, new_id, &mut replaced);
+                    }
+                }
+
+                Ok(())
+            })
+            .ok_or_else(|| no_genome_loaded("morphology rename"))?
     }
 
     async fn update_cortical_mapping(
@@ -598,52 +863,135 @@ impl ConnectomeService for StubConnectomeService {
     ) -> ServiceResult<usize> {
         let source = parse_cortical_id(&src_area_id)?;
         let destination = parse_cortical_id(&dst_area_id)?;
+        // The wrapped NPU references mappings by name. A source->destination pair identifies at
+        // most one mapping, so the name is derived deterministically from the two endpoints; a
+        // later delete can address the same mapping by reconstructing this name.
+        let mapping_name = cortical_mapping_name(&src_area_id, &dst_area_id);
         self.wnpu
             .lock()
-            .apply_cortical_mapping_update(&source, &destination, mapping_data)
+            .apply_cortical_mapping_update(&mapping_name, &source, &destination, mapping_data)
             .map_err(|e| ServiceError::Backend(format!("wnpu.apply_cortical_mapping_update: {e}")))
     }
 
-    // `connectome-io` is not optional in practice: feagi-api requires it, so cargo always unifies
-    // the feature on. Implemented unconditionally because feagi-rs has no matching feature flag.
+    // Connectome transport (snapshotting the whole connectome to/from bytes) is a legacy Brain
+    // Development responsibility; the NPU no longer exposes it and this adapter has no BDU path for
+    // it, so both directions report as unavailable.
     async fn export_connectome(&self) -> ServiceResult<ConnectomeSnapshot> {
-        let bytes = self
-            .wnpu
-            .lock()
-            .export_connectome_bytes()
-            .map_err(|e| ServiceError::Backend(format!("wnpu.export_connectome_bytes: {e}")))?;
-        Ok(ConnectomeSnapshot {
-            version: 1,
-            neurons: SerializableNeuronArray::default(),
-            synapses: SerializableSynapseArray::default(),
-            cortical_area_names: Default::default(),
-            burst_count: 0,
-            power_amount: 0.0,
-            fire_ledger_window: 0,
-            metadata: ConnectomeMetadata {
-                timestamp: 0,
-                description: format!("wnpu export ({} bytes)", bytes.len()),
-                source: "wnpu".to_string(),
-                tags: Default::default(),
-            },
-        })
+        Err(connectome_transport_unavailable())
     }
 
     async fn import_connectome(&self, _snapshot: ConnectomeSnapshot) -> ServiceResult<()> {
-        // WNPU accepts the connectome as opaque bytes; forwarding an empty payload keeps the
-        // shape consistent while the real serialization layer is being decided.
-        self.wnpu
-            .lock()
-            .import_connectome_bytes(&[])
-            .map_err(|e| ServiceError::Backend(format!("wnpu.import_connectome_bytes: {e}")))
+        Err(connectome_transport_unavailable())
     }
 }
 
-// Re-export the connectome snapshot component types so we can construct empty defaults inline
-// without touching every field explicitly.
-use feagi_services::types::connectome_snapshot::{
-    ConnectomeMetadata, SerializableNeuronArray, SerializableSynapseArray,
-};
+/// Builds the DTO for a region, deriving its child list from the parent links of every other
+/// region (the genome records only each child's parent). Mirrors `feagi-api`'s `region_to_info`.
+fn region_to_info(
+    region_id: &str,
+    region: &BrainRegion,
+    all_regions: &HashMap<String, BrainRegion>,
+) -> BrainRegionInfo {
+    fn parent_of(candidate: &BrainRegion) -> Option<&str> {
+        candidate
+            .properties
+            .get("parent_region_id")
+            .and_then(|value| value.as_str())
+    }
+
+    BrainRegionInfo {
+        region_id: region_id.to_string(),
+        name: region.name.clone(),
+        region_type: region.region_type.to_string(),
+        parent_id: parent_of(region).map(String::from),
+        cortical_areas: region
+            .cortical_areas
+            .iter()
+            .map(|area_id| area_id.to_string())
+            .collect(),
+        child_regions: all_regions
+            .iter()
+            .filter(|(_, candidate)| parent_of(candidate) == Some(region_id))
+            .map(|(child_id, _)| child_id.clone())
+            .collect(),
+        properties: region.properties.clone(),
+    }
+}
+
+/// Reports a brain region the genome does not contain.
+fn region_not_found(region_id: &str) -> ServiceError {
+    ServiceError::NotFound {
+        resource: "brain_region".to_string(),
+        id: region_id.to_string(),
+    }
+}
+
+/// Reports that a region edit was attempted before any genome was loaded.
+fn no_genome_loaded(operation: &str) -> ServiceError {
+    ServiceError::InvalidState(format!(
+        "no genome is loaded, so {operation} cannot be performed"
+    ))
+}
+
+/// Names a morphology's type using the same spellings the genome format uses.
+///
+/// Matched explicitly rather than derived from the serde representation so the wire vocabulary is
+/// visible here and cannot drift with a serde attribute change. Mirrors `feagi-api`.
+fn morphology_type_name(morphology_type: &feagi_evolutionary::MorphologyType) -> &'static str {
+    match morphology_type {
+        feagi_evolutionary::MorphologyType::Vectors => "vectors",
+        feagi_evolutionary::MorphologyType::Patterns => "patterns",
+        feagi_evolutionary::MorphologyType::Functions => "functions",
+        feagi_evolutionary::MorphologyType::Composite => "composite",
+    }
+}
+
+/// Rewrites references to a renamed morphology wherever mapping rules name it: as a `morphology_id`
+/// or `mapper_morphology` field, or as the leading element of a rule tuple. Mirrors `feagi-api`.
+fn rename_morphology_references(
+    value: &mut serde_json::Value,
+    old_id: &str,
+    new_id: &str,
+    replaced: &mut usize,
+) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for field in ["morphology_id", "mapper_morphology"] {
+                if let Some(reference) = object.get_mut(field) {
+                    if reference.as_str() == Some(old_id) {
+                        *reference = serde_json::Value::String(new_id.to_string());
+                        *replaced += 1;
+                    }
+                }
+            }
+            for child in object.values_mut() {
+                rename_morphology_references(child, old_id, new_id, replaced);
+            }
+        }
+        serde_json::Value::Array(array) => {
+            // A rule tuple leads with the morphology it applies.
+            if let Some(first) = array.first_mut() {
+                if first.as_str() == Some(old_id) {
+                    *first = serde_json::Value::String(new_id.to_string());
+                    *replaced += 1;
+                }
+            }
+            for child in array.iter_mut() {
+                rename_morphology_references(child, old_id, new_id, replaced);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Reports whole-connectome transport as unavailable in this adapter.
+fn connectome_transport_unavailable() -> ServiceError {
+    ServiceError::NotImplemented(
+        "connectome import/export is a legacy Brain Development responsibility and is not exposed \
+         by this server yet"
+            .to_string(),
+    )
+}
 
 /// Serialize an owned value into a flat `HashMap<String, serde_json::Value>` for the property
 /// endpoints that return JSON objects.
@@ -1023,48 +1371,63 @@ impl RuntimeService for StubRuntimeService {
 // SYSTEM
 // ============================================================================
 
-/// System introspection. Version reporting is real; the rest is answered from WNPU counts.
+/// System introspection.
+///
+/// Structure figures (cortical areas, neurons, regions) describe the developed brain and are read
+/// from the BDU's [`DevelopedBrain`]; burst state (running, burst count) is the engine's and is
+/// read from the wrapped NPU. Version reporting is real. Engine-only metrics that neither side can
+/// supply yet (runtime stats, memory usage) are reported as unavailable.
 pub struct StubSystemService {
     version_info: VersionInfo,
     wnpu: SharedWnpu,
+    brain: Arc<DevelopedBrain>,
 }
 
 impl StubSystemService {
-    pub fn new(version_info: VersionInfo, wnpu: SharedWnpu) -> Self {
-        Self { version_info, wnpu }
+    pub fn new(version_info: VersionInfo, wnpu: SharedWnpu, brain: Arc<DevelopedBrain>) -> Self {
+        Self {
+            version_info,
+            wnpu,
+            brain,
+        }
+    }
+
+    /// Cortical areas and neurons the BDU developed, defaulting to zero for an undeveloped brain.
+    fn structure_counts(&self) -> (usize, usize, usize) {
+        match self.brain.report() {
+            Some(report) => (report.areas_added, report.neurons_added as usize, 0),
+            None => (0, 0, 0),
+        }
+    }
+
+    /// Brain regions declared by the developed genome, or zero when none is loaded.
+    fn brain_region_count(&self) -> usize {
+        self.brain
+            .genome()
+            .map(|genome| genome.brain_regions.len())
+            .unwrap_or(0)
     }
 }
 
 #[async_trait]
 impl SystemService for StubSystemService {
     async fn get_health(&self) -> ServiceResult<HealthStatus> {
-        let wnpu = self.wnpu.lock();
-        let health = wnpu.system_health();
-        drop(wnpu);
+        // Health answers in every state; the detailed brain figures are served through
+        // `AnalyticsService` (`/v1/system/health_check`) from the same BDU source.
         Ok(HealthStatus {
-            overall_status: health.overall_status,
-            components: health
-                .components
-                .into_iter()
-                .map(|c| ComponentHealth {
-                    name: c.name,
-                    status: c.status,
-                    message: c.message,
-                })
-                .collect(),
+            overall_status: "healthy".to_string(),
+            components: Vec::new(),
             timestamp: String::new(),
         })
     }
 
     async fn get_status(&self) -> ServiceResult<SystemStatus> {
-        let wnpu = self.wnpu.lock();
-        let cortical_area_count = wnpu.cortical_area_ids().len();
-        let brain_region_count = wnpu.brain_region_ids().len();
-        let neuron_count = wnpu.total_neuron_count();
-        let synapse_count = wnpu.total_synapse_count();
-        let is_running = wnpu.is_running();
-        let burst_count = wnpu.bursts_completed().unwrap_or(0);
-        drop(wnpu);
+        let (cortical_area_count, neuron_count, synapse_count) = self.structure_counts();
+        let brain_region_count = self.brain_region_count();
+        let (is_running, burst_count) = {
+            let wnpu = self.wnpu.lock();
+            (wnpu.is_running(), wnpu.bursts_completed().unwrap_or(0))
+        };
         Ok(SystemStatus {
             is_initialized: cortical_area_count > 0,
             burst_engine_running: is_running,
@@ -1084,7 +1447,7 @@ impl SystemService for StubSystemService {
     }
 
     async fn is_initialized(&self) -> ServiceResult<bool> {
-        Ok(!self.wnpu.lock().cortical_area_ids().is_empty())
+        Ok(self.structure_counts().0 > 0)
     }
 
     async fn get_burst_count(&self) -> ServiceResult<u64> {
@@ -1092,43 +1455,41 @@ impl SystemService for StubSystemService {
     }
 
     async fn get_runtime_stats(&self) -> ServiceResult<RuntimeStats> {
-        let stats = self.wnpu.lock().runtime_stats();
-        Ok(RuntimeStats {
-            total_bursts: stats.total_bursts,
-            total_neurons_fired: stats.total_neurons_fired,
-            total_processing_time_ms: stats.total_processing_time_ms,
-            avg_burst_time_ms: stats.avg_burst_time_ms,
-            avg_neurons_per_burst: stats.avg_neurons_per_burst,
-            current_rate_hz: stats.current_rate_hz,
-            peak_rate_hz: stats.peak_rate_hz,
-            uptime_seconds: stats.uptime_seconds,
-        })
+        Err(ServiceError::NotImplemented(
+            "runtime statistics need a running burst engine, which this server does not expose yet"
+                .to_string(),
+        ))
     }
 
     async fn get_memory_usage(&self) -> ServiceResult<MemoryUsage> {
-        let usage = self.wnpu.lock().memory_usage();
-        Ok(MemoryUsage {
-            npu_neurons_bytes: usage.npu_neurons_bytes,
-            npu_synapses_bytes: usage.npu_synapses_bytes,
-            npu_total_bytes: usage.npu_total_bytes,
-            connectome_metadata_bytes: usage.connectome_metadata_bytes,
-            total_allocated_bytes: usage.total_allocated_bytes,
-            system_total_bytes: usage.system_total_bytes,
-            system_available_bytes: usage.system_available_bytes,
-        })
+        Err(ServiceError::NotImplemented(
+            "memory usage needs a running engine to measure, which this server does not expose yet"
+                .to_string(),
+        ))
     }
 
     async fn get_capacity(&self) -> ServiceResult<CapacityInfo> {
-        let capacity = self.wnpu.lock().capacity();
+        // Capacities are configured allocation limits held by the BDU; current occupancy comes
+        // from the development report. Areas have no configured maximum, so it is reported as zero.
+        let (current_cortical_areas, current_neurons, current_synapses) = self.structure_counts();
+        let max_neurons = self.brain.neuron_capacity();
+        let max_synapses = self.brain.synapse_capacity();
+        let utilization = |current: usize, max: usize| -> f64 {
+            if max == 0 {
+                0.0
+            } else {
+                (current as f64 / max as f64) * 100.0
+            }
+        };
         Ok(CapacityInfo {
-            current_neurons: capacity.current_neurons,
-            max_neurons: capacity.max_neurons,
-            neuron_utilization_percent: capacity.neuron_utilization_percent,
-            current_synapses: capacity.current_synapses,
-            max_synapses: capacity.max_synapses,
-            synapse_utilization_percent: capacity.synapse_utilization_percent,
-            current_cortical_areas: capacity.current_cortical_areas,
-            max_cortical_areas: capacity.max_cortical_areas,
+            current_neurons,
+            max_neurons,
+            neuron_utilization_percent: utilization(current_neurons, max_neurons),
+            current_synapses,
+            max_synapses,
+            synapse_utilization_percent: utilization(current_synapses, max_synapses),
+            current_cortical_areas,
+            max_cortical_areas: 0,
         })
     }
 }
@@ -1176,23 +1537,22 @@ impl AgentService for StubAgentService {
         Ok(())
     }
 
+    // The agent registry - who is connected, their network properties, and their shared-memory
+    // descriptors - is owned by the transport layer (`FeagiAgentHandler`) and the legacy code, not
+    // by the NPU. WNPU exposes only the data-channel side, so these registry reads are unavailable
+    // through this adapter.
     async fn list_agents(&self) -> AgentResult<Vec<String>> {
-        Ok(self.wnpu.lock().subscribed_agent_ids())
+        Err(agent_registry_unavailable())
     }
 
-    async fn get_agent_properties(&self, agent_id: &str) -> AgentResult<AgentProperties> {
-        Ok(self
-            .wnpu
-            .lock()
-            .subscribed_agent_properties(agent_id)
-            .map(agent_properties_from_wnpu)
-            .unwrap_or_else(empty_agent_properties))
+    async fn get_agent_properties(&self, _agent_id: &str) -> AgentResult<AgentProperties> {
+        Err(agent_registry_unavailable())
     }
 
     async fn get_shared_memory_info(
         &self,
     ) -> AgentResult<HashMap<String, HashMap<String, serde_json::Value>>> {
-        Ok(self.wnpu.lock().shared_memory_info())
+        Err(agent_registry_unavailable())
     }
 
     async fn deregister_agent(&self, _agent_id: &str) -> AgentResult<()> {
@@ -1223,33 +1583,33 @@ impl AgentService for StubAgentService {
     fn try_set_runtime_service(&self, _runtime_service: Arc<dyn RuntimeService + Send + Sync>) {}
 }
 
-/// Empty `AgentProperties`, used when WNPU has no record of the requested agent. The trait's
-/// `get_agent_properties` returns `Result<AgentProperties, AgentError>`; keeping the fallback
-/// local means adapters never see an error just because the agent has not registered yet.
-fn empty_agent_properties() -> AgentProperties {
-    AgentProperties {
-        agent_type: String::new(),
-        agent_ip: String::new(),
-        agent_data_port: 0,
-        agent_router_address: String::new(),
-        agent_version: String::new(),
-        controller_version: String::new(),
-        capabilities: HashMap::new(),
-        chosen_transport: None,
-    }
+/// Reports an agent-registry read as unavailable in this adapter.
+fn agent_registry_unavailable() -> AgentError {
+    AgentError::ServiceUnavailable(
+        "the agent registry is owned by the transport/legacy layer and is not exposed through the \
+         NPU adapter"
+            .to_string(),
+    )
 }
 
 // ============================================================================
 // SNAPSHOT
 // ============================================================================
 
-pub struct StubSnapshotService {
-    wnpu: SharedWnpu,
-}
+/// Snapshotting the connectome (and optionally runtime state) is a legacy Brain Development
+/// responsibility. The NPU no longer exposes it and this adapter has no BDU path for it, so every
+/// snapshot operation reports as unavailable.
+pub struct StubSnapshotService;
 
 impl StubSnapshotService {
-    pub fn new(wnpu: SharedWnpu) -> Self {
-        Self { wnpu }
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for StubSnapshotService {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1257,44 +1617,37 @@ impl StubSnapshotService {
 impl SnapshotService for StubSnapshotService {
     async fn create_snapshot(
         &self,
-        options: SnapshotCreateOptions,
+        _options: SnapshotCreateOptions,
     ) -> ServiceResult<SnapshotMetadata> {
-        Ok(snapshot_metadata_from_wnpu(self.wnpu.lock().create_snapshot(
-            options.name,
-            options.description,
-            options.stateful,
-        )))
+        Err(snapshot_unavailable())
     }
 
-    async fn restore_snapshot(&self, snapshot_id: &str) -> ServiceResult<()> {
-        self.wnpu
-            .lock()
-            .restore_snapshot(snapshot_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.restore_snapshot: {e}")))
+    async fn restore_snapshot(&self, _snapshot_id: &str) -> ServiceResult<()> {
+        Err(snapshot_unavailable())
     }
 
     async fn list_snapshots(&self) -> ServiceResult<Vec<SnapshotMetadata>> {
-        Ok(self
-            .wnpu
-            .lock()
-            .list_snapshots()
-            .into_iter()
-            .map(snapshot_metadata_from_wnpu)
-            .collect())
+        Err(snapshot_unavailable())
     }
 
-    async fn delete_snapshot(&self, snapshot_id: &str) -> ServiceResult<()> {
-        self.wnpu
-            .lock()
-            .delete_snapshot(snapshot_id)
-            .map_err(|e| ServiceError::Backend(format!("wnpu.delete_snapshot: {e}")))
+    async fn delete_snapshot(&self, _snapshot_id: &str) -> ServiceResult<()> {
+        Err(snapshot_unavailable())
     }
 
     async fn get_snapshot_artifact(
         &self,
-        snapshot_id: &str,
-        format: &str,
+        _snapshot_id: &str,
+        _format: &str,
     ) -> ServiceResult<Vec<u8>> {
-        Ok(self.wnpu.lock().snapshot_artifact_bytes(snapshot_id, format))
+        Err(snapshot_unavailable())
     }
+}
+
+/// Reports a snapshot operation as unavailable in this adapter.
+fn snapshot_unavailable() -> ServiceError {
+    ServiceError::NotImplemented(
+        "connectome snapshots are a legacy Brain Development responsibility and are not exposed by \
+         this server yet"
+            .to_string(),
+    )
 }

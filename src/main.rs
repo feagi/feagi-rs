@@ -1294,8 +1294,14 @@ async fn start_services(
     info!("  Creating service layer (analytics from BDU, rest wired to wrapped NPU)...");
 
     let wnpu_handle = Arc::clone(&components.neuron_processing_unit);
-    let genome_service = Arc::new(StubGenomeService::new(Arc::clone(&wnpu_handle)));
-    let connectome_service = Arc::new(StubConnectomeService::new(Arc::clone(&wnpu_handle)));
+    let genome_service = Arc::new(StubGenomeService::new(
+        Arc::clone(&wnpu_handle),
+        Arc::clone(&components.developed_brain),
+    ));
+    let connectome_service = Arc::new(StubConnectomeService::new(
+        Arc::clone(&wnpu_handle),
+        Arc::clone(&components.developed_brain),
+    ));
     // Analytics is not a stub: `/v1/system/health_check` is served from the BDU's development
     // report plus the runtime service's burst state. See `feagi::brain_development`.
     let analytics_service = Arc::new(BduAnalyticsService::new(
@@ -1303,11 +1309,12 @@ async fn start_services(
         components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
     ));
     let neuron_service = Arc::new(StubNeuronService::new(Arc::clone(&wnpu_handle)));
-    let snapshot_service = Arc::new(StubSnapshotService::new(Arc::clone(&wnpu_handle)));
+    let snapshot_service = Arc::new(StubSnapshotService::new());
     let agent_service = Arc::new(StubAgentService::new(Arc::clone(&wnpu_handle)));
     let system_service = Arc::new(StubSystemService::new(
         feagi::collect_version_info(),
         Arc::clone(&wnpu_handle),
+        Arc::clone(&components.developed_brain),
     ));
 
     info!("    ✓ Services created (health check live; other neural operations forward to WNPU placeholders)");
