@@ -46,8 +46,6 @@ use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
 use feagi_config::{load_config, validate_config, FeagiConfig};
 use feagi_io::{AgentID, SensoryIntakeQueue};
-use feagi_npu::wnpu::wnpu::WrappedNeuronProcessingUnit;
-use feagi_npu::NPUTargetFrequency;
 use feagi_observability::{init_logging_default, parse_debug_flags};
 use feagi_services::traits::agent_service::AgentService;
 use feagi_services::traits::SystemService as SystemServiceTrait;
@@ -58,6 +56,8 @@ use feagi_services::{
 use feagi_state_manager::StateManager;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use feagi_npu::standard::npu::npu_target_frequency::NPUTargetFrequency;
+use feagi_npu::standard::wnpu::wnpu::WrappedNeuronProcessingUnit;
 
 /// Mask for agent_data_hash to keep within JSON-safe integer range (BV expects int).
 const AGENT_HASH_SAFE_MASK: u64 = (1u64 << 53) - 1;
@@ -1093,7 +1093,10 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
     let auth_backend = Box::new(DummyAuth {});
     let mut agent_handler = FeagiAgentHandler::new(auth_backend);
 
-    let mut npu = WrappedNeuronProcessingUnit::new();
+    let mut npu = WrappedNeuronProcessingUnit::new(
+        feagi_data::quantization_levels::feagi_index_quantization::FeagiIndexQuantizationLevel::Genomic,
+        vec![] // TODo
+    ).unwrap();
 
     // Add ZMQ servers (multiple slots so multiple agents can register)
     #[cfg(feature = "zmq-transport")]
@@ -1231,7 +1234,8 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
     let burst_hz = 1.0 / config.neural.burst_engine_timestep;
 
     let burst_frequency = NPUTargetFrequency::new_from_frequency(burst_hz);
-    npu.run_at(burst_frequency);
+    
+    npu.run_at_frequency(burst_frequency);
 
     let runtime_service = Arc::new(StubRuntimeService::new(burst_hz));
     info!(

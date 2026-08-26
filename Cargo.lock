@@ -1298,6 +1298,7 @@ dependencies = [
  "feagi-api",
  "feagi-brain-development",
  "feagi-config",
+ "feagi-data",
  "feagi-evolutionary",
  "feagi-io",
  "feagi-npu",

@@ -32,6 +32,7 @@ required-features = ["cli"]
 # still `todo!()`. Operations that need a running engine are served by `crate::stub_services` until
 # it is ready; `/v1/system/health_check` does not need one and is served from the BDU by
 # `crate::brain_development`.
+feagi-data = {path = "../feagi-core/crates/feagi-data"}
 feagi-npu = { path = "../feagi-core/crates/feagi-npu"}
 feagi-config = { path = "../feagi-core/crates/feagi-config" }
 feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
