@@ -311,11 +311,22 @@ fn per_area_unavailable(statistic: &str) -> ServiceError {
 mod tests {
     use super::*;
     use crate::stub_services::StubRuntimeService;
+    use feagi_data::quantization_levels::feagi_index_quantization::FeagiIndexQuantizationLevel;
+    use feagi_npu::standard::wnpu::wnpu::WrappedNeuronProcessingUnit;
+    use parking_lot::Mutex as PlMutex;
+
+    fn shared_wnpu() -> Arc<PlMutex<WrappedNeuronProcessingUnit>> {
+        Arc::new(PlMutex::new(
+            WrappedNeuronProcessingUnit::new(FeagiIndexQuantizationLevel::Genomic, vec![])
+                .expect("wrapped NPU construction must succeed for tests"),
+        ))
+    }
 
     fn service(brain: Arc<DevelopedBrain>) -> BduAnalyticsService {
         BduAnalyticsService::new(
             brain,
-            Arc::new(StubRuntimeService::new(10.0)) as Arc<dyn RuntimeService + Send + Sync>,
+            Arc::new(StubRuntimeService::new(10.0, shared_wnpu()))
+                as Arc<dyn RuntimeService + Send + Sync>,
         )
     }
 

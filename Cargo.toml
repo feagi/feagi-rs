@@ -34,6 +34,8 @@ required-features = ["cli"]
 # `crate::brain_development`.
 feagi-data = {path = "../feagi-core/crates/feagi-data"}
 feagi-npu = { path = "../feagi-core/crates/feagi-npu"}
+# The stub-service adapters address WNPU by `CorticalID`, which lives in `feagi-genomic-context`.
+feagi-genomic-context = { path = "../feagi-core/crates/feagi-genomic-context" }
 feagi-config = { path = "../feagi-core/crates/feagi-config" }
 feagi-brain-development = { path = "../feagi-core/crates/feagi-brain-development" }
 feagi-evolutionary = { path = "../feagi-core/crates/feagi-evolutionary" }
@@ -72,6 +74,7 @@ ctrlc = "3.0"
 parking_lot = "0.12"
 
 # JSON (used by agent registration / device_registrations)
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 

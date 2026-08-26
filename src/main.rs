@@ -1063,7 +1063,10 @@ fn brain_is_initialized(
 
 /// Core FEAGI components (matches components.rs)
 struct FeagiComponents {
-    neuron_processing_unit: Arc<WrappedNeuronProcessingUnit>,
+    /// Wrapped NPU shared with every stub-service adapter and the runtime service. Held behind a
+    /// `parking_lot::Mutex` because WNPU's mutation surface takes `&mut self`; every call site
+    /// locks briefly and never crosses an `await`.
+    neuron_processing_unit: Arc<parking_lot::Mutex<WrappedNeuronProcessingUnit>>,
     /// What the BDU has developed; the source of the health endpoint's brain figures.
     developed_brain: Arc<DevelopedBrain>,
     runtime_service: Arc<StubRuntimeService>,
@@ -1093,10 +1096,14 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
     let auth_backend = Box::new(DummyAuth {});
     let mut agent_handler = FeagiAgentHandler::new(auth_backend);
 
-    let mut npu = WrappedNeuronProcessingUnit::new(
+    let npu = WrappedNeuronProcessingUnit::new(
         feagi_data::quantization_levels::feagi_index_quantization::FeagiIndexQuantizationLevel::Genomic,
         vec![] // TODo
-    ).unwrap();
+    ).context("Failed to construct wrapped NPU")?;
+    // Shared behind a `Mutex` so the stub service adapters (`stub_services`) can forward each
+    // API-layer call into the wrapped NPU without holding a full clone or grabbing the ownership
+    // path used by the burst engine.
+    let npu = Arc::new(parking_lot::Mutex::new(npu));
 
     // Add ZMQ servers (multiple slots so multiple agents can register)
     #[cfg(feature = "zmq-transport")]
@@ -1234,12 +1241,20 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
     let burst_hz = 1.0 / config.neural.burst_engine_timestep;
 
     let burst_frequency = NPUTargetFrequency::new_from_frequency(burst_hz);
-    
-    npu.run_at_frequency(burst_frequency);
 
-    let runtime_service = Arc::new(StubRuntimeService::new(burst_hz));
+    // WNPU `run_at_frequency` is idempotent-on-restart and safe to call before agents connect.
+    // Any error is logged rather than treated as fatal because WNPU is still a placeholder and
+    // startup should stay reachable so the transports come up.
+    if let Err(e) = npu.lock().run_at_frequency(burst_frequency) {
+        warn!(
+            "    ⚠ Wrapped NPU rejected initial run_at_frequency({} Hz): {}",
+            burst_hz, e
+        );
+    }
+
+    let runtime_service = Arc::new(StubRuntimeService::new(burst_hz, Arc::clone(&npu)));
     info!(
-        "    ✓ Runtime service created (no burst engine: reports {:.0}Hz, not running)",
+        "    ✓ Runtime service created and wired to the wrapped NPU (target {:.0}Hz)",
         burst_hz
     );
 
@@ -1258,7 +1273,7 @@ async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponents> 
     info!("      ⚠ Visualization: no burst engine to publish from");
 
     Ok(FeagiComponents {
-        neuron_processing_unit: Arc::new(npu),
+        neuron_processing_unit: npu,
         developed_brain,
         runtime_service,
         agent_handler,
@@ -1276,22 +1291,26 @@ async fn start_services(
 ) -> Result<()> {
     // Signal handler already setup in main()
 
-    info!("  Creating service layer (analytics from BDU, rest placeholder)...");
+    info!("  Creating service layer (analytics from BDU, rest wired to wrapped NPU)...");
 
-    let genome_service = Arc::new(StubGenomeService);
-    let connectome_service = Arc::new(StubConnectomeService);
+    let wnpu_handle = Arc::clone(&components.neuron_processing_unit);
+    let genome_service = Arc::new(StubGenomeService::new(Arc::clone(&wnpu_handle)));
+    let connectome_service = Arc::new(StubConnectomeService::new(Arc::clone(&wnpu_handle)));
     // Analytics is not a stub: `/v1/system/health_check` is served from the BDU's development
     // report plus the runtime service's burst state. See `feagi::brain_development`.
     let analytics_service = Arc::new(BduAnalyticsService::new(
         Arc::clone(&components.developed_brain),
         components.runtime_service.clone() as Arc<dyn RuntimeService + Send + Sync>,
     ));
-    let neuron_service = Arc::new(StubNeuronService);
-    let snapshot_service = Arc::new(StubSnapshotService);
-    let agent_service = Arc::new(StubAgentService);
-    let system_service = Arc::new(StubSystemService::new(feagi::collect_version_info()));
+    let neuron_service = Arc::new(StubNeuronService::new(Arc::clone(&wnpu_handle)));
+    let snapshot_service = Arc::new(StubSnapshotService::new(Arc::clone(&wnpu_handle)));
+    let agent_service = Arc::new(StubAgentService::new(Arc::clone(&wnpu_handle)));
+    let system_service = Arc::new(StubSystemService::new(
+        feagi::collect_version_info(),
+        Arc::clone(&wnpu_handle),
+    ));
 
-    info!("    ✓ Services created (health check live; other neural operations report not-implemented)");
+    info!("    ✓ Services created (health check live; other neural operations forward to WNPU placeholders)");
 
     // Get FEAGI session timestamp (when this instance started)
     let feagi_session_timestamp = std::time::SystemTime::now()
