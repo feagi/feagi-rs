@@ -5,7 +5,7 @@
 # FEAGI Quick Start Script (Mac/Linux)
 # 
 # This script cleans up old instances and starts a fresh FEAGI server
-# Usage: ./start_feagi.sh [--debug-all] [--genome path/to/genome.json] [--yes]
+# Usage: ./start_feagi.sh [--debug-all] [--genome path/to/brain.genome] [--yes]
 
 set -e
 

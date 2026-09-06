@@ -382,7 +382,7 @@ impl FeagiInstance {
     ///
     /// # Arguments
     ///
-    /// * `genome_path` - Path to .brain.json genome file
+    /// * `genome_path` - Path to a `.genome` artifact
     ///
     /// # Errors
     ///
@@ -394,6 +394,13 @@ impl FeagiInstance {
             .ok_or_else(|| anyhow::anyhow!("FEAGI not initialized"))?;
 
         let path = PathBuf::from(genome_path);
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("genome"))
+        {
+            anyhow::bail!("Genome files must use the .genome extension");
+        }
 
         info!("🧠 Loading genome: {}", genome_path);
 

@@ -59,13 +59,13 @@ cargo check --bin feagi
 
 ### Before (Original)
 ```bash
-cargo run --release -- --genome brain.json
+cargo run --release -- --genome brain.genome
 # ✅ Works
 ```
 
 ### After (With Library Support)
 ```bash
-cargo run --release -- --genome brain.json
+cargo run --release -- --genome brain.genome
 # ✅ Still works (unchanged)
 ```
 
@@ -103,7 +103,7 @@ cargo run --release -- --genome brain.json
 
 ### Standalone Mode (Unchanged)
 ```
-Terminal 1:  ./feagi --genome brain.json
+Terminal 1:  ./feagi --genome brain.genome
 Terminal 2:  ./brain-visualizer
              └─► Connects to FEAGI over network
 ```

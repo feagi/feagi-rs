@@ -44,8 +44,8 @@ This directory contains utility scripts for managing FEAGI server instances.
 ./start_feagi.sh                           # Clean start (interactive cleanup)
 ./start_feagi.sh --yes                     # Auto-approve cleanup
 ./start_feagi.sh --debug-all               # Start with debug logging
-./start_feagi.sh --genome genome.json      # Start with genome
-./start_feagi.sh --debug-all --genome genome.json --yes
+./start_feagi.sh --genome brain.genome      # Start with genome
+./start_feagi.sh --debug-all --genome brain.genome --yes
 ```
 
 #### Windows: `start_feagi.ps1`
@@ -53,8 +53,8 @@ This directory contains utility scripts for managing FEAGI server instances.
 .\start_feagi.ps1                          # Clean start (interactive cleanup)
 .\start_feagi.ps1 -Yes                     # Auto-approve cleanup
 .\start_feagi.ps1 -DebugAll                # Start with debug logging
-.\start_feagi.ps1 -Genome genome.json      # Start with genome
-.\start_feagi.ps1 -DebugAll -Genome genome.json -Yes
+.\start_feagi.ps1 -Genome brain.genome      # Start with genome
+.\start_feagi.ps1 -DebugAll -Genome brain.genome -Yes
 ```
 
 **What it does:**
@@ -105,7 +105,7 @@ cd C:\code\FEAGI-2.0\feagi\scripts
 ./cleanup_feagi.sh --force --yes
 
 # Start with genome for testing
-./start_feagi.sh --genome ../genomes/test_genome.json --yes
+./start_feagi.sh --genome ../genomes/test.genome --yes
 ```
 
 ---

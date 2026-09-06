@@ -473,6 +473,8 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     genome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
     let genome_service_impl = Arc::new(genome_service_impl);
     let current_genome = genome_service_impl.get_current_genome_arc();
+    let genome_load_counter = genome_service_impl.get_genome_load_counter_arc();
+    let genome_load_timestamp = genome_service_impl.get_genome_load_timestamp_arc();
     let genome_service = genome_service_impl;
 
     let mut connectome_service_impl = ConnectomeServiceImpl::new(
@@ -481,6 +483,7 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     );
     // Wire burst runner for cache refresh
     connectome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
+    connectome_service_impl.set_genome_load_signals(genome_load_counter, genome_load_timestamp);
     let connectome_service = Arc::new(connectome_service_impl);
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),

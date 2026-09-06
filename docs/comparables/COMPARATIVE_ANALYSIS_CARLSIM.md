@@ -1146,7 +1146,7 @@ burst_engine = BurstEngine(backend=backend)
 from feagi.evo import genome_loader
 from carlsim_bridge import genome_to_carlsim
 
-genome = genome_loader.load("vision_agent.json")
+genome = genome_loader.load("vision_agent.genome")
 carlsim_code = genome_to_carlsim(genome)
 # → Generate optimized C++ code
 ```

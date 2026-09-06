@@ -85,6 +85,9 @@ fn build_plasticity_config(config: &FeagiConfig) -> feagi_npu_plasticity::Plasti
         stdp: Some(stdp_cfg),
         pattern_config: pattern_cfg,
         memory_lifecycle_config: lifecycle_cfg,
+        // mp_unavailable_warn_period_bursts is not yet configurable in FeagiConfig.
+        mp_unavailable_warn_period_bursts: feagi_npu_plasticity::PlasticityConfig::default()
+            .mp_unavailable_warn_period_bursts,
     }
 }
 
@@ -244,7 +247,7 @@ struct Args {
     #[arg(short = 'f', long)]
     config: Option<PathBuf>,
 
-    /// Path to genome file to load on startup (optional)
+    /// Path to a `.genome` artifact to load on startup (optional)
     #[arg(short = 'g', long)]
     genome: Option<PathBuf>,
 
@@ -356,6 +359,15 @@ struct Args {
 async fn main() -> Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
+    if let Some(path) = &args.genome {
+        let valid_extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("genome"));
+        if !valid_extension {
+            anyhow::bail!("Genome files must use the .genome extension");
+        }
+    }
 
     // Configure NPU tracing BEFORE logging initialization (trace config is cached via OnceLock)
     let enable_any_trace = args.npu_trace
@@ -1910,6 +1922,8 @@ async fn start_services(
     genome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
     let genome_service_impl = Arc::new(genome_service_impl);
     let current_genome = genome_service_impl.get_current_genome_arc();
+    let genome_load_counter = genome_service_impl.get_genome_load_counter_arc();
+    let genome_load_timestamp = genome_service_impl.get_genome_load_timestamp_arc();
     let genome_service = genome_service_impl;
     info!("    ✓ Genome service created (with RuntimeGenome storage)");
 
@@ -1920,6 +1934,7 @@ async fn start_services(
     );
     // Wire burst runner for cache refresh
     connectome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
+    connectome_service_impl.set_genome_load_signals(genome_load_counter, genome_load_timestamp);
     let connectome_service = Arc::new(connectome_service_impl);
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),

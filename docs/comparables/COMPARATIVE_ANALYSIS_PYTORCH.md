@@ -261,7 +261,7 @@ class VisionNode:
 from feagi_connector import feagi_interface
 
 # Genome defines entire brain (vision, navigation, coordination)
-genome = load_genome("warehouse_robot_v2.json")
+genome = load_genome("warehouse_robot_v2.genome")
 
 # Connect to FEAGI (automatic multi-agent coordination)
 agent = feagi_interface.connect(
@@ -370,7 +370,7 @@ while True:
 
 ```python
 # FEAGI: Integrated sensorimotor loop
-genome = load_genome("drone_navigation_v3.json")
+genome = load_genome("drone_navigation_v3.genome")
 drone = feagi_interface.connect("drone_001")
 
 while True:
@@ -455,7 +455,7 @@ while True:
 
 ```python
 # FEAGI: Hierarchical cortical control
-genome = load_genome("humanoid_manipulation_v1.json")
+genome = load_genome("humanoid_manipulation_v1.genome")
 # Genome includes:
 # - Visual cortex (object recognition)
 # - Motor cortex (joint control)
@@ -551,7 +551,7 @@ while True:
 
 ```python
 # FEAGI: Evolutionary adaptation
-genome = load_genome("service_robot_v4.json")
+genome = load_genome("service_robot_v4.genome")
 robot = feagi_interface.connect("home_robot_01")
 
 # Continuous evolutionary optimization

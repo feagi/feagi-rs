@@ -1112,7 +1112,7 @@ burst_engine = BurstEngine(backend=backend)
 from feagi.evo import genome_loader
 from genn_bridge import genome_to_genn
 
-genome = genome_loader.load("brain.json")
+genome = genome_loader.load("brain.genome")
 genn_model = genome_to_genn(genome)
 # → Generate optimized GeNN code from genome
 ```

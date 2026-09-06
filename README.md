@@ -37,7 +37,7 @@ feagi
 feagi --config /path/to/feagi_configuration.toml
 
 # Load a genome on startup
-feagi --genome /path/to/genome.json
+feagi --genome /path/to/brain.genome
 ```
 
 ## CLI options

@@ -1053,7 +1053,7 @@ pop = sim.Population(100, sim.IF_curr_alpha())
 from feagi.evo import genome_loader
 from nest_bridge import genome_to_nest
 
-genome = genome_loader.load("brain.json")
+genome = genome_loader.load("brain.genome")
 nest_network = genome_to_nest(genome)
 
 # Run detailed simulation in NEST

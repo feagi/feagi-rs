@@ -1,13 +1,13 @@
 //! Executable example: register a frame-based agent and stream frames to FEAGI.
 //!
 //! Demo folder structure: each demo has an `assets/` subfolder (images, videos) and
-//! an optional `genome.json`. If genome.json is present, it is loaded on FEAGI via
+//! an optional `genome.genome`. If present, it is loaded on FEAGI via
 //! the REST API before starting sensory streaming.
 //!
 //! Usage:
-//! 1) Ensure FEAGI is running (genome optional if using --demo-dir with genome.json).
+//! 1) Ensure FEAGI is running (genome optional with a demo `.genome` file).
 //! 2) Either set --demo-dir to a demo folder (e.g. examples/demo1) or provide --frame-dir.
-//! 3) With --demo-dir, frame_dir defaults to <demo-dir>/assets and genome to <demo-dir>/genome.json.
+//! 3) With --demo-dir, the genome defaults to <demo-dir>/genome.genome.
 //!
 //! Example:
 //! cargo run --example system_frame_agent -- --demo-dir ./examples/demo1
@@ -99,7 +99,7 @@ struct CliArgs {
     /// Optional TOML settings file path. Reads [system_frame_agent] if present, else root keys.
     #[arg(long)]
     settings_toml: Option<PathBuf>,
-    /// Demo folder (standard structure: assets/, genome.json). Sets frame_dir to <demo-dir>/assets if not overridden.
+    /// Demo folder containing `assets/` and `genome.genome`.
     #[arg(long)]
     demo_dir: Option<PathBuf>,
     #[arg(long)]
@@ -486,17 +486,17 @@ fn load_example_settings(cli_args: &CliArgs) -> Result<ExampleSettings> {
     }
 
     // Resolve frame_dir and genome_path. If frame_dir points to a demo folder (has assets/
-    // subdir), use that folder as demo root: frames from <path>/assets, genome from <path>/genome.json.
+    // subdir), use that folder as demo root: frames from assets, genome from genome.genome.
     let (frame_dir, genome_path) = match (&draft.frame_dir, &draft.demo_dir) {
         (Some(fd), _) if fd.join("assets").is_dir() => {
             let assets = fd.join("assets");
-            let gp = fd.join("genome.json");
+            let gp = fd.join("genome.genome");
             (assets, if gp.is_file() { Some(gp) } else { None })
         }
         (Some(fd), _) => (
             fd.clone(),
             draft.demo_dir.and_then(|d| {
-                let p = d.join("genome.json");
+                let p = d.join("genome.genome");
                 if p.is_file() {
                     Some(p)
                 } else {
@@ -505,7 +505,7 @@ fn load_example_settings(cli_args: &CliArgs) -> Result<ExampleSettings> {
             }),
         ),
         (None, Some(d)) => (d.join("assets"), {
-            let p = d.join("genome.json");
+            let p = d.join("genome.genome");
             if p.is_file() {
                 Some(p)
             } else {
@@ -672,6 +672,14 @@ fn format_tcp_endpoint(host: &str, port: u16) -> String {
 /// HTTP response (success or error). No client-side timeout: we wait for FEAGI's reply whether it
 /// arrives in milliseconds or minutes. Only on HTTP success do we return and start streaming.
 fn load_genome_via_feagi_api(config: &FeagiConfig, genome_path: &Path) -> Result<()> {
+    let valid_extension = genome_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("genome"));
+    anyhow::ensure!(
+        valid_extension,
+        "Genome files must use the .genome extension"
+    );
     let json_str = fs::read_to_string(genome_path)
         .with_context(|| format!("Failed to read genome file: {}", genome_path.display()))?;
     let genome_json: serde_json::Value = serde_json::from_str(&json_str)

@@ -698,7 +698,7 @@ individual = {
 **Option A: FEAGI Genome → EONS Optimization**
 ```python
 # Start with FEAGI biological structure
-feagi_genome = load_feagi_genome("vision_agent.json")
+feagi_genome = load_feagi_genome("vision_agent.genome")
 initial_network = develop_brain(feagi_genome)
 
 # Optimize with EONS for Loihi deployment
