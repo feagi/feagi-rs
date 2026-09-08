@@ -248,8 +248,12 @@ struct Args {
     config: Option<PathBuf>,
 
     /// Path to a `.genome` artifact to load on startup (optional)
-    #[arg(short = 'g', long)]
+    #[arg(short = 'g', long, conflicts_with = "connectome")]
     genome: Option<PathBuf>,
+
+    /// Path to a `.connectome` artifact to restore on startup (optional)
+    #[arg(short = 'c', long, conflicts_with = "genome")]
+    connectome: Option<PathBuf>,
 
     /// Enable verbose logging
     #[arg(short, long)]
@@ -355,19 +359,67 @@ struct Args {
     npu_trace_area_fire_ids: bool,
 }
 
+/// Validated connectome data prepared before NPU initialization.
+struct PreparedConnectome {
+    snapshot: feagi_npu_neural::types::connectome::ConnectomeSnapshot,
+    quantization_precision: Option<String>,
+}
+
+/// Return whether a path has the required artifact extension.
+fn has_artifact_extension(path: &std::path::Path, extension: &str) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+}
+
+/// Validate, migrate, and decode a connectome before runtime initialization.
+fn prepare_connectome(path: &std::path::Path) -> Result<PreparedConnectome> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("Failed to read connectome file: {}", path.display()))?;
+    let migrated = feagi_services::brain_artifact::validate_and_migrate_brain_artifact(&bytes)
+        .map_err(|error| anyhow::anyhow!("Invalid connectome artifact: {error}"))?;
+    let snapshot = feagi_services::connectome::load_connectome_from_bytes(&migrated.artifact_bytes)
+        .map_err(|error| anyhow::anyhow!("Failed to decode connectome artifact: {error}"))?;
+    let quantization_precision = match snapshot.genome_json.as_deref() {
+        Some(genome_json) => {
+            let genome: serde_json::Value = serde_json::from_str(genome_json)
+                .context("Connectome contains invalid embedded genome JSON")?;
+            let precision = genome
+                .pointer("/physiology/quantization_precision")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Connectome embedded genome must define physiology.quantization_precision"
+                    )
+                })?;
+            Some(precision.to_string())
+        }
+        None => None,
+    };
+
+    Ok(PreparedConnectome {
+        snapshot,
+        quantization_precision,
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
     if let Some(path) = &args.genome {
-        let valid_extension = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("genome"));
-        if !valid_extension {
+        if !has_artifact_extension(path, "genome") {
             anyhow::bail!("Genome files must use the .genome extension");
         }
     }
+    let prepared_connectome = if let Some(path) = &args.connectome {
+        if !has_artifact_extension(path, "connectome") {
+            anyhow::bail!("Connectome files must use the .connectome extension");
+        }
+        Some(prepare_connectome(path)?)
+    } else {
+        None
+    };
 
     // Configure NPU tracing BEFORE logging initialization (trace config is cached via OnceLock)
     let enable_any_trace = args.npu_trace
@@ -514,7 +566,7 @@ async fn main() -> Result<()> {
 
     // Initialize core components
     info!("Initializing FEAGI core components...");
-    let components = initialize_components(&config, &args).await?;
+    let components = initialize_components(&config, &args, prepared_connectome.as_ref()).await?;
     info!("✓ Core components initialized");
 
     // Start agent handler polling loop IMMEDIATELY (servers need polling to accept connections)
@@ -1209,7 +1261,15 @@ async fn main() -> Result<()> {
 
     // Start services
     info!("Starting FEAGI services...");
-    start_services(components, &config, &args, shutdown_flag, api_state_holder).await?;
+    start_services(
+        components,
+        &config,
+        &args,
+        prepared_connectome,
+        shutdown_flag,
+        api_state_holder,
+    )
+    .await?;
 
     Ok(())
 }
@@ -1237,10 +1297,15 @@ struct FeagiComponents {
 }
 
 /// Initialize all core FEAGI components
-async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<FeagiComponents> {
+async fn initialize_components(
+    config: &FeagiConfig,
+    args: &Args,
+    prepared_connectome: Option<&PreparedConnectome>,
+) -> Result<FeagiComponents> {
     // Determine quantization precision:
     // - If CLI override is present, use it.
     // - Else, peek genome if provided.
+    // - Else, use the validated connectome's embedded genome precision.
     // - Else, default to fp32 to avoid implicit threshold clipping.
     let precision = if let Some(p) = &args.precision {
         info!("  Precision override from CLI: {}", p);
@@ -1259,6 +1324,17 @@ async fn initialize_components(config: &FeagiConfig, args: &Args) -> Result<Feag
                 "fp32".to_string()
             }
         }
+    } else if let Some(connectome) = prepared_connectome {
+        let precision = connectome.quantization_precision.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Connectome has no embedded quantization precision; provide --precision explicitly"
+            )
+        })?;
+        info!(
+            "  Connectome embedded genome specifies quantization precision: {}",
+            precision
+        );
+        precision
     } else {
         info!("  No genome provided at startup, defaulting to fp32 quantization");
         "fp32".to_string()
@@ -1902,6 +1978,7 @@ async fn start_services(
     components: FeagiComponents,
     config: &FeagiConfig,
     args: &Args,
+    prepared_connectome: Option<PreparedConnectome>,
     shutdown_flag: Arc<AtomicBool>,
     api_state_holder: Arc<Mutex<Option<Arc<ApiState>>>>,
 ) -> Result<()> {
@@ -2020,7 +2097,7 @@ async fn start_services(
         network_connection_info_provider: Some(network_provider),
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
         genome_service: genome_service.clone() as Arc<dyn GenomeService + Send + Sync>,
-        connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
+        connectome_service: connectome_service.clone() as Arc<dyn ConnectomeService + Send + Sync>,
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
         runtime_service: components.runtime_service.clone()
             as Arc<dyn RuntimeService + Send + Sync>,
@@ -2131,13 +2208,20 @@ async fn start_services(
                 return Err(e);
             }
         }
+    } else if let Some(connectome) = prepared_connectome {
+        info!("  Restoring connectome from startup artifact");
+        connectome_service
+            .import_connectome(connectome.snapshot)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to restore connectome: {error}"))?;
+        info!("    ✓ Connectome restored via ConnectomeService");
     } else {
-        info!("  No genome specified, starting with empty connectome");
+        info!("  No startup brain artifact specified, starting with empty connectome");
         info!("    ⚠️  Data streams will not start until genome is loaded");
     }
 
     // @npu-debug-instrumentation: resolve cortical_id -> cortical_idx; optional full-area neuron id list
-    if args.genome.is_some() {
+    if args.genome.is_some() || args.connectome.is_some() {
         use feagi_npu_burst_engine::set_runtime_trace_cortical_idx;
 
         let npu = components.npu.lock().unwrap();
@@ -2203,7 +2287,7 @@ async fn start_services(
     } else if args.npu_trace_area_fire_ids {
         tracing::warn!(
             target: "feagi-npu-trace",
-            "NPU trace: --npu-trace-area-fire-ids requires --genome so the connectome/NPU are populated"
+            "NPU trace: --npu-trace-area-fire-ids requires --genome or --connectome so the connectome/NPU are populated"
         );
     }
 
@@ -2543,5 +2627,92 @@ mod npu_trace_resolve_tests {
             Some(2),
             Some(3)
         ));
+    }
+}
+
+#[cfg(test)]
+mod artifact_cli_tests {
+    use clap::Parser;
+    use feagi_npu_neural::types::connectome::{
+        ConnectomeMetadata, ConnectomePersistMode, ConnectomeSnapshot, SerializableNeuronArray,
+        SerializableSynapseArray,
+    };
+
+    use super::{has_artifact_extension, prepare_connectome, Args};
+
+    #[test]
+    fn artifact_extensions_are_case_insensitive_and_type_specific() {
+        assert!(has_artifact_extension(
+            std::path::Path::new("brain.GENOME"),
+            "genome"
+        ));
+        assert!(has_artifact_extension(
+            std::path::Path::new("brain.CONNECTOME"),
+            "connectome"
+        ));
+        assert!(!has_artifact_extension(
+            std::path::Path::new("brain.json"),
+            "genome"
+        ));
+    }
+
+    #[test]
+    fn genome_and_connectome_startup_options_are_mutually_exclusive() {
+        let result = Args::try_parse_from([
+            "feagi",
+            "--genome",
+            "brain.genome",
+            "--connectome",
+            "brain.connectome",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn connectome_startup_option_accepts_artifact_path() {
+        let args = Args::try_parse_from(["feagi", "--connectome", "brain.connectome"])
+            .expect("connectome option should parse");
+
+        assert_eq!(
+            args.connectome,
+            Some(std::path::PathBuf::from("brain.connectome"))
+        );
+        assert!(args.genome.is_none());
+    }
+
+    #[test]
+    fn prepare_connectome_validates_real_binary_artifact() {
+        let snapshot = ConnectomeSnapshot {
+            version: 1,
+            neurons: SerializableNeuronArray::new(0),
+            synapses: SerializableSynapseArray::new(0),
+            cortical_area_names: Default::default(),
+            burst_count: 0,
+            power_amount: 0.0,
+            fire_ledger_window: 0,
+            metadata: ConnectomeMetadata::default(),
+            persist_mode: ConnectomePersistMode::Full,
+            genome_json: None,
+            memory_area_ids: Vec::new(),
+            plastic_mappings: Vec::new(),
+            brain_region_ids: Vec::new(),
+            long_term_memory_neurons: Vec::new(),
+            long_term_memory_replay_frames: Vec::new(),
+            lite_synapses: Vec::new(),
+        };
+        let bytes = feagi_services::connectome::save_connectome_to_bytes(&snapshot)
+            .expect("test connectome should serialize");
+        let artifact = tempfile::Builder::new()
+            .suffix(".connectome")
+            .tempfile()
+            .expect("temporary artifact should be created");
+        std::fs::write(artifact.path(), bytes).expect("temporary artifact should be written");
+
+        let prepared =
+            prepare_connectome(artifact.path()).expect("valid connectome should prepare");
+
+        assert_eq!(prepared.snapshot.neurons.count, 0);
+        assert!(prepared.quantization_precision.is_none());
     }
 }

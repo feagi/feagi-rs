@@ -38,7 +38,12 @@ feagi --config /path/to/feagi_configuration.toml
 
 # Load a genome on startup
 feagi --genome /path/to/brain.genome
+
+# Restore a connectome on startup
+feagi --connectome /path/to/trained-brain.connectome
 ```
+
+Genome and connectome startup artifacts are mutually exclusive.
 
 ## CLI options
 
@@ -48,6 +53,7 @@ The `feagi` binary is built when the `cli` feature is enabled (default).
 |--------|-------------|
 | `-f, --config <PATH>` | Config path (overrides search) |
 | `-g, --genome <PATH>` | Genome to load on startup |
+| `-c, --connectome <PATH>` | Connectome to restore on startup |
 | `--verbose` | Verbose logging |
 | `--api-port <PORT>` | Override API port |
 | `--burst-hz <HZ>` | Override burst frequency |
