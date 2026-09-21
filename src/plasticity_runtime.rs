@@ -4,7 +4,7 @@
 //! Plasticity runtime wiring helpers.
 
 #[cfg(feature = "plasticity")]
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(feature = "plasticity")]
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "plasticity")]
@@ -120,6 +120,7 @@ pub fn wire_plasticity_callbacks(
         let commands_processed = commands.len();
         let command_phase_start = Instant::now();
         let scheduled_replays: Vec<(u64, ReplayInjection)> = Vec::new();
+        let mut dropped_unmapped_areas = HashSet::new();
         if !commands.is_empty() {
             for cmd in commands {
                 match cmd {
@@ -134,10 +135,15 @@ pub fn wire_plasticity_callbacks(
                             cm.get_cortical_id(area_idx).cloned()
                         };
                         let Some(cortical_id) = cortical_id_opt else {
-                            warn!(
-                                "[PLASTICITY-CMD] Missing cortical ID for area_idx={}",
-                                area_idx
-                            );
+                            if dropped_unmapped_areas.insert(area_idx) {
+                                warn!(
+                                    "[PLASTICITY-CMD] Missing cortical ID for area_idx={}; dropping that memory registration",
+                                    area_idx
+                                );
+                                if let Ok(exec) = executor_for_post.lock() {
+                                    exec.unregister_memory_area(area_idx);
+                                }
+                            }
                             continue;
                         };
                         let mut npu_lock = npu_for_post.lock().unwrap();
@@ -294,11 +300,14 @@ pub fn wire_plasticity_callbacks(
                                 area_idx,
                                 membrane_potential,
                             );
-                        } else {
+                        } else if dropped_unmapped_areas.insert(area_idx) {
                             warn!(
-                                "[PLASTICITY-CMD] Missing cortical ID for area_idx={}",
+                                "[PLASTICITY-CMD] Missing cortical ID for area_idx={}; dropping that memory registration",
                                 area_idx
                             );
+                            if let Ok(exec) = executor_for_post.lock() {
+                                exec.unregister_memory_area(area_idx);
+                            }
                         }
                     }
                     feagi_npu_plasticity::PlasticityCommand::UpdateWeightsDelta { .. } => {

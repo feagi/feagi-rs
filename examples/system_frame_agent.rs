@@ -803,7 +803,7 @@ fn register_vision_device(
     frame: &ImageFrame,
 ) -> Result<()> {
     let mut sensor_cache = embodiment.get_embodiment_mut().get_sensor_cache();
-    let unit_index = CorticalUnitIndex::from(settings.cortical_unit_id);
+    let unit_index = CorticalUnitIndex::from(u16::from(settings.cortical_unit_id));
     let channel_count = CorticalChannelCount::new(1).context("CorticalChannelCount must be > 0")?;
     let frame_change_handling = FrameChangeHandling::Absolute;
     let image_props = frame.get_image_frame_properties();
@@ -886,7 +886,7 @@ fn write_frame(
     settings: &ExampleSettings,
     frame: &ImageFrame,
 ) -> Result<()> {
-    let unit_index = CorticalUnitIndex::from(settings.cortical_unit_id);
+    let unit_index = CorticalUnitIndex::from(u16::from(settings.cortical_unit_id));
     let channel_index = CorticalChannelIndex::from(0u32);
     let mut adjusted_frame = frame.clone();
     adjusted_frame.change_brightness(map_brightness_to_offset(settings.brightness));
