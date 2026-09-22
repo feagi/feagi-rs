@@ -34,6 +34,14 @@ use feagi_api::common::agent_registration::{
 };
 use feagi_api::endpoints::network::NetworkConnectionInfoProvider;
 use feagi_api::transports::http::server::{create_http_server, ApiState};
+
+/// Copy the current API state and drop `api_state_holder` before `block_on(auto_create)`.
+///
+/// The polling loop used to keep that mutex for the whole rebuild. HTTP handlers and genome
+/// publication share the runtime; holding the mutex across auto-create stalls them.
+fn clone_api_state_for_auto_create(holder: &Mutex<Option<Arc<ApiState>>>) -> Option<Arc<ApiState>> {
+    holder.lock().unwrap().as_ref().cloned()
+}
 use feagi_brain_development::models::cortical_area::CorticalAreaExt;
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
@@ -662,7 +670,7 @@ async fn main() -> Result<()> {
                                 device_regs,
                                 "before AgentConfiguration auto_create",
                             );
-                            match api_state_holder.lock().unwrap().as_ref() {
+                            match clone_api_state_for_auto_create(&api_state_holder) {
                                 Some(api) => {
                                     info!(
                                         "[MOTOR-REG] Running auto_create before AgentConfiguration response"
@@ -702,7 +710,7 @@ async fn main() -> Result<()> {
 
                 drop(handler_guard);
                 if !pending_agent_configurations.is_empty() {
-                    if let Some(api) = api_state_holder.lock().unwrap().as_ref() {
+                    if let Some(api) = clone_api_state_for_auto_create(&api_state_holder) {
                         for (session_id, device_regs) in &pending_agent_configurations {
                             info!(
                                 "[MOTOR-REG] Processing queued AgentConfiguration for session {}",
@@ -1010,7 +1018,7 @@ async fn main() -> Result<()> {
                 // the log with repeated "No genome loaded" warnings.
                 let genome_is_ready = connectome_manager_for_polling.read().is_initialized();
                 if !device_regs_to_auto_create.is_empty() && genome_is_ready {
-                    if let Some(api) = api_state_holder.lock().unwrap().as_ref() {
+                    if let Some(api) = clone_api_state_for_auto_create(&api_state_holder) {
                         debug!(
                             "[MOTOR-REG] Invoking auto_create for {} device_registration(s)",
                             device_regs_to_auto_create.len()
