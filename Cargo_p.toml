@@ -1,0 +1,138 @@
+[package]
+name = "feagi-rs"
+version = "0.0.55"
+edition = "2021"
+authors = ["Neuraville Inc. <feagi@neuraville.com>"]
+license = "Apache-2.0"
+description = "FEAGI - Framework for Evolutionary Artificial General Intelligence (Full Server Application)"
+repository = "https://github.com/feagi/feagi-rs"
+readme = "README.md"
+keywords = ["neuroscience", "ai", "neural-network", "brain", "agi"]
+categories = ["science", "simulation"]
+
+# FEAGI can be used as both a library (for embedding) and a binary (standalone server)
+[lib]
+name = "feagi"
+path = "src/lib.rs"
+
+[[bin]]
+name = "feagi"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+# FEAGI Core Components — versions track latest FEAGI core component crates on crates.io (currently 0.0.35).
+# For local path overrides: copy `.cargo/config.toml.example` to `.cargo/config.toml`.
+feagi-npu-neural = { version = "^0.0.35" }
+feagi-structures = { version = "^0.0.35" }
+feagi-npu-runtime = { version = "^0.0.35", features = ["std"] }
+feagi-config = { version = "^0.0.35" }
+# GPU acceleration enabled by default (disable with --no-default-features)
+feagi-npu-burst-engine = { version = "^0.0.35" }
+feagi-brain-development = { version = "^0.0.35" }
+feagi-evolutionary = { version = "^0.0.35" }
+feagi-services = { version = "^0.0.35" }
+feagi-api = { version = "^0.0.35", features = ["services"] }
+feagi-io = { version = "^0.0.35", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
+feagi-agent = { version = "^0.0.35", features = ["agent-server", "agent-client-asynchelper-tokio"] }
+feagi-state-manager = { version = "^0.0.35" }
+feagi-npu-plasticity = { version = "^0.0.35" }
+feagi-serialization = { version = "^0.0.35" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+axum = "0.7"
+
+# CLI (optional - only for standalone binary)
+clap = { version = "4.5", features = ["derive"], optional = true }
+
+# Observability
+feagi-observability = { version = "^0.0.35" }
+env_logger = "0.11"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+toml = "0.8.23"
+
+# Signal handling
+ctrlc = "3.0"
+
+# Concurrency
+parking_lot = "0.12"
+
+# JSON (used by agent registration / device_registrations)
+serde_json = "1.0"
+
+[dev-dependencies]
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Memory profiling
+dhat = "0.3"
+
+# System metrics
+sysinfo = "0.31"
+
+# Testing utilities
+tempfile = "3.8"
+
+# JSON output
+serde_json = "1.0"
+
+# Example dependencies
+feagi-sensorimotor = { version = "^0.0.35" }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# Match feagi-core dev profile: smaller target/ than full DWARF (see feagi-core/Cargo.toml).
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Profile for profiling (debug info + optimizations)
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
+# Profile for benchmarking
+[profile.bench]
+inherits = "release"
+
+[[bench]]
+name = "feagi_benchmarks"
+harness = false
+
+[[test]]
+name = "profile_memory"
+path = "tests/profile_memory.rs"
+
+[[test]]
+name = "profile_cpu"
+path = "tests/profile_cpu.rs"
+
+[[test]]
+name = "profile_storage"
+path = "tests/profile_storage.rs"
+
+[features]
+default = ["cli", "plasticity", "feagi-agent", "zmq-transport"]
+gpu = ["feagi-npu-burst-engine/gpu"]
+plasticity = ["feagi-services/plasticity"]  # Neuroplasticity and STDP support (wires service-layer runtime updates)
+cli = ["dep:clap"]              # CLI dependencies (for standalone binary)
+embedded = []                    # For library usage (no CLI)
+no-network = ["embedded"]        # Embedded + disable network servers (future use)
+zmq-transport = ["feagi-io/zmq-transport"]
+feagi-agent = []                 # Enable agent handler functionality
