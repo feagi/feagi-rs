@@ -50,14 +50,14 @@ enabled = true
 
 # INT8 scale factors (only used when precision = "int8")
 [quantization.scale_factors]
-# Membrane potentials: -127 to +127 represents real range
-membrane_potential_min = -100.0
-membrane_potential_max = 50.0
+# Membrane potentials: i8 -128..=127 represents absolute bytes 0.0..=255.0
+membrane_potential_min = 0.0
+membrane_potential_max = 255.0
 membrane_potential_scale = 127  # INT8 range
 
-# Thresholds: 0 to 127 represents 0.0 to 100.0
+# Thresholds: 0 to 255, same absolute byte scale as membrane potential
 threshold_min = 0.0
-threshold_max = 100.0
+threshold_max = 255.0
 threshold_scale = 127
 
 # Leak coefficients: 0 to 10000 represents 0.0000 to 1.0000
@@ -65,9 +65,9 @@ threshold_scale = 127
 leak_coefficient_scale = 10000
 leak_coefficient_precision = 4  # 4 decimal places
 
-# Resting potentials: -127 to +127 represents -100.0 to 50.0
-resting_potential_min = -100.0
-resting_potential_max = 50.0
+# Resting potentials: same 0.0 to 255.0 byte scale as membrane potential
+resting_potential_min = 0.0
+resting_potential_max = 255.0
 resting_potential_scale = 127
 
 # Excitability: 0 to 10000 represents 0.0000 to 1.0000
@@ -141,16 +141,16 @@ pub struct ScaleFactors {
 impl Default for ScaleFactors {
     fn default() -> Self {
         Self {
-            membrane_potential_min: -100.0,
-            membrane_potential_max: 50.0,
+            membrane_potential_min: 0.0,
+            membrane_potential_max: 255.0,
             membrane_potential_scale: 127,
             threshold_min: 0.0,
-            threshold_max: 100.0,
+            threshold_max: 255.0,
             threshold_scale: 127,
             leak_coefficient_scale: 10000,
             leak_coefficient_precision: 4,
-            resting_potential_min: -100.0,
-            resting_potential_max: 50.0,
+            resting_potential_min: 0.0,
+            resting_potential_max: 255.0,
             resting_potential_scale: 127,
             excitability_scale: 10000,
             excitability_precision: 4,
@@ -358,7 +358,7 @@ impl NeuralValue for INT8Value {
         let sf = &config.scale_factors;
         
         // Map float range to INT8 range (-127 to +127)
-        // Example: -100.0 to 50.0 → -127 to +127
+        // Example: 0.0 to 255.0 → i8 -128 to +127
         let normalized = (value - sf.membrane_potential_min) / 
                         (sf.membrane_potential_max - sf.membrane_potential_min);
         let scaled = normalized * (sf.membrane_potential_scale as f32 * 2.0) - 
@@ -695,14 +695,14 @@ precision = "int8"
 enabled = true
 
 [quantization.scale_factors]
-# Membrane potentials: Range -100.0 to 50.0 mV
-membrane_potential_min = -100.0
-membrane_potential_max = 50.0
+# Membrane potentials: absolute byte range 0.0 to 255.0
+membrane_potential_min = 0.0
+membrane_potential_max = 255.0
 membrane_potential_scale = 127  # INT8 max
 
-# Thresholds: Range 0.0 to 100.0 mV  
+# Thresholds: absolute byte range 0.0 to 255.0
 threshold_min = 0.0
-threshold_max = 100.0
+threshold_max = 255.0
 threshold_scale = 127
 
 # Leak coefficients: Fixed-point 0.0000 to 1.0000
@@ -711,8 +711,8 @@ leak_coefficient_scale = 10000
 leak_coefficient_precision = 4
 
 # Resting potentials: Same as membrane
-resting_potential_min = -100.0
-resting_potential_max = 50.0
+resting_potential_min = 0.0
+resting_potential_max = 255.0
 resting_potential_scale = 127
 
 # Excitability: Fixed-point 0.0000 to 1.0000
@@ -762,13 +762,13 @@ log_quantization_loss = true
 
 ```
 Membrane Potential:
-  Range: -100.0 to 50.0 (150.0 total)
-  INT8 resolution: 150.0 / 254 = 0.59 mV
+  Range: 0.0 to 255.0
+  INT8 resolution: 1.0 (every integer byte round-trips)
   Impact: MODERATE - Sub-threshold dynamics affected
 
 Threshold:
-  Range: 0.0 to 100.0
-  INT8 resolution: 100.0 / 127 = 0.79 mV
+  Range: 0.0 to 255.0
+  INT8 resolution: 1.0 (same byte scale as membrane potential)
   Impact: LOW - Threshold checks still work
 
 Leak Coefficient (0.9700):

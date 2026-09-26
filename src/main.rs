@@ -2051,9 +2051,6 @@ async fn start_services(
     info!("    ✓ Agent service created");
 
     // Create API state (runtime_service already created in components)
-    // Create snapshot service
-    let snapshot_dir = std::path::PathBuf::from("./snapshots");
-    let snapshot_service = Arc::new(feagi_services::SnapshotServiceImpl::new(snapshot_dir));
 
     // Get FEAGI session timestamp (when this instance started)
     let feagi_session_timestamp = std::time::SystemTime::now()
@@ -2112,9 +2109,6 @@ async fn start_services(
         neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
         system_service: system_service
             as Arc<dyn feagi_services::traits::SystemService + Send + Sync>,
-        snapshot_service: Some(
-            snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>,
-        ),
         feagi_session_timestamp,
         filesystem_data_root,
         memory_stats_cache: components.memory_stats_cache.clone(),

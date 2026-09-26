@@ -513,10 +513,6 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
 
     info!("    ✓ Services created");
 
-    // Create snapshot service
-    let snapshot_dir = std::path::PathBuf::from("./snapshots");
-    let snapshot_service = Arc::new(feagi_services::SnapshotServiceImpl::new(snapshot_dir));
-
     // Get FEAGI session timestamp (when this instance started)
     let feagi_session_timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -566,9 +562,6 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         neuron_service: neuron_service as Arc<dyn NeuronService + Send + Sync>,
         system_service: system_service
             as Arc<dyn feagi_services::traits::SystemService + Send + Sync>,
-        snapshot_service: Some(
-            snapshot_service as Arc<dyn feagi_services::SnapshotService + Send + Sync>,
-        ),
         feagi_session_timestamp,
         filesystem_data_root,
         #[cfg(feature = "plasticity")]
