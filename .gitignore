@@ -24,7 +24,8 @@ feagi.log
 
 # Configuration overrides (keep the template)
 # feagi_configuration.toml should come from parent directory
-#/.cargo/config.toml
+# Local crates.io patch. Copy from .cargo/config.toml.example. Do not commit.
+/.cargo/config.toml
 
 # Test artifacts
 *.profdata
