@@ -571,6 +571,7 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         amalgamation_state: ApiState::init_amalgamation_state(),
         genome_transition_lock,
         genome_transition_in_progress,
+        last_failed_mutation: ApiState::init_last_failed_mutation(),
         #[cfg(feature = "feagi-agent")]
         agent_handler: Some(Arc::clone(&components.agent_handler)),
         #[cfg(not(feature = "feagi-agent"))]
