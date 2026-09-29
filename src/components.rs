@@ -443,6 +443,10 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
         .set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
             queue: Arc::clone(&sensory_intake_queue),
         })) as Arc<Mutex<dyn SensoryIntake>>);
+    burst_runner
+        .write()
+        .set_sequential_ingest_max_frames(config.burst_engine.sequential_ingest_max_frames)
+        .map_err(|e| anyhow::anyhow!(e))?;
     info!("    ✓ Sensory intake (feagi-io) wired to BurstLoopRunner");
 
     Ok(FeagiComponents {

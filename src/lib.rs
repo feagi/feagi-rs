@@ -53,6 +53,7 @@ pub use feagi_services::*;
 pub mod components;
 pub mod network_provider;
 pub mod plasticity_runtime;
+pub mod polling_cadence;
 pub mod version;
 
 pub use components::FeagiComponents;

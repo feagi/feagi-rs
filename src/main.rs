@@ -42,6 +42,28 @@ use feagi_api::transports::http::server::{create_http_server, ApiState};
 fn clone_api_state_for_auto_create(holder: &Mutex<Option<Arc<ApiState>>>) -> Option<Arc<ApiState>> {
     holder.lock().unwrap().as_ref().cloned()
 }
+
+/// Expected cortical IDs (base64) that the connectome does not hold, sorted.
+///
+/// An empty result means auto-create has nothing left to do, including when the
+/// registration names no cortical areas at all.
+fn missing_expected_cortical_ids(
+    expected_ids: &std::collections::HashSet<String>,
+    has_cortical_area: impl Fn(&feagi_structures::genomic::cortical_area::CorticalID) -> bool,
+) -> Vec<String> {
+    let mut missing: Vec<String> = expected_ids
+        .iter()
+        .filter(|id_b64| {
+            !feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
+                .map(|id| has_cortical_area(&id))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    missing.sort();
+    missing
+}
+
 use feagi_brain_development::models::cortical_area::CorticalAreaExt;
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
@@ -585,6 +607,15 @@ async fn main() -> Result<()> {
     let connectome_manager_for_polling = Arc::clone(&components.connectome_manager);
     let sensory_drain_budget_per_cycle =
         ((1.0 / config.neural.burst_engine_timestep).ceil() as usize).max(1);
+    let mut polling_cadence = feagi::polling_cadence::PollingCadence::new(
+        config.agent.polling_interval_ms,
+        std::time::Instant::now(),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+    info!(
+        "✓ Agent handler polling every {:.3} ms",
+        polling_cadence.interval().as_secs_f64() * 1000.0
+    );
 
     // Holder for ApiState so polling loop can call auto_create when device_registrations arrive.
     // Set by start_services when genome/connectome services are ready.
@@ -613,6 +644,10 @@ async fn main() -> Result<()> {
         // Log "Deferring motor registration" only once per agent-id until registration recovers.
         // This prevents startup/restart loops from flooding logs every polling cycle.
         let deferred_motor_logged_agents: Arc<Mutex<HashSet<String>>> =
+            Arc::new(Mutex::new(HashSet::new()));
+        // Warn once per descriptor while auto-create cannot produce its expected areas.
+        // The retry runs every polling cycle, so an unthrottled message would flood the log.
+        let auto_create_incomplete_logged: Arc<Mutex<HashSet<feagi_agent::AgentDescriptor>>> =
             Arc::new(Mutex::new(HashSet::new()));
 
         let api_state_holder = api_state_holder_for_polling;
@@ -822,6 +857,10 @@ async fn main() -> Result<()> {
                     .lock()
                     .unwrap()
                     .retain(|descriptor| current_descriptors.contains(descriptor));
+                auto_create_incomplete_logged
+                    .lock()
+                    .unwrap()
+                    .retain(|descriptor| current_descriptors.contains(descriptor));
 
                 // Pass 1: Collect auto-create work and new visualization registrations.
                 for (
@@ -868,16 +907,13 @@ async fn main() -> Result<()> {
                                 }
                             }
 
-                            if derivation_failed || expected_ids.is_empty() {
-                                true
-                            } else {
+                            // A registration that names no cortical areas has nothing to create.
+                            derivation_failed || {
                                 let connectome_guard = connectome_manager_for_polling.read();
-                                !expected_ids.iter().all(|id_b64| {
-                                    feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
-                                        .ok()
-                                        .map(|id| connectome_guard.has_cortical_area(&id))
-                                        .unwrap_or(false)
+                                !missing_expected_cortical_ids(&expected_ids, |id| {
+                                    connectome_guard.has_cortical_area(id)
                                 })
+                                .is_empty()
                             }
                         };
                         if needs_auto_create {
@@ -1056,27 +1092,36 @@ async fn main() -> Result<()> {
                             // Mark as completed only after expected motor cortical IDs exist.
                             // This avoids false-positive completion when initial payload/state
                             // causes auto_create to no-op.
-                            let all_expected_present = {
+                            let missing_ids = {
                                 let connectome_guard = connectome_manager_for_polling.read();
-                                expected_ids.iter().all(|id_b64| {
-                                    feagi_structures::genomic::cortical_area::CorticalID::try_from_base_64(id_b64)
-                                        .ok()
-                                        .map(|id| connectome_guard.has_cortical_area(&id))
-                                        .unwrap_or(false)
+                                missing_expected_cortical_ids(&expected_ids, |id| {
+                                    connectome_guard.has_cortical_area(id)
                                 })
                             };
-                            if !derivation_failed
-                                && !expected_ids.is_empty()
-                                && all_expected_present
-                            {
+                            // An empty expected set is complete: the registration names no areas.
+                            if !derivation_failed && missing_ids.is_empty() {
                                 auto_created_descriptors
                                     .lock()
                                     .unwrap()
                                     .insert(descriptor.clone());
-                            } else {
-                                debug!(
-                                    "[MOTOR-REG] Auto-create incomplete for descriptor {:?}; will retry",
-                                    descriptor
+                                auto_create_incomplete_logged
+                                    .lock()
+                                    .unwrap()
+                                    .remove(descriptor);
+                            } else if auto_create_incomplete_logged
+                                .lock()
+                                .unwrap()
+                                .insert(descriptor.clone())
+                            {
+                                warn!(
+                                    "[MOTOR-REG] Auto-create incomplete for descriptor {:?}; retrying every polling cycle. Missing cortical IDs: {:?}{}",
+                                    descriptor,
+                                    missing_ids,
+                                    if derivation_failed {
+                                        " (cortical ID derivation failed; see earlier warning)"
+                                    } else {
+                                        ""
+                                    }
                                 );
                             }
                         }
@@ -1261,7 +1306,9 @@ async fn main() -> Result<()> {
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            let now = std::time::Instant::now();
+            std::thread::sleep(polling_cadence.sleep_for(now));
+            polling_cadence.advance(std::time::Instant::now());
         }
     });
 
@@ -1871,6 +1918,10 @@ async fn initialize_components(
         .set_sensory_intake(Arc::new(Mutex::new(SensoryIntakeAdapter {
             queue: Arc::clone(&sensory_intake_queue),
         })) as Arc<Mutex<dyn SensoryIntake>>);
+    burst_runner
+        .write()
+        .set_sequential_ingest_max_frames(config.burst_engine.sequential_ingest_max_frames)
+        .map_err(|e| anyhow::anyhow!(e))?;
     info!("    ✓ Sensory intake (feagi-io) wired to BurstLoopRunner");
     info!("      ✓ Sensory: transports → queue → BurstLoopRunner");
     info!("      ✓ Motor: BurstLoopRunner → Handler (publishing)");
@@ -2717,5 +2768,38 @@ mod artifact_cli_tests {
 
         assert_eq!(prepared.snapshot.neurons.count, 0);
         assert!(prepared.quantization_precision.is_none());
+    }
+}
+
+#[cfg(test)]
+mod auto_create_completion_tests {
+    use super::missing_expected_cortical_ids;
+    use feagi_structures::genomic::cortical_area::CoreCorticalType;
+    use std::collections::HashSet;
+
+    #[test]
+    fn registration_without_cortical_areas_is_complete() {
+        assert!(missing_expected_cortical_ids(&HashSet::new(), |_| false).is_empty());
+    }
+
+    #[test]
+    fn reports_only_absent_ids_sorted() {
+        let power = CoreCorticalType::Power.to_cortical_id();
+        let death = CoreCorticalType::Death.to_cortical_id().as_base_64();
+        let fear = CoreCorticalType::Fear.to_cortical_id().as_base_64();
+        let expected: HashSet<String> = [power.as_base_64(), death.clone(), fear.clone()].into();
+        let missing = missing_expected_cortical_ids(&expected, |id| *id == power);
+        let mut want = vec![death, fear];
+        want.sort();
+        assert_eq!(missing, want);
+    }
+
+    #[test]
+    fn undecodable_id_counts_as_missing() {
+        let expected: HashSet<String> = ["not base64".to_string()].into();
+        assert_eq!(
+            missing_expected_cortical_ids(&expected, |_| true),
+            vec!["not base64"]
+        );
     }
 }

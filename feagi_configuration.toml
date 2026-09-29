@@ -79,6 +79,10 @@ sensory_port = 5555        # ZMQ sensory data input (PULL socket - agents PUSH s
 motor_port = 5564          # ZMQ motor data output (PUB socket - agents SUB to receive motor commands)
 bind_host = "127.0.0.1"       # Bind address for agent endpoints. Set to 0.0.0.0 to allow external clients.
 advertised_host = "127.0.0.1" # Advertised address for agents to connect to.
+# Agent handler polling period (ms). Moves sensory packets into the burst engine and
+# stamps their arrival. Keep it well under one burst: near one burst, two packets from
+# one agent land in the same burst and only the newest is kept.
+polling_interval_ms = 1.0
 
 [ports]
 # ZMQ Communication Ports
@@ -248,6 +252,11 @@ mode = "inference"  # "inference" | "design"
 fcl_capacity_multiplier = 1.5        # FCL capacity = genome_neurons * 1.5 (for burst accumulation)
 fire_queue_capacity_multiplier = 1.2  # Fire Queue capacity = genome_neurons * 1.2 (for firing spikes)
 memory_area_multiplier = 2.0          # Memory areas can expand beyond base genome size
+
+# Audio input (iaud) is ingested in order, one frame per burst, instead of newest-wins.
+# Frames queued per audio stream before the oldest is dropped. Each queued frame adds
+# one burst of latency.
+sequential_ingest_max_frames = 10
 
 # Performance tuning
 enable_preallocation = true           # Pre-allocate all arrays at genome load (Rust-compatible)
