@@ -60,6 +60,10 @@ auto_recovery_on_validation_failure = true  # Allow loading invalid genomes with
                                             # Set to false to reject invalid genomes completely for safety/stability
                                             # When true: Invalid genomes are loaded but marked as invalid in state manager
                                             # When false: Invalid genomes cause loading to fail immediately
+# Change ledger: every structural genome change is recorded with who made it and when
+change_ledger_session_capacity = 10000  # Changes held in memory for GET /v1/genome/changes polling
+change_history_max_entries = 50000      # Changes persisted in the genome's change_history section (oldest dropped)
+change_agent_id_max_length = 128        # Longest accepted X-FEAGI-Agent-Id header value (bytes)
 
 [api]
 # REST API server configuration

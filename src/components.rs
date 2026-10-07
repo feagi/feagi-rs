@@ -459,6 +459,17 @@ pub async fn initialize_components(config: &FeagiConfig) -> Result<FeagiComponen
     })
 }
 
+/// Change ledger limits from the `[genome]` configuration section.
+pub fn change_ledger_config(
+    genome: &feagi_config::GenomeConfig,
+) -> feagi_services::change_ledger::ChangeLedgerConfig {
+    feagi_services::change_ledger::ChangeLedgerConfig {
+        session_capacity: genome.change_ledger_session_capacity,
+        max_persisted_entries: genome.change_history_max_entries,
+        agent_id_max_length: genome.change_agent_id_max_length,
+    }
+}
+
 /// Start HTTP API server
 ///
 /// Spawns Axum server on Tokio runtime (non-blocking).
@@ -488,7 +499,15 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     // Wire burst runner for cache refresh
     connectome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
     connectome_service_impl.set_genome_load_signals(genome_load_counter, genome_load_timestamp);
-    let connectome_service = Arc::new(connectome_service_impl);
+    let recorded = feagi_services::change_ledger::record_changes(
+        genome_service,
+        Arc::new(connectome_service_impl),
+        current_genome,
+        change_ledger_config(&config.genome),
+    )
+    .map_err(|error| anyhow::anyhow!("Invalid [genome] change ledger configuration: {error}"))?;
+    let genome_service = recorded.genome;
+    let connectome_service = recorded.connectome;
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         Some(Arc::clone(&components.burst_runner)),
@@ -558,8 +577,8 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
     let api_state = ApiState {
         network_connection_info_provider: Some(network_provider),
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
-        genome_service: genome_service as Arc<dyn GenomeService + Send + Sync>,
-        connectome_service: connectome_service as Arc<dyn ConnectomeService + Send + Sync>,
+        genome_service,
+        connectome_service,
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
         runtime_service: components.runtime_service.clone()
             as Arc<dyn RuntimeService + Send + Sync>,
@@ -576,6 +595,7 @@ pub async fn start_http_server(components: &FeagiComponents, config: &FeagiConfi
         genome_transition_lock,
         genome_transition_in_progress,
         last_failed_mutation: ApiState::init_last_failed_mutation(),
+        change_ledger: Some(recorded.ledger),
         #[cfg(feature = "feagi-agent")]
         agent_handler: Some(Arc::clone(&components.agent_handler)),
         #[cfg(not(feature = "feagi-agent"))]

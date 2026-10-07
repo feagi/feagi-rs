@@ -1943,7 +1943,7 @@ async fn initialize_components(
 /// Load genome (new architecture - agent handler notification TODO)
 /// Returns the genome's simulation_timestep (in seconds) if available
 async fn load_genome_with_agent_handler(
-    genome_service: &Arc<GenomeServiceImpl>,
+    genome_service: &Arc<dyn GenomeService + Send + Sync>,
     _agent_handler: &Arc<std::sync::Mutex<feagi_agent::server::FeagiAgentHandler>>,
     genome_path: &PathBuf,
 ) -> Result<Option<f64>> {
@@ -2071,7 +2071,17 @@ async fn start_services(
     // Wire burst runner for cache refresh
     connectome_service_impl.set_burst_runner(Arc::clone(&components.burst_runner));
     connectome_service_impl.set_genome_load_signals(genome_load_counter, genome_load_timestamp);
-    let connectome_service = Arc::new(connectome_service_impl);
+    let recorded = feagi_services::change_ledger::record_changes(
+        genome_service,
+        Arc::new(connectome_service_impl),
+        current_genome,
+        feagi::components::change_ledger_config(&config.genome),
+    )
+    .map_err(|error| anyhow::anyhow!("Invalid [genome] change ledger configuration: {error}"))?;
+    let genome_service = recorded.genome;
+    let connectome_service = recorded.connectome;
+    let change_ledger = recorded.ledger;
+    info!("    ✓ Genome change ledger enabled");
     let analytics_service = Arc::new(AnalyticsServiceImpl::new(
         Arc::clone(&components.connectome_manager),
         Some(Arc::clone(&components.burst_runner)),
@@ -2152,8 +2162,8 @@ async fn start_services(
     let api_state = ApiState {
         network_connection_info_provider: Some(network_provider),
         agent_service: Some(agent_service as Arc<dyn AgentService + Send + Sync>),
-        genome_service: genome_service.clone() as Arc<dyn GenomeService + Send + Sync>,
-        connectome_service: connectome_service.clone() as Arc<dyn ConnectomeService + Send + Sync>,
+        genome_service: genome_service.clone(),
+        connectome_service: connectome_service.clone(),
         analytics_service: analytics_service as Arc<dyn AnalyticsService + Send + Sync>,
         runtime_service: components.runtime_service.clone()
             as Arc<dyn RuntimeService + Send + Sync>,
@@ -2167,6 +2177,7 @@ async fn start_services(
         genome_transition_lock,
         genome_transition_in_progress,
         last_failed_mutation: ApiState::init_last_failed_mutation(),
+        change_ledger: Some(change_ledger),
         #[cfg(feature = "feagi-agent")]
         agent_handler: Some(Arc::clone(&components.agent_handler)),
         #[cfg(not(feature = "feagi-agent"))]
