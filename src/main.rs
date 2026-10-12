@@ -64,6 +64,27 @@ fn missing_expected_cortical_ids(
     missing
 }
 
+/// Add the reserved Brain_Death cortical area to a motor subscription.
+///
+/// Agents with no motor areas stay unsubscribed. Agents that already receive
+/// motor frames also receive `___death` when that neuron fires, so an
+/// embodiment can reset its scene from the same stream.
+fn append_death_neuron_motor_subscription(cortical_ids: &mut Vec<String>) {
+    if cortical_ids.is_empty() {
+        return;
+    }
+    let death_id = feagi_structures::genomic::cortical_area::CoreCorticalType::Death
+        .to_cortical_id()
+        .as_base_64();
+    if cortical_ids
+        .iter()
+        .any(|cortical_id| cortical_id == &death_id)
+    {
+        return;
+    }
+    cortical_ids.push(death_id);
+}
+
 use feagi_brain_development::models::cortical_area::CorticalAreaExt;
 use feagi_brain_development::ConnectomeManager;
 use feagi_config::{load_config, validate_config, FeagiConfig};
@@ -966,7 +987,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
 
-                        let motor_cortical_ids: Vec<String> = if let Some(device_regs) =
+                        let mut motor_cortical_ids: Vec<String> = if let Some(device_regs) =
                             device_regs_opt
                         {
                             match derive_motor_cortical_ids_from_device_registrations(device_regs) {
@@ -997,6 +1018,7 @@ async fn main() -> Result<()> {
                                 })
                                 .collect()
                         };
+                        append_death_neuron_motor_subscription(&mut motor_cortical_ids);
 
                         if motor_cortical_ids.is_empty() {
                             let should_log = {
@@ -2812,5 +2834,27 @@ mod auto_create_completion_tests {
             missing_expected_cortical_ids(&expected, |_| true),
             vec!["not base64"]
         );
+    }
+}
+
+#[cfg(test)]
+mod death_neuron_subscription_tests {
+    use super::append_death_neuron_motor_subscription;
+    use feagi_structures::genomic::cortical_area::CoreCorticalType;
+
+    #[test]
+    fn empty_motor_list_stays_empty() {
+        let mut cortical_ids = Vec::new();
+        append_death_neuron_motor_subscription(&mut cortical_ids);
+        assert!(cortical_ids.is_empty());
+    }
+
+    #[test]
+    fn death_id_is_appended_once() {
+        let death_id = CoreCorticalType::Death.to_cortical_id().as_base_64();
+        let mut cortical_ids = vec!["b21vdAUAAAA=".to_string()];
+        append_death_neuron_motor_subscription(&mut cortical_ids);
+        append_death_neuron_motor_subscription(&mut cortical_ids);
+        assert_eq!(cortical_ids, vec!["b21vdAUAAAA=".to_string(), death_id]);
     }
 }

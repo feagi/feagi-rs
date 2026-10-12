@@ -158,6 +158,18 @@ pub fn wire_plasticity_callbacks(
                         area_idx,
                         pattern_hash: _,
                     } => {
+                        let still_stored = executor_for_post
+                            .lock()
+                            .ok()
+                            .and_then(|exec| exec.memory_neuron_detail(neuron_id))
+                            .is_some();
+                        if !still_stored {
+                            debug!(
+                                "[PLASTICITY-LTM] Skipping twin for memory neuron {} after area reset",
+                                neuron_id
+                            );
+                            continue;
+                        }
                         let mut ltm_twin_map = ltm_twin_map_for_post.lock().unwrap();
                         if ltm_twin_map.contains_key(&neuron_id) {
                             continue;
@@ -349,8 +361,8 @@ pub fn wire_plasticity_callbacks(
         }
         if let Some(sample) = fire_queue_sample {
             let ltm_bridge_phase_start = Instant::now();
-            let ltm_twin_map = ltm_twin_map_for_post.lock().unwrap();
-            let ltm_twin_reverse = ltm_twin_reverse_for_post.lock().unwrap();
+            let mut ltm_twin_map = ltm_twin_map_for_post.lock().unwrap();
+            let mut ltm_twin_reverse = ltm_twin_reverse_for_post.lock().unwrap();
             let mut fired_memory: HashMap<u32, f32> = HashMap::new();
             let mut fired_twins: HashMap<u32, f32> = HashMap::new();
 
@@ -370,8 +382,26 @@ pub fn wire_plasticity_callbacks(
 
             let mut bridge_injected_memory = bridge_injected_memory_for_post.lock().unwrap();
             let mut bridge_injected_twin = bridge_injected_twin_for_post.lock().unwrap();
-            let ltm_memory_area = ltm_memory_area_for_post.lock().unwrap();
-            let ltm_twin_fire_potential = ltm_twin_fire_potential_for_post.lock().unwrap();
+            let mut ltm_memory_area = ltm_memory_area_for_post.lock().unwrap();
+            let mut ltm_twin_fire_potential = ltm_twin_fire_potential_for_post.lock().unwrap();
+            let retired_memory_ids: Vec<u32> = match executor_for_post.lock() {
+                Ok(exec) => ltm_twin_map
+                    .keys()
+                    .copied()
+                    .filter(|memory_id| exec.memory_neuron_detail(*memory_id).is_none())
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            for memory_id in retired_memory_ids {
+                let Some(twin_id) = ltm_twin_map.remove(&memory_id) else {
+                    continue;
+                };
+                ltm_twin_reverse.remove(&twin_id);
+                ltm_memory_area.remove(&memory_id);
+                ltm_twin_fire_potential.remove(&twin_id);
+                bridge_injected_memory.remove(&memory_id);
+                bridge_injected_twin.remove(&twin_id);
+            }
             let mut twin_injections: Vec<(NeuronId, f32)> = Vec::new();
             let mut memory_injections: Vec<(u32, u32, f32)> = Vec::new();
 
