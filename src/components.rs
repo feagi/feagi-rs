@@ -466,6 +466,7 @@ pub fn change_ledger_config(
     feagi_services::change_ledger::ChangeLedgerConfig {
         session_capacity: genome.change_ledger_session_capacity,
         max_persisted_entries: genome.change_history_max_entries,
+        max_persisted_bytes: genome.change_history_max_bytes,
         agent_id_max_length: genome.change_agent_id_max_length,
     }
 }
