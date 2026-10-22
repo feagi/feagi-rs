@@ -62,7 +62,10 @@ auto_recovery_on_validation_failure = true  # Allow loading invalid genomes with
                                             # When false: Invalid genomes cause loading to fail immediately
 # Change ledger: every structural genome change is recorded with who made it and when
 change_ledger_session_capacity = 10000  # Changes held in memory for GET /v1/genome/changes polling
-change_history_max_entries = 50000      # Changes persisted in the genome's change_history section (oldest dropped)
+change_history_max_entries = 10000      # Changes persisted in the genome's change_history section (oldest dropped)
+change_history_max_bytes = 4194304      # Serialized size of that section (4 MiB, oldest dropped). Each entry holds
+                                        # the before/after state of what changed; exported genomes, checkpoints, and
+                                        # trainer snapshots carry it, so it must stay well under MongoDB's 16 MiB.
 change_agent_id_max_length = 128        # Longest accepted X-FEAGI-Agent-Id header value (bytes)
 
 [api]
