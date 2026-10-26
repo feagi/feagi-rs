@@ -38,6 +38,79 @@ pub struct ReplayInjection {
     pub potential: f32,
 }
 
+/// Forget the twin pairing of one memory neuron. Returns the twin's neuron id if there was one.
+#[cfg(feature = "plasticity")]
+fn forget_twin(
+    memory_id: u32,
+    ltm_twin_map: &mut HashMap<u32, u32>,
+    ltm_twin_reverse: &mut HashMap<u32, u32>,
+    ltm_memory_area: &mut HashMap<u32, u32>,
+    ltm_twin_fire_potential: &mut HashMap<u32, f32>,
+    bridge_injected_memory: &mut HashMap<u32, u64>,
+    bridge_injected_twin: &mut HashMap<u32, u64>,
+) -> Option<u32> {
+    ltm_memory_area.remove(&memory_id);
+    bridge_injected_memory.remove(&memory_id);
+    let twin_id = ltm_twin_map.remove(&memory_id)?;
+    ltm_twin_reverse.remove(&twin_id);
+    ltm_twin_fire_potential.remove(&twin_id);
+    bridge_injected_twin.remove(&twin_id);
+    Some(twin_id)
+}
+
+/// Forget the pairings of memory neurons that are no longer stored. Returns the twin neuron
+/// ids (as connectome neuron ids) that now need deleting.
+#[cfg(feature = "plasticity")]
+fn retire_twins(
+    retired_memory_ids: &[u32],
+    ltm_twin_map: &mut HashMap<u32, u32>,
+    ltm_twin_reverse: &mut HashMap<u32, u32>,
+    ltm_memory_area: &mut HashMap<u32, u32>,
+    ltm_twin_fire_potential: &mut HashMap<u32, f32>,
+    bridge_injected_memory: &mut HashMap<u32, u64>,
+    bridge_injected_twin: &mut HashMap<u32, u64>,
+) -> Vec<u64> {
+    retired_memory_ids
+        .iter()
+        .filter_map(|&memory_id| {
+            forget_twin(
+                memory_id,
+                ltm_twin_map,
+                ltm_twin_reverse,
+                ltm_memory_area,
+                ltm_twin_fire_potential,
+                bridge_injected_memory,
+                bridge_injected_twin,
+            )
+        })
+        .map(u64::from)
+        .collect()
+}
+
+/// Delete LTM twin neurons and their synapses in one batch. The batch is logged at debug level
+/// because it can run on many bursts.
+#[cfg(feature = "plasticity")]
+fn delete_twin_neurons(twin_ids: Vec<u64>) {
+    if twin_ids.is_empty() {
+        return;
+    }
+    let twin_count = twin_ids.len();
+    let deleted = ConnectomeManager::instance()
+        .read()
+        .delete_neurons_batch_quiet(twin_ids);
+    match deleted {
+        Ok(count) if count == twin_count => {}
+        Ok(count) => warn!(
+            "[PLASTICITY-LTM] Deleted {} of {} LTM twin neuron(s) for removed memory neurons",
+            count, twin_count
+        ),
+        Err(e) => warn!(
+            "[PLASTICITY-LTM] Failed to delete {} LTM twin neuron(s): {}",
+            twin_count, e
+        ),
+    }
+}
+
 /// Wire plasticity callbacks into the burst loop (notify + replay scheduling).
 #[cfg(feature = "plasticity")]
 pub fn wire_plasticity_callbacks(
@@ -121,6 +194,8 @@ pub fn wire_plasticity_callbacks(
         let command_phase_start = Instant::now();
         let scheduled_replays: Vec<(u64, ReplayInjection)> = Vec::new();
         let mut dropped_unmapped_areas = HashSet::new();
+        // Storage-side twins of long-term memory neurons that left the array this burst.
+        let mut removed_twin_ids: Vec<u64> = Vec::new();
         if !commands.is_empty() {
             for cmd in commands {
                 match cmd {
@@ -129,6 +204,15 @@ pub fn wire_plasticity_callbacks(
                         area_idx,
                         ..
                     } => {
+                        // The neuron may have expired or been evicted after this command was
+                        // queued. Registering it now would leave a mapping for a dead id.
+                        let still_stored = executor_for_post
+                            .lock()
+                            .ok()
+                            .is_some_and(|exec| exec.is_active_memory_neuron(neuron_id));
+                        if !still_stored {
+                            continue;
+                        }
                         let cortical_id_opt = {
                             let instance = ConnectomeManager::instance();
                             let cm = instance.read();
@@ -161,8 +245,7 @@ pub fn wire_plasticity_callbacks(
                         let still_stored = executor_for_post
                             .lock()
                             .ok()
-                            .and_then(|exec| exec.memory_neuron_detail(neuron_id))
-                            .is_some();
+                            .is_some_and(|exec| exec.is_active_memory_neuron(neuron_id));
                         if !still_stored {
                             debug!(
                                 "[PLASTICITY-LTM] Skipping twin for memory neuron {} after area reset",
@@ -269,6 +352,17 @@ pub fn wire_plasticity_callbacks(
                         is_reactivation: _,
                         replay_frames,
                     } => {
+                        let still_stored = executor_for_post
+                            .lock()
+                            .ok()
+                            .is_some_and(|exec| exec.is_active_memory_neuron(neuron_id));
+                        if !still_stored {
+                            debug!(
+                                "[PLASTICITY-REPLAY] Skipping inject for removed memory neuron {}",
+                                neuron_id
+                            );
+                            continue;
+                        }
                         debug!(
                             "[PLASTICITY-REPLAY] Memory neuron inject: area_idx={} pattern={} replay_frames={}",
                             area_idx,
@@ -334,8 +428,38 @@ pub fn wire_plasticity_callbacks(
                             cortical_idx
                         );
                     }
+                    feagi_npu_plasticity::PlasticityCommand::MemoryNeuronRemoved {
+                        neuron_id,
+                        area_idx,
+                        reason,
+                    } => {
+                        // The plasticity service already removed the memory neuron's synapses,
+                        // dynamic mapping, replay frames and activation records. What is left
+                        // is the storage-side twin a long-term neuron got, and the bridge
+                        // bookkeeping that points at it. The retired-twin sweep may have
+                        // forgotten the pair first; it deletes that twin itself, so this
+                        // finds nothing then.
+                        let twin_id = forget_twin(
+                            neuron_id,
+                            &mut ltm_twin_map_for_post.lock().unwrap(),
+                            &mut ltm_twin_reverse_for_post.lock().unwrap(),
+                            &mut ltm_memory_area_for_post.lock().unwrap(),
+                            &mut ltm_twin_fire_potential_for_post.lock().unwrap(),
+                            &mut bridge_injected_memory_for_post.lock().unwrap(),
+                            &mut bridge_injected_twin_for_post.lock().unwrap(),
+                        );
+                        if let Some(twin_id) = twin_id {
+                            removed_twin_ids.push(u64::from(twin_id));
+                        }
+                        debug!(
+                            "[PLASTICITY-CMD] Memory neuron {} removed from area {} ({:?}); twin={:?}",
+                            neuron_id, area_idx, reason, twin_id
+                        );
+                    }
                 }
             }
+            // One batch per burst deletes the twins and their synapses.
+            delete_twin_neurons(std::mem::take(&mut removed_twin_ids));
         }
         let command_phase_ms = command_phase_start.elapsed().as_secs_f64() * 1000.0;
         if command_phase_ms > 5.0 {
@@ -388,20 +512,23 @@ pub fn wire_plasticity_callbacks(
                 Ok(exec) => ltm_twin_map
                     .keys()
                     .copied()
-                    .filter(|memory_id| exec.memory_neuron_detail(*memory_id).is_none())
+                    .filter(|memory_id| !exec.is_active_memory_neuron(*memory_id))
                     .collect(),
                 Err(_) => Vec::new(),
             };
-            for memory_id in retired_memory_ids {
-                let Some(twin_id) = ltm_twin_map.remove(&memory_id) else {
-                    continue;
-                };
-                ltm_twin_reverse.remove(&twin_id);
-                ltm_memory_area.remove(&memory_id);
-                ltm_twin_fire_potential.remove(&twin_id);
-                bridge_injected_memory.remove(&memory_id);
-                bridge_injected_twin.remove(&twin_id);
-            }
+            let retired_twins = retire_twins(
+                &retired_memory_ids,
+                &mut ltm_twin_map,
+                &mut ltm_twin_reverse,
+                &mut ltm_memory_area,
+                &mut ltm_twin_fire_potential,
+                &mut bridge_injected_memory,
+                &mut bridge_injected_twin,
+            );
+            // A memory neuron that left the array usually reaches this sweep before its
+            // removal notice is drained. The notice then finds nothing, so the twin has to
+            // be deleted here or it leaks with its synapses.
+            delete_twin_neurons(retired_twins);
             let mut twin_injections: Vec<(NeuronId, f32)> = Vec::new();
             let mut memory_injections: Vec<(u32, u32, f32)> = Vec::new();
 
@@ -527,4 +654,69 @@ pub fn wire_plasticity_callbacks(
     });
 
     replay_schedule
+}
+
+#[cfg(all(test, feature = "plasticity"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sweep_hands_back_the_twin_and_the_later_notice_finds_nothing() {
+        let mut twin_map = HashMap::from([(50_000_001u32, 7u32), (50_000_002, 8)]);
+        let mut reverse = HashMap::from([(7u32, 50_000_001u32), (8, 50_000_002)]);
+        let mut area = HashMap::from([(50_000_001u32, 3u32), (50_000_002, 3)]);
+        let mut potential = HashMap::from([(7u32, 1.0f32), (8, 1.0)]);
+        let mut injected_memory = HashMap::from([(50_000_001u32, 9u64)]);
+        let mut injected_twin = HashMap::from([(7u32, 9u64)]);
+
+        // The sweep sees memory neuron 50_000_001 gone: its twin must be queued for deletion.
+        let twins = retire_twins(
+            &[50_000_001],
+            &mut twin_map,
+            &mut reverse,
+            &mut area,
+            &mut potential,
+            &mut injected_memory,
+            &mut injected_twin,
+        );
+        assert_eq!(twins, vec![7u64]);
+        assert!(!twin_map.contains_key(&50_000_001) && twin_map.contains_key(&50_000_002));
+        assert!(!reverse.contains_key(&7) && reverse.contains_key(&8));
+        assert!(!potential.contains_key(&7) && !injected_twin.contains_key(&7));
+        assert!(!area.contains_key(&50_000_001) && !injected_memory.contains_key(&50_000_001));
+
+        // The removal notice arrives afterwards: no twin left, so no second delete.
+        let again = forget_twin(
+            50_000_001,
+            &mut twin_map,
+            &mut reverse,
+            &mut area,
+            &mut potential,
+            &mut injected_memory,
+            &mut injected_twin,
+        );
+        assert_eq!(again, None);
+
+        // A notice for a neuron the sweep has not seen yet still returns its twin.
+        let notice_first = forget_twin(
+            50_000_002,
+            &mut twin_map,
+            &mut reverse,
+            &mut area,
+            &mut potential,
+            &mut injected_memory,
+            &mut injected_twin,
+        );
+        assert_eq!(notice_first, Some(8));
+        assert!(retire_twins(
+            &[50_000_002],
+            &mut twin_map,
+            &mut reverse,
+            &mut area,
+            &mut potential,
+            &mut injected_memory,
+            &mut injected_twin
+        )
+        .is_empty());
+    }
 }
