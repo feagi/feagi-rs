@@ -127,6 +127,8 @@ fn build_plasticity_config(config: &FeagiConfig) -> feagi_npu_plasticity::Plasti
         lifespan_growth_rate: config.plasticity.memory.lifespan_growth_rate,
         longterm_threshold: config.plasticity.memory.longterm_threshold,
         max_reactivations: config.plasticity.memory.max_reactivations,
+        // Per-area `memory_neuron_cap` and `ltm_eviction` come from each area's genome properties.
+        ..MemoryNeuronLifecycleConfig::default()
     };
 
     feagi_npu_plasticity::PlasticityConfig {
@@ -2546,6 +2548,14 @@ async fn start_services(
                                     }
                                     PlasticityCommand::UpdateStateCounters { .. } => {
                                         // Stats tracking only, no NPU action needed
+                                    }
+                                    PlasticityCommand::MemoryNeuronRemoved { neuron_id, reason, .. } => {
+                                        // The service already removed the NPU footprint. This
+                                        // loop keeps no LTM twins, so there is nothing to drop.
+                                        debug!(
+                                            "[PLASTICITY-CMD] Memory neuron removed id={} reason={:?}",
+                                            neuron_id, reason
+                                        );
                                     }
                                     PlasticityCommand::ResetMemoryNeuronsInArea { cortical_idx } => {
                                         debug!(
