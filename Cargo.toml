@@ -1,6 +1,6 @@
 [package]
 name = "feagi-rs"
-version = "0.0.69"
+version = "0.0.70"
 edition = "2021"
 authors = ["Neuraville Inc. <feagi@neuraville.com>"]
 license = "Apache-2.0"
@@ -21,24 +21,24 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-# FEAGI Core Components — versions track latest FEAGI core component crates on crates.io (currently 0.0.51).
+# FEAGI Core Components — versions track latest FEAGI core component crates on crates.io (currently 0.0.52).
 # Caret on 0.0.x stops before the next patch, so this requirement must move with each feagi-core bump.
 # For local path overrides: copy `.cargo/config.toml.example` to `.cargo/config.toml`.
-feagi-npu-neural = { version = "^0.0.51" }
-feagi-structures = { version = "^0.0.51" }
-feagi-npu-runtime = { version = "^0.0.51", features = ["std"] }
-feagi-config = { version = "^0.0.51" }
+feagi-npu-neural = { version = "^0.0.52" }
+feagi-structures = { version = "^0.0.52" }
+feagi-npu-runtime = { version = "^0.0.52", features = ["std"] }
+feagi-config = { version = "^0.0.52" }
 # GPU acceleration enabled by default (disable with --no-default-features)
-feagi-npu-burst-engine = { version = "^0.0.51" }
-feagi-brain-development = { version = "^0.0.51" }
-feagi-evolutionary = { version = "^0.0.51" }
-feagi-services = { version = "^0.0.51" }
-feagi-api = { version = "^0.0.51", features = ["services"] }
-feagi-io = { version = "^0.0.51", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
-feagi-agent = { version = "^0.0.51", features = ["agent-server", "agent-client-asynchelper-tokio"] }
-feagi-state-manager = { version = "^0.0.51" }
-feagi-npu-plasticity = { version = "^0.0.51" }
-feagi-serialization = { version = "^0.0.51" }
+feagi-npu-burst-engine = { version = "^0.0.52" }
+feagi-brain-development = { version = "^0.0.52" }
+feagi-evolutionary = { version = "^0.0.52" }
+feagi-services = { version = "^0.0.52" }
+feagi-api = { version = "^0.0.52", features = ["services"] }
+feagi-io = { version = "^0.0.52", features = ["zmq-transport", "websocket-transport-std", "feagi-server"] }
+feagi-agent = { version = "^0.0.52", features = ["agent-server", "agent-client-asynchelper-tokio"] }
+feagi-state-manager = { version = "^0.0.52" }
+feagi-npu-plasticity = { version = "^0.0.52" }
+feagi-serialization = { version = "^0.0.52" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -48,7 +48,7 @@ axum = "0.7"
 clap = { version = "4.5", features = ["derive"], optional = true }
 
 # Observability
-feagi-observability = { version = "^0.0.51" }
+feagi-observability = { version = "^0.0.52" }
 env_logger = "0.11"
 log = "0.4"
 tracing = "0.1"
@@ -85,7 +85,7 @@ tempfile = "3.8"
 serde_json = "1.0"
 
 # Example dependencies
-feagi-sensorimotor = { version = "^0.0.51" }
+feagi-sensorimotor = { version = "^0.0.52" }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [profile.release]
