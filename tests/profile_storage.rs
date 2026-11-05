@@ -118,7 +118,7 @@ fn profile_dependency_sizes() -> Vec<StorageMetrics> {
     }
 
     // Sort by size (largest first)
-    metrics.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    metrics.sort_by_key(|a| std::cmp::Reverse(a.size_bytes));
 
     // Keep only top 20
     metrics.truncate(20);
