@@ -1372,7 +1372,6 @@ struct FeagiComponents {
     plasticity_executor: Option<()>,
     #[cfg(not(feature = "plasticity"))]
     memory_stats_cache: Option<()>,
-    use_post_burst_processor: bool,
 }
 
 /// Initialize all core FEAGI components
@@ -1840,7 +1839,7 @@ async fn initialize_components(
 
     // Initialize plasticity executor (if plasticity feature enabled) BEFORE RuntimeService
     #[cfg(feature = "plasticity")]
-    let (plasticity_executor, memory_stats_cache, use_post_burst_processor, plasticity_service) = {
+    let (plasticity_executor, memory_stats_cache, plasticity_service) = {
         use feagi_npu_plasticity::{
             create_memory_stats_cache, AsyncPlasticityExecutor, PlasticityExecutor,
         };
@@ -1879,7 +1878,6 @@ async fn initialize_components(
 
         info!("  🔗 Wiring PlasticityExecutor into BurstLoopRunner...");
         wire_plasticity_callbacks(&burst_runner, Arc::clone(&executor), Arc::clone(&npu));
-        let use_post_burst_processor = burst_runner.read().has_post_burst_callback();
 
         info!("╔═══════════════════════════════════════════════════════════════╗");
         info!("║  ✅ PLASTICITY SUBSYSTEM READY                                ║");
@@ -1890,20 +1888,18 @@ async fn initialize_components(
         (
             Some(executor),
             Some(cache),
-            use_post_burst_processor,
             plasticity_service,
         )
     };
 
     #[cfg(not(feature = "plasticity"))]
-    let (plasticity_executor, memory_stats_cache, use_post_burst_processor, plasticity_service): (
+    let (plasticity_executor, memory_stats_cache, plasticity_service): (
         Option<()>,
         Option<()>,
-        bool,
         Option<Arc<feagi_npu_plasticity::PlasticityService>>,
     ) = {
         info!("  ℹ️  Plasticity feature disabled (compiled without --features plasticity)");
-        (None, None, false, None)
+        (None, None, None)
     };
 
     // Create RuntimeService with plasticity support if available
@@ -1960,7 +1956,6 @@ async fn initialize_components(
         sensory_intake_queue,
         plasticity_executor,
         memory_stats_cache,
-        use_post_burst_processor,
     })
 }
 
@@ -2441,141 +2436,8 @@ async fn start_services(
         plasticity_exec.lock().unwrap().start();
         info!("    ✓ Plasticity executor running");
 
-        if !components.use_post_burst_processor {
-            // Spawn plasticity command processing loop
-            // This loop reads commands from the PlasticityService and executes them on the NPU
-            let npu_for_plasticity = Arc::clone(&components.npu);
-            let plasticity_for_loop = Arc::clone(plasticity_exec);
-            let burst_runner_for_plasticity = Arc::clone(&components.burst_runner);
-
-            std::thread::Builder::new()
-                .name("feagi-plasticity-cmd-processor".to_string())
-                .spawn(move || {
-                    use feagi_npu_plasticity::{PlasticityCommand, PlasticityExecutor};
-                    use tracing::{debug, info, warn};
-
-                    info!("[PLASTICITY-CMD] Command processor thread started");
-
-                    // BurstLoopRunner already notifies plasticity exactly once per completed burst
-                    // via `set_plasticity_notify_callback()`. This thread must NOT call `notify_burst()`
-                    // again, otherwise neurons get aged/pruned multiple times per burst and indices
-                    // get rapidly reused (appearing as "memory count barely increases").
-                    let mut last_seen_burst: u64 = 0;
-
-                    loop {
-                        // Wait for burst to complete (check every 10ms)
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-
-                        // Track burst progress (draining can happen multiple times per burst; notify must not)
-                        let current_burst = burst_runner_for_plasticity.read().get_burst_count();
-                        if current_burst != last_seen_burst {
-                            last_seen_burst = current_burst;
-                        }
-
-                        // Drain and process commands
-                        let commands = plasticity_for_loop.lock().unwrap().drain_commands();
-
-                        if !commands.is_empty() {
-                            debug!("[PLASTICITY-CMD] Processing {} commands", commands.len());
-                            let mut npu_lock = npu_for_plasticity.lock().unwrap();
-
-                            for cmd in commands {
-                                match cmd {
-                                    PlasticityCommand::RegisterMemoryNeuron {
-                                        neuron_id,
-                                        area_idx: _,
-                                        threshold: _,
-                                        membrane_potential: _,
-                                    } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Registering memory neuron id={}",
-                                            neuron_id
-                                        );
-                                        // Memory neurons are already created by the plasticity service
-                                        // This command serves as a notification
-                                    }
-                                    PlasticityCommand::MemoryNeuronConvertedToLtm { neuron_id, .. } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Memory neuron converted to LTM id={}",
-                                            neuron_id
-                                        );
-                                    }
-                                    PlasticityCommand::InjectMemoryNeuronToFCL {
-                                        neuron_id,
-                                        area_idx,
-                                        membrane_potential,
-                                        pattern_hash,
-                                        is_reactivation: _,
-                                        replay_frames: _,
-                                    } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Injecting memory neuron id={} area_idx={} potential={} pattern={}",
-                                            neuron_id, area_idx, membrane_potential, pattern_hash
-                                        );
-
-                                        // Get cortical ID from ConnectomeManager (required for propagation engine mapping).
-                                        let cortical_id_opt = {
-                                            let instance = ConnectomeManager::instance();
-                                            let cm = instance.read();
-                                            cm.get_cortical_id(area_idx).cloned()
-                                        };
-
-                                        if let Some(cortical_id) = cortical_id_opt {
-                                            // Register mapping so synaptic propagation can resolve the cortical area for this ID.
-                                            npu_lock.register_dynamic_neuron_mapping(neuron_id, cortical_id);
-
-                                            // Stage injection to next burst’s FCL using the *actual* memory neuron ID.
-                                            npu_lock.inject_memory_neuron_to_fcl(
-                                                neuron_id,
-                                                area_idx,
-                                                membrane_potential,
-                                            );
-
-                                            debug!(
-                                                "[PLASTICITY-CMD] Memory neuron staged to FCL (id={}, area_idx={}, pattern={})",
-                                                neuron_id, area_idx, pattern_hash
-                                            );
-                                        } else {
-                                            warn!(
-                                                "[PLASTICITY-CMD] Missing cortical ID for area_idx={}",
-                                                area_idx
-                                            );
-                                        }
-                                    }
-                                    PlasticityCommand::UpdateWeightsDelta { .. } => {
-                                        // TODO: Implement STDP weight updates
-                                        warn!("[PLASTICITY-CMD] STDP weight updates not yet implemented");
-                                    }
-                                    PlasticityCommand::UpdateStateCounters { .. } => {
-                                        // Stats tracking only, no NPU action needed
-                                    }
-                                    PlasticityCommand::MemoryNeuronRemoved { neuron_id, reason, .. } => {
-                                        // The service already removed the NPU footprint. This
-                                        // loop keeps no LTM twins, so there is nothing to drop.
-                                        debug!(
-                                            "[PLASTICITY-CMD] Memory neuron removed id={} reason={:?}",
-                                            neuron_id, reason
-                                        );
-                                    }
-                                    PlasticityCommand::ResetMemoryNeuronsInArea { cortical_idx } => {
-                                        debug!(
-                                            "[PLASTICITY-CMD] Memory neurons reset in cortical area {}",
-                                            cortical_idx
-                                        );
-                                        // Memory neuron reset is handled by PlasticityService.reset_memory_neurons_in_area()
-                                        // This command is for notification/logging only
-                                    }
-                                }
-                            }
-                        }
-                    }
-                })
-                .expect("Failed to spawn plasticity command processor thread");
-
-            info!("    ✓ Plasticity command processor running");
-        } else {
-            info!("    ✓ Plasticity command processor running in post-burst callback");
-        }
+        // Command application runs in the post-burst callback set by `wire_plasticity_callbacks`.
+        info!("    ✓ Plasticity command processor running in post-burst callback");
     }
 
     // TODO: Wire NPU to agent_handler sensory stream in new architecture
@@ -2792,6 +2654,8 @@ mod artifact_cli_tests {
             persist_mode: ConnectomePersistMode::Full,
             genome_json: None,
             memory_area_ids: Vec::new(),
+            learning_frozen_memory_areas: Vec::new(),
+            learning_frozen_mappings: Vec::new(),
             plastic_mappings: Vec::new(),
             brain_region_ids: Vec::new(),
             long_term_memory_neurons: Vec::new(),
